@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   createChat,
   getConversation,
@@ -8,13 +8,16 @@ import {
   type Conversation,
 } from "../api/assistant";
 import { ApiError } from "../api/client";
+import { listFeatures } from "../api/features";
 import { listProjects } from "../api/projects";
-import type { AttentionItem, Project, RunningWorkOrder } from "../api/types";
+import type { AttentionItem, Feature, Project, RunningWorkOrder } from "../api/types";
 import { ChatView, OPEN_ASSISTANT, OPEN_PROJECT, WORK_CHANGED } from "./ChatView";
 import {
   ActivityDot,
   chatActivity,
+  chatOrders,
   chatWork,
+  OrderDotView,
   projectActivity,
   workSignals,
   type ChatWork,
@@ -30,8 +33,8 @@ import { ProjectCost } from "./usage";
 const TOP = "commitarium";
 const SELECTED_KEY = "commitarium.chats.selected";
 const EXPANDED_KEY = "commitarium.chats.expanded";
-const OPENED_KEY = "commitarium.chats.opened";
 const ALL_PROJECTS_KEY = "commitarium.chats.allProjects";
+const ORDERS_HIDDEN_KEY = "commitarium.chats.ordersHidden";
 const POLL_MS = 10_000;
 
 /** The chat on screen: a scope's chat, or its most recently used one. */
@@ -55,25 +58,14 @@ function readSelection(): Selection {
   return { scope: TOP };
 }
 
-function readExpanded(): Set<string> {
+function readExpanded(key = EXPANDED_KEY): Set<string> {
   try {
-    const stored = JSON.parse(localStorage.getItem(EXPANDED_KEY) ?? "[]");
+    const stored = JSON.parse(localStorage.getItem(key) ?? "[]");
     if (Array.isArray(stored)) return new Set(stored.filter((id) => typeof id === "string"));
   } catch {
     // Nothing remembered yet.
   }
   return new Set();
-}
-
-/** When the user last opened each project's chats. */
-function readOpened(): Record<string, string> {
-  try {
-    const stored = JSON.parse(localStorage.getItem(OPENED_KEY) ?? "{}");
-    if (stored && typeof stored === "object") return stored;
-  } catch {
-    // Nothing remembered yet.
-  }
-  return {};
 }
 
 function remember(key: string, value: unknown) {
@@ -131,9 +123,15 @@ export function DevShell({
   const [chats, setChats] = useState<Record<string, ChatSummary[]>>({});
   // What each chat started and asks, read again when it changes.
   const [chatWorks, setChatWorks] = useState<Record<string, ChatWork>>({});
+  // The open project's work orders, for those listed under its chats.
+  const [features, setFeatures] = useState<{ scope: string; list: Feature[] } | null>(null);
+  // Chats whose work orders the user folded away, and those showing them all.
+  const [ordersHidden, setOrdersHidden] = useState<Set<string>>(() =>
+    readExpanded(ORDERS_HIDDEN_KEY),
+  );
+  const [ordersAll, setOrdersAll] = useState<Set<string>>(() => new Set());
   const read = useRef<Record<string, string>>({});
   const [showProjects, setShowProjects] = useState(false);
-  const [opened, setOpened] = useState<Record<string, string>>(readOpened);
   const [allProjects, setAllProjects] = useState(() => {
     try {
       return localStorage.getItem(ALL_PROJECTS_KEY) === "true";
@@ -156,13 +154,6 @@ export function DevShell({
     setPage(null);
     setError(null);
     remember(SELECTED_KEY, next);
-    if (next.scope !== TOP) {
-      setOpened((current) => {
-        const stamped = { ...current, [next.scope]: new Date().toISOString() };
-        remember(OPENED_KEY, stamped);
-        return stamped;
-      });
-    }
   }, []);
   const expand = useCallback((id: string, open = true) => {
     setExpanded((current) => {
@@ -245,20 +236,33 @@ export function DevShell({
       .then(setProjects)
       .catch(() => undefined);
   }, [reachable]);
+  // By value, so a fresh project list with the same projects doesn't load
+  // everything again.
+  const projectKey = (projects ?? []).map((p) => p.id).join(" ");
+  const projectIds = useMemo(() => projectKey.split(" ").filter(Boolean), [projectKey]);
   const loadChats = useCallback(async () => {
     if (!reachable) return;
+    // Every project's chats are listed, for the order of the projects; only
+    // the shown ones' conversations are read.
     const listed = await Promise.all(
-      scopes.map((scope) =>
+      [...new Set([...scopes, ...projectIds])].map((scope) =>
         listChats(scope)
           .then((list) => [scope, list] as const)
           .catch(() => null),
       ),
     );
+    if (selection.scope !== TOP) {
+      const scope = selection.scope;
+      void listFeatures(scope)
+        .then((list) => setFeatures({ scope, list }))
+        .catch(() => undefined);
+    }
     const found = Object.fromEntries(listed.filter((entry) => entry !== null));
     setChats((current) => ({ ...current, ...found }));
     // A chat's cards are read again only once it has changed.
     const changed = Object.values(found)
       .flat()
+      .filter((chat) => scopes.includes(chat.scope))
       .filter((chat) => read.current[`${chat.scope}/${chat.id}`] !== chat.updated_at);
     await Promise.all(
       changed.map((chat) =>
@@ -271,7 +275,7 @@ export function DevShell({
           .catch(() => undefined),
       ),
     );
-  }, [reachable, scopes]);
+  }, [reachable, scopes, projectIds, selection.scope]);
   useEffect(() => {
     loadProjects();
     void loadChats();
@@ -367,20 +371,88 @@ export function DevShell({
 
   const match = (text: string) => !query.trim() || text.toLowerCase().includes(query.toLowerCase());
   // A project found by its name shows all its chats.
-  const chatButton = (chat: ChatSummary, sub: boolean, all = false) =>
+  const chatButton = (chat: ChatSummary, sub: boolean, all = false, toggle?: ReactNode) =>
     (all || match(chat.title || "New chat")) && (
+      <div key={chat.id} className="chat-side__row">
+        {toggle}
+        <button
+          key={chat.id}
+          className={`chat-side__item ${sub ? "chat-side__item--sub" : ""} ${
+            selection.scope === chat.scope && currentChat === chat.id ? "chat-side__item--on" : ""
+          }`}
+          onClick={() => select({ scope: chat.scope, chat: chat.id })}
+          title={chat.title || "New chat"}
+        >
+          <span className="chat-side__name">{chat.title || "New chat"}</span>
+          <ActivityDot activity={activityOf(chat)} />
+        </button>
+      </div>
+    );
+  // The work orders the open chat started, under it: every one still going
+  // and the latest finished, four in all, unless the user shows them all or
+  // folds them away.
+  const flip = (set: Set<string>, key: string) => {
+    const next = new Set(set);
+    if (!next.delete(key)) next.add(key);
+    return next;
+  };
+  const chatWithOrders = (chat: ChatSummary, all: boolean) => {
+    const key = `${chat.scope}/${chat.id}`;
+    const shown =
+      chat.scope === selection.scope && chat.id === currentChat && features?.scope === chat.scope;
+    const started = chatWorks[key]?.started ?? [];
+    if (!shown || started.length === 0) return chatButton(chat, true, all);
+    const hidden = ordersHidden.has(key);
+    const { orders, more } = chatOrders(
+      started,
+      features.list,
+      signals,
+      ordersAll.has(key) ? Infinity : undefined,
+    );
+    const on = (id: string) => shownPage?.mode === "order" && shownPage.orderId === id;
+    const toggle = (
       <button
-        key={chat.id}
-        className={`chat-side__item ${sub ? "chat-side__item--sub" : ""} ${
-          selection.scope === chat.scope && currentChat === chat.id ? "chat-side__item--on" : ""
-        }`}
-        onClick={() => select({ scope: chat.scope, chat: chat.id })}
-        title={chat.title || "New chat"}
+        className="ghost chat-side__fold"
+        onClick={() =>
+          setOrdersHidden((current) => {
+            const next = flip(current, key);
+            remember(ORDERS_HIDDEN_KEY, [...next]);
+            return next;
+          })
+        }
+        aria-expanded={!hidden}
+        aria-label={hidden ? "Show its work orders" : "Hide its work orders"}
+        title={hidden ? "Show its work orders" : "Hide its work orders"}
       >
-        <span className="chat-side__name">{chat.title || "New chat"}</span>
-        <ActivityDot activity={activityOf(chat)} />
+        <Chevron open={!hidden} />
       </button>
     );
+    return (
+      <Fragment key={chat.id}>
+        {chatButton(chat, true, all, toggle)}
+        {!hidden &&
+          orders.map(({ feature, dot }) => (
+            <button
+              key={feature.id}
+              className={`chat-side__item chat-side__item--order ${on(feature.id) ? "chat-side__item--on" : ""}`}
+              onClick={() => setScopePage({ mode: "order", orderId: feature.id })}
+              title={feature.title}
+            >
+              <OrderDotView dot={dot} />
+              <span className="chat-side__name">{feature.title}</span>
+            </button>
+          ))}
+        {!hidden && (more > 0 || ordersAll.has(key)) && (
+          <button
+            className="chat-side__item chat-side__item--order chat-side__item--quiet"
+            onClick={() => setOrdersAll((current) => flip(current, key))}
+          >
+            {ordersAll.has(key) ? "Show fewer" : `Show ${more} more`}
+          </button>
+        )}
+      </Fragment>
+    );
+  };
   const activities = Object.fromEntries(
     (projects ?? []).map((p) => [
       p.id,
@@ -392,14 +464,15 @@ export function DevShell({
       ),
     ]),
   );
-  // The most recently worked on come first; the rest fold under "Show all",
+  // The most recently worked on (a chat of it changed) come first, so
+  // opening one doesn't move it; the rest fold under "Show all",
   // except any that is busy or on screen. A search looks through them all.
   const recent = Object.fromEntries(
     (projects ?? []).map((p) => [
       p.id,
       (chats[p.id] ?? []).reduce<string | undefined>(
         (at, c) => later(at, c.updated_at),
-        opened[p.id],
+        undefined,
       ) ?? p.created_at,
     ]),
   );
@@ -493,7 +566,7 @@ export function DevShell({
               </button>
               {open && (
                 <>
-                  {(chats[p.id] ?? []).map((chat) => chatButton(chat, true, match(p.name)))}
+                  {(chats[p.id] ?? []).map((chat) => chatWithOrders(chat, match(p.name)))}
                   <button
                     className="chat-side__item chat-side__item--sub chat-side__item--quiet"
                     onClick={() => void newChat(p.id)}

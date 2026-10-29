@@ -1,5 +1,5 @@
 import type { AssistantAction, ChatSummary, Conversation } from "../api/assistant";
-import type { AttentionItem, FeatureState, RunningWorkOrder } from "../api/types";
+import type { AttentionItem, Feature, FeatureState, RunningWorkOrder } from "../api/types";
 
 // What is going on in a project or a chat, for the chat shell's dots
 // (ADR-038): its work runs, something waits for the user, or neither. It is
@@ -16,8 +16,10 @@ export interface WorkSignals {
 
 /** What a chat started and asks, as read from its conversation. */
 export interface ChatWork {
-  /** The work orders its cards created or started. */
+  /** The work orders its cards created or started that it still follows. */
   orders: string[];
+  /** Every work order its cards created or started, first started first. */
+  started: string[];
   /** A card waits for the user's approval. */
   proposed: boolean;
 }
@@ -54,6 +56,18 @@ export function isLiveOrder(action: AssistantAction): boolean {
 export function chatWork(conversation: Conversation): ChatWork {
   return {
     orders: conversation.actions.filter(isLiveOrder).map((a) => a.work_order_id),
+    started: [
+      ...new Set(
+        conversation.actions
+          .filter(
+            (a) =>
+              (a.type === "create_work_order" || a.type === "start_work_order") &&
+              a.status === "applied" &&
+              !!a.work_order_id,
+          )
+          .map((a) => a.work_order_id as string),
+      ),
+    ],
     proposed: conversation.actions.some((a) => a.status === "proposed"),
   };
 }
@@ -95,6 +109,59 @@ export function ActivityDot({ activity }: { activity: Activity }) {
         activity === "running" ? "Working" : activity === "waiting" ? "Waits for you" : undefined
       }
       aria-hidden={activity === "idle" || undefined}
+    />
+  );
+}
+
+/** A work order's dot under its chat: done, cancelled, or what is going on. */
+export type OrderDot = Activity | "done" | "cancelled";
+
+export function orderDot(feature: Feature, signals: WorkSignals): OrderDot {
+  if (feature.state === "completed") return "done";
+  if (feature.state === "cancelled") return "cancelled";
+  if (signals.waiting.has(feature.id)) return "waiting";
+  if (signals.running.has(feature.id)) return "running";
+  return "idle";
+}
+
+/** The work orders listed under a chat in the sidebar, in the order it
+ * started them: every one still going, and the latest finished ones up to
+ * `limit` in all; `more` is how many are left out. */
+export function chatOrders(
+  started: string[],
+  features: Feature[],
+  signals: WorkSignals,
+  limit = 4,
+): { orders: { feature: Feature; dot: OrderDot }[]; more: number } {
+  const byId = new Map(features.map((f) => [f.id, f]));
+  const all = started.flatMap((id) => {
+    const feature = byId.get(id);
+    return feature ? [{ feature, dot: orderDot(feature, signals) }] : [];
+  });
+  const finished = (o: { dot: OrderDot }) => o.dot === "done" || o.dot === "cancelled";
+  const room = Math.max(0, limit - all.filter((o) => !finished(o)).length);
+  const shownDone = new Set(
+    (room ? all.filter(finished).slice(-room) : []).map((o) => o.feature.id),
+  );
+  const orders = all.filter((o) => !finished(o) || shownDone.has(o.feature.id));
+  return { orders, more: all.length - orders.length };
+}
+
+export function OrderDotView({ dot }: { dot: OrderDot }) {
+  return (
+    <span
+      className={`activity-dot activity-dot--${dot}`}
+      aria-label={
+        dot === "running"
+          ? "Working"
+          : dot === "waiting"
+            ? "Waits for you"
+            : dot === "done"
+              ? "Done"
+              : dot === "cancelled"
+                ? "Cancelled"
+                : "Not started"
+      }
     />
   );
 }
