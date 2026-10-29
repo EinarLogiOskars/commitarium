@@ -1,31 +1,13 @@
-import { AttachmentOwner } from "./Attachments";
-import { useCallback, useEffect, useState } from "react";
-import { getProject } from "../api/projects";
-import { createSession, listFeatures } from "../api/features";
-import { requireWorkSuggestion } from "./useWorkSuggestion";
-import { pruneSessionPreviews } from "../ipc";
-import { getProjectToolchain } from "../api/toolchains";
-import { ApiError } from "../api/client";
-import { FeatureView } from "./FeatureView";
+import { useEffect, useState } from "react";
 import { WorkOrderRail } from "./WorkOrderRail";
-import { NewWorkOrder, type OrderDraft } from "./NewWorkOrder";
-import { ProjectSettings } from "./ProjectSettings";
 import { ProjectDashboard } from "./ProjectDashboard";
-import { RepositoryCard } from "./RepositoryCard";
-import { StackPicker } from "./StackPicker";
 import { PreviewRailItem } from "./PreviewRailItem";
-import { PreviewView } from "./PreviewView";
-import { VisionView } from "./VisionView";
-import { OPEN_VISION, WORK_CHANGED } from "./AssistantDrawer";
-import { rememberedIdea } from "./visionSession";
-import { getOpenVisionSession, getVision } from "../api/vision";
-import { usePreview } from "./usePreview";
-import { usePreviewSetup } from "./usePreviewSetup";
+import { ProjectPageBody, useProjectPages } from "./ProjectPages";
+import type { PageMode, PageTarget } from "./pageTarget";
 import { WORK } from "../vocab";
-import type { AttentionItem, Project, ProjectToolchain, WorkKind } from "../api/types";
+import type { AttentionItem } from "../api/types";
 
-type Mode =
-  "overview" | "vision" | "repository" | "stack" | "new" | "order" | "settings" | "preview";
+type Mode = "overview" | PageMode;
 
 /** Project workspace shell: work-order rail + master/detail main pane. */
 export function ProjectWorkspace({
@@ -66,152 +48,26 @@ export function ProjectWorkspace({
   onExit?: () => void;
   exitLabel?: string;
 }) {
-  const [project, setProject] = useState<Project | null>(null);
-  const [toolchain, setToolchain] = useState<ProjectToolchain | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [mode, setMode] = useState<Mode>("overview");
-  const [orderId, setOrderId] = useState<string | null>(null);
-  const [reloadKey, setReloadKey] = useState(0);
-  // The rail lists one kind of work at a time: work orders or sessions.
-  const [railKind, setRailKind] = useState<WorkKind>("work_order");
-  // An app's preview opens in its own window, not the browser.
-  const preview = usePreview(id, undefined, project?.app ? project.name : undefined);
-  // Follows the background preview setup even when the Preview page is closed.
-  const previewSetup = usePreviewSetup(id, preview);
-
-  // A session's preview goes away once the session merges or is discarded.
-  useEffect(() => {
-    const prune = () =>
-      listFeatures(id)
-        .then((features) =>
-          pruneSessionPreviews(
-            id,
-            features
-              .filter(
-                (f) => f.kind === "session" && f.state !== "completed" && f.state !== "cancelled",
-              )
-              .map((f) => f.id),
-          ),
-        )
-        .catch(() => undefined);
-    void prune();
-    const timer = setInterval(() => void prune(), 60000);
-    return () => clearInterval(timer);
-  }, [id, reloadKey]);
-  const [orderDraft, setOrderDraft] = useState<OrderDraft>();
-  // Stable so it doesn't re-trigger FeatureView's load effect; refreshes the
-  // rail's work-order grouping when a feature's state changes.
-  const bumpRail = useCallback(() => setReloadKey((k) => k + 1), []);
-  // Work the assistant created or started shows up at once.
-  useEffect(() => {
-    window.addEventListener(WORK_CHANGED, bumpRail);
-    return () => window.removeEventListener(WORK_CHANGED, bumpRail);
-  }, [bumpRail]);
-  useEffect(() => {
-    const showVision = () => {
-      setMode("vision");
-      setOrderId(null);
-    };
-    window.addEventListener(OPEN_VISION, showVision);
-    return () => window.removeEventListener(OPEN_VISION, showVision);
-  }, []);
-
-  const load = useCallback(async () => {
-    setError(null);
-    try {
-      const p = await getProject(id);
-      setProject(p);
-      onLoaded?.(p.name);
-    } catch (e) {
-      setError(e instanceof ApiError ? `${e.message} (${e.code})` : String(e));
-    }
-    // Toolchain is a separate record; absent on older coordinators (404/other) —
-    // leave it null and treat the project as unconstrained (no creation gate).
-    try {
-      const t = await getProjectToolchain(id);
-      setToolchain(t);
-      // A project just created from an idea opens on its vision conversation.
-      if (t.status === "needs_setup") {
-        const open =
-          !!rememberedIdea(id) ||
-          (await getOpenVisionSession(id).then(
-            () => true,
-            () => false,
-          ));
-        if (open) setMode("vision");
-      }
-    } catch {
-      setToolchain(null);
-    }
-    // A project being planned opens on its planning workspace.
-    getVision(id)
-      .then((vision) => {
-        if (vision.planning?.status === "planning") setMode("vision");
-      })
-      .catch(() => undefined);
-  }, [id, onLoaded]);
-
-  useEffect(() => {
-    setProject(null);
-    setToolchain(null);
-    void load();
-  }, [load]);
+  const [page, setPage] = useState<PageTarget | null>(null);
+  const pages = useProjectPages(id, { page, setPage, onLoaded, openOnLoad: true });
+  const { project, toolchain, error, needsStack, hasRepo, railKind, setRailKind } = pages;
+  const mode: Mode = pages.mode ?? "overview";
+  const orderId = pages.orderId;
 
   // Where the workspace points. Switching project lands on the overview; an
   // inbox deep link opens its work order instead — including when the click
   // switches project and selects an order in the same step. The target's nonce
   // makes re-opening the same order after navigating away work.
   useEffect(() => {
-    setOrderId(openOrderTarget?.featureId ?? null);
-    setMode(openOrderTarget ? "order" : "overview");
+    setPage(openOrderTarget ? { mode: "order", orderId: openOrderTarget.featureId } : null);
   }, [id, openOrderTarget]);
-
-  const openOrder = (featureId: string) => {
-    setOrderId(featureId);
-    setMode("order");
-  };
 
   useEffect(() => {
     onForeground?.(mode === "order" ? orderId : null);
   }, [mode, orderId, onForeground]);
 
-  const hasRepo = project ? !!project.forgejo_repository : undefined;
-  // Only gate when we actually have a toolchain record saying needs_setup.
-  const needsStack = toolchain?.status === "needs_setup";
-  // Route "new work order" to stack setup first when the toolchain isn't ready.
-  const startNewOrder = () => {
-    setOrderDraft(undefined);
-    setOrderId(null);
-    setMode(needsStack ? "stack" : "new");
-  };
-  // A session starts at once and opens on its greeting (ADR-019).
-  const [startingSession, setStartingSession] = useState(false);
-  const startSession = async () => {
-    if (needsStack) {
-      setOrderId(null);
-      setMode("stack");
-      return;
-    }
-    setStartingSession(true);
-    setError(null);
-    try {
-      // The suggested agent: the freshest one, which the user can switch.
-      const session = await createSession(id, await requireWorkSuggestion());
-      setReloadKey((k) => k + 1);
-      setRailKind("session");
-      openOrder(session.id);
-    } catch (e) {
-      setError(
-        e instanceof ApiError
-          ? `${e.message} (${e.code})`
-          : e instanceof Error
-            ? e.message
-            : String(e),
-      );
-    } finally {
-      setStartingSession(false);
-    }
-  };
+  const go = (next: Mode) => setPage(next === "overview" ? null : { mode: next });
+  const openOrder = pages.openOrder;
 
   // The pages the collapsed rail keeps, as icons; work orders and sessions
   // stay in the full rail.
@@ -244,10 +100,7 @@ export function ProjectWorkspace({
             <button
               key={page.mode}
               className={`ghost rail__icon ${mode === page.mode ? "rail__icon--active" : ""}`}
-              onClick={() => {
-                setMode(page.mode);
-                setOrderId(null);
-              }}
+              onClick={() => go(page.mode)}
               data-tip={page.label}
               aria-label={page.label}
             >
@@ -268,20 +121,14 @@ export function ProjectWorkspace({
           </div>
           <button
             className={`rail__item ${mode === "overview" ? "rail__item--active" : ""}`}
-            onClick={() => {
-              setMode("overview");
-              setOrderId(null);
-            }}
+            onClick={() => go("overview")}
           >
             Overview
           </button>
           {project?.forgejo_repository && (
             <button
               className={`rail__item ${mode === "vision" ? "rail__item--active" : ""}`}
-              onClick={() => {
-                setMode("vision");
-                setOrderId(null);
-              }}
+              onClick={() => go("vision")}
             >
               Vision
             </button>
@@ -289,10 +136,7 @@ export function ProjectWorkspace({
           {project?.forgejo_repository && (
             <button
               className={`rail__item ${mode === "repository" ? "rail__item--active" : ""}`}
-              onClick={() => {
-                setMode("repository");
-                setOrderId(null);
-              }}
+              onClick={() => go("repository")}
             >
               Repository
             </button>
@@ -300,10 +144,7 @@ export function ProjectWorkspace({
           {toolchain && (
             <button
               className={`rail__item ${mode === "stack" ? "rail__item--active" : ""}`}
-              onClick={() => {
-                setMode("stack");
-                setOrderId(null);
-              }}
+              onClick={() => go("stack")}
             >
               Stack
               {needsStack && <span className="pill pill--warn rail__badge">Set up</span>}
@@ -335,16 +176,16 @@ export function ProjectWorkspace({
               <button
                 className="rail__new"
                 title={needsStack ? "Choose a stack first" : "Start a session with an agent"}
-                onClick={() => void startSession()}
-                disabled={startingSession}
+                onClick={() => void pages.startSession()}
+                disabled={pages.startingSession}
               >
-                {startingSession ? "Starting…" : "+ New"}
+                {pages.startingSession ? "Starting…" : "+ New"}
               </button>
             ) : (
               <button
                 className="rail__new"
                 title={needsStack ? "Choose a stack first" : WORK.newAction}
-                onClick={startNewOrder}
+                onClick={pages.startNewOrder}
               >
                 + New
               </button>
@@ -354,28 +195,22 @@ export function ProjectWorkspace({
             kind={railKind}
             projectId={id}
             selectedId={mode === "order" ? orderId : null}
-            reloadKey={reloadKey}
+            reloadKey={pages.reloadKey}
             onSelect={openOrder}
           />
 
           <div className="rail__spacer" />
           {project?.forgejo_repository && (
             <PreviewRailItem
-              preview={preview}
+              preview={pages.preview}
               runnable={!!toolchain?.run}
               active={mode === "preview"}
-              onOpenPage={() => {
-                setMode("preview");
-                setOrderId(null);
-              }}
+              onOpenPage={() => go("preview")}
             />
           )}
           <button
             className={`rail__item ${mode === "settings" ? "rail__item--active" : ""}`}
-            onClick={() => {
-              setMode("settings");
-              setOrderId(null);
-            }}
+            onClick={() => go("settings")}
           >
             Project settings
           </button>
@@ -392,115 +227,17 @@ export function ProjectWorkspace({
             <ProjectDashboard
               project={project}
               needsStack={needsStack}
-              onOpenStack={() => {
-                setMode("stack");
-                setOrderId(null);
-              }}
-              onOpenVision={() => {
-                setMode("vision");
-                setOrderId(null);
-              }}
+              onOpenStack={() => go("stack")}
+              onOpenVision={() => go("vision")}
               attention={attention}
               onOpenOrder={openOrder}
-              onNewOrder={startNewOrder}
-              onSettings={() => {
-                setMode("settings");
-                setOrderId(null);
-              }}
+              onNewOrder={pages.startNewOrder}
+              onSettings={() => go("settings")}
             />
           )}
 
-          {mode === "vision" && project && (
-            <VisionView
-              projectId={id}
-              setup={
-                needsStack
-                  ? {
-                      onStarted: (fid, t) => {
-                        setToolchain(t);
-                        setReloadKey((k) => k + 1);
-                        setRailKind("work_order");
-                        openOrder(fid);
-                      },
-                    }
-                  : undefined
-              }
-              onOpenOrder={(fid) => {
-                setReloadKey((k) => k + 1);
-                setRailKind("work_order");
-                openOrder(fid);
-              }}
-            />
-          )}
-
-          {mode === "repository" && project && <RepositoryCard projectId={id} />}
-
-          {mode === "stack" && project && (
-            <StackPicker
-              projectId={id}
-              onSaved={(t) => {
-                setToolchain(t);
-                setMode("overview"); // return to where the flow was most likely initiated
-              }}
-            />
-          )}
-
-          {mode === "new" && project && (
-            <NewWorkOrder
-              key={orderDraft?.title ?? "blank"}
-              project={project}
-              initial={orderDraft}
-              onOpenValidation={() => {
-                setOrderId(null);
-                setMode("settings");
-              }}
-              onCreated={(fid) => {
-                setReloadKey((k) => k + 1);
-                openOrder(fid);
-              }}
-            />
-          )}
-
-          {mode === "order" && orderId && (
-            <AttachmentOwner.Provider value={id}>
-              <FeatureView
-                projectId={id}
-                featureId={orderId}
-                hasRepo={hasRepo}
-                autopilot={autopilotOn(attention, orderId)}
-                onOpenValidation={() => setMode("settings")}
-                onChanged={bumpRail}
-                onKind={setRailKind}
-                onDeleted={() => {
-                  setMode("overview");
-                  setOrderId(null);
-                  bumpRail();
-                }}
-              />
-            </AttachmentOwner.Provider>
-          )}
-
-          {mode === "preview" && project && (
-            <PreviewView
-              projectId={id}
-              preview={preview}
-              toolchain={toolchain}
-              hasRepo={!!project.forgejo_repository}
-              onToolchainSaved={setToolchain}
-              onOpenStack={() => setMode("stack")}
-              onOpenOrder={openOrder}
-              setup={previewSetup}
-            />
-          )}
-
-          {mode === "settings" && project && (
-            <ProjectSettings
-              project={project}
-              onUpdated={(updated) => {
-                setProject(updated);
-                onLoaded?.(updated.name);
-              }}
-            />
+          {mode !== "overview" && (
+            <ProjectPageBody pages={pages} attention={attention} onLoaded={onLoaded} />
           )}
         </div>
       </main>
@@ -590,17 +327,4 @@ function RailIcon({ name }: { name: Mode }) {
       {RAIL_ICONS[name]}
     </svg>
   );
-}
-
-/** How autopilot stands on a blocked or failed work order, from the inbox. */
-function autopilotOn(
-  attention: AttentionItem[],
-  featureId: string,
-): "handling" | "stalled" | undefined {
-  for (const item of attention) {
-    if (item.feature_id !== featureId) continue;
-    if (item.kind === "autopilot_stalled") return "stalled";
-    if (item.kind === "autopilot_handling") return "handling";
-  }
-  return undefined;
 }

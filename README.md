@@ -74,8 +74,12 @@ a private Forgejo instance keeping the history.
   them.
 - **Marketplace (early).** Release an app to a shared marketplace and install
   other people's apps as your own copy.
-- **Developer mode.** Shows the projects, the work order pages, the Forgejo
-  history, and the system's status. Without it, Commitarium is just the apps.
+- **Developer mode.** Chat-first: your projects and their chats in a sidebar,
+  the chat in the centre, and cards beside it for the project's plan, work
+  orders, agents at work, preview, and sync. A work order, the vision, a
+  session, or the project's settings open in the centre, with a way back to
+  the chat. It also shows the Forgejo history and the system's status.
+  Without it, Commitarium is just the apps.
 
 ## How a change happens
 
@@ -162,8 +166,9 @@ To report a security problem, see [the security policy](SECURITY.md).
 2. In **Apps**, choose **New app** and describe what you want. The assistant
    takes it from there and opens the app when it is ready.
 3. To work on an existing repository instead, turn on **Developer mode** in
-   Settings, import a clean Git repository under **Projects**, and talk to the
-   project's assistant or create a work order yourself.
+   Settings, import a clean Git repository under **Projects** (the **All**
+   link beside Projects in the sidebar), and talk to the project's assistant
+   in its chat or create a work order yourself from the **Work orders** card.
 
 Agents iterate in Commitarium's internal Forgejo. Your own repository receives
 an accepted result only through the explicit sync, and pushing it to GitHub,

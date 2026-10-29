@@ -15,7 +15,8 @@ import type {
 } from "../api/types";
 import { getVision } from "../api/vision";
 import { openExternal } from "../ipc";
-import { OPEN_VISION, WORK_CHANGED } from "./ChatView";
+import { WORK } from "../vocab";
+import { WORK_CHANGED } from "./ChatView";
 import { ActivityDot } from "./chatActivity";
 import { CompactProjectSync } from "./ProjectSyncCard";
 import { Overlay } from "./Overlay";
@@ -29,6 +30,7 @@ import {
   workBoard,
   type WorkRow,
 } from "./projectCardData";
+import type { PageMode, PageTarget } from "./pageTarget";
 import { useModelName } from "./useModelName";
 import { PREVIEW_STATE, primaryUrl, usePreview } from "./usePreview";
 
@@ -36,22 +38,20 @@ const POLL_MS = 10_000;
 
 // The cards beside a project's chat (ADR-038): the project, its work orders,
 // the agents at work, the preview, and sync. They read the same records the
-// project page does, again every few seconds and whenever the assistant
-// changes work.
+// project's pages do, again every few seconds and whenever the assistant
+// changes work. Their links open those pages in the centre.
 export function ProjectCards({
   projectId,
   project,
   attention,
-  onOpenOrder,
-  onOpenProjectPage,
+  onOpenPage,
 }: {
   projectId: string;
   /** The project from the shell's list; undefined while it loads. */
   project: Project | undefined;
   attention: { items: AttentionItem[]; running: RunningWorkOrder[] };
-  onOpenOrder: (projectId: string, featureId: string) => void;
-  /** The project's own page, until its pages open in the centre (D6). */
-  onOpenProjectPage: (projectId: string) => void;
+  /** Opens one of the project's pages in the centre, over the chat. */
+  onOpenPage: (page: PageTarget) => void;
 }) {
   const data = useProjectData(projectId);
   const items = useMemo(
@@ -62,38 +62,35 @@ export function ProjectCards({
     () => attention.running.filter((r) => r.project_id === projectId),
     [attention.running, projectId],
   );
-  const openPage = () => onOpenProjectPage(projectId);
-  // The project page opens on its overview; the vision is asked for once it
-  // has mounted and listens.
-  const openVision = () => {
-    onOpenProjectPage(projectId);
-    setTimeout(() => window.dispatchEvent(new Event(OPEN_VISION)), 0);
-  };
+  const open = (mode: PageMode) => onOpenPage({ mode });
+  const openOrder = (orderId: string) => onOpenPage({ mode: "order", orderId });
   const hasRepo = !!project?.forgejo_repository;
 
   return (
     <>
-      <ProjectCard data={data} onOpenVision={openVision} />
+      <ProjectCard data={data} hasRepo={hasRepo} onOpen={open} />
       <WorkOrdersCard
         features={data.features}
         items={items}
         running={running}
         maxRunning={data.maxRunning}
-        onOpen={(id) => onOpenOrder(projectId, id)}
+        onOpen={openOrder}
+        onNew={() => open("new")}
+        onAll={() => open("work")}
       />
-      <AgentsCard projectId={projectId} onOpen={(id) => onOpenOrder(projectId, id)} />
+      <AgentsCard projectId={projectId} onOpen={openOrder} />
       {hasRepo && (
         <PreviewCard
           projectId={projectId}
           appName={project?.app ? project.name : undefined}
           toolchain={data.toolchain}
-          onOpenPage={openPage}
+          onOpenPage={() => open("preview")}
         />
       )}
       {hasRepo && (
         <section className="shell-card">
           <h2 className="shell-card__head">Sync</h2>
-          <CompactProjectSync projectId={projectId} onOpenFull={openPage} />
+          <CompactProjectSync projectId={projectId} onOpenFull={() => open("sync")} />
         </section>
       )}
     </>
@@ -152,7 +149,15 @@ function useProjectData(projectId: string): ProjectData {
   return { features, vision, toolchain, maxRunning };
 }
 
-function ProjectCard({ data, onOpenVision }: { data: ProjectData; onOpenVision: () => void }) {
+function ProjectCard({
+  data,
+  hasRepo,
+  onOpen,
+}: {
+  data: ProjectData;
+  hasRepo: boolean;
+  onOpen: (mode: PageMode) => void;
+}) {
   const { vision, features, toolchain } = data;
   const progress = vision && features ? priorityProgress(vision.plan, features) : [];
   // The stack the project runs on, or the one its vision recommends before
@@ -204,9 +209,30 @@ function ProjectCard({ data, onOpenVision }: { data: ProjectData; onOpenVision: 
           )}
         </div>
       )}
-      <button className="shell-card__link" onClick={onOpenVision}>
-        {vision === null ? "Plan it" : "Open the vision"}
-      </button>
+      <div className="shell-card__links">
+        <button className="shell-card__link" onClick={() => onOpen("vision")}>
+          {vision === null ? "Plan it" : "Open the vision"}
+        </button>
+        {toolchain?.status === "needs_setup" ? (
+          <button className="shell-card__link" onClick={() => onOpen("stack")}>
+            Set up the stack
+          </button>
+        ) : (
+          toolchain && (
+            <button className="shell-card__link" onClick={() => onOpen("stack")}>
+              Stack
+            </button>
+          )
+        )}
+        {hasRepo && (
+          <button className="shell-card__link" onClick={() => onOpen("repository")}>
+            Repository
+          </button>
+        )}
+        <button className="shell-card__link" onClick={() => onOpen("settings")}>
+          Settings
+        </button>
+      </div>
     </section>
   );
 }
@@ -217,12 +243,17 @@ function WorkOrdersCard({
   running,
   maxRunning,
   onOpen,
+  onNew,
+  onAll,
 }: {
   features: Feature[] | null;
   items: AttentionItem[];
   running: RunningWorkOrder[];
   maxRunning: number;
   onOpen: (featureId: string) => void;
+  onNew: () => void;
+  /** Every work order and session, done ones included. */
+  onAll: () => void;
 }) {
   const board = useMemo(
     () => (features ? workBoard(features, items, running) : null),
@@ -283,6 +314,18 @@ function WorkOrdersCard({
           )}
         </>
       )}
+      <div className="shell-card__links">
+        <button className="shell-card__link" onClick={onNew}>
+          + {WORK.newAction}
+        </button>
+        <button
+          className="shell-card__link"
+          onClick={onAll}
+          title="Every work order and session, done ones too"
+        >
+          All work
+        </button>
+      </div>
     </section>
   );
 }

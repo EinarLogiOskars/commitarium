@@ -10,7 +10,7 @@ import {
 import { ApiError } from "../api/client";
 import { listProjects } from "../api/projects";
 import type { AttentionItem, Project, RunningWorkOrder } from "../api/types";
-import { ChatView, OPEN_PROJECT, WORK_CHANGED } from "./ChatView";
+import { ChatView, OPEN_ASSISTANT, OPEN_PROJECT, WORK_CHANGED } from "./ChatView";
 import {
   ActivityDot,
   chatActivity,
@@ -22,6 +22,10 @@ import {
 import { RECENT_PROJECTS, later, sidebarProjects } from "./sidebarProjects";
 import { ProjectCards } from "./ProjectCards";
 import { Projects } from "./Projects";
+import { ProjectPageBody, useProjectPages } from "./ProjectPages";
+import type { PageTarget } from "./pageTarget";
+import { MarketplaceRelease } from "./MarketplaceRelease";
+import { ProjectCost } from "./usage";
 
 const TOP = "commitarium";
 const SELECTED_KEY = "commitarium.chats.selected";
@@ -80,17 +84,22 @@ function remember(key: string, value: unknown) {
   }
 }
 
+/** A project's page open in the centre, over the chat. */
+type ShellPage = PageTarget & { scope: string };
+
 // Developer mode's chat shell (ADR-038): chats in a sidebar, grouped under
 // their projects, the chat in the centre, and the project's cards on the
 // right. A dot on a project or chat pulses while its work runs and turns
-// amber when something waits for the user.
+// amber when something waits for the user. A project's pages (a work order,
+// the vision, settings) open in the centre with a way back to the chat.
 export function DevShell({
   reachable,
   attention,
   focusProject,
   onProjectChange,
-  onOpenOrder,
-  onOpenProjectPage,
+  openOrder,
+  onOrderOpened,
+  onForeground,
   areaNav,
   systemNav,
 }: {
@@ -101,9 +110,12 @@ export function DevShell({
   focusProject: string | null;
   /** The project of the chat on screen, or null for a loose chat. */
   onProjectChange: (projectId: string | null) => void;
-  onOpenOrder: (projectId: string, featureId: string) => void;
-  /** The project's own page, until its parts move here (D6). */
-  onOpenProjectPage: (projectId: string) => void;
+  /** A work order the Inbox asked for; the nonce re-triggers a repeat open. */
+  openOrder: { projectId: string; featureId: string; nonce: number } | null;
+  /** The asked-for work order is open, so it isn't opened again. */
+  onOrderOpened: () => void;
+  /** Reports the work order on screen, so its own news isn't also notified. */
+  onForeground: (featureId: string | null) => void;
   /** The way to the Apps and Marketplace areas. */
   areaNav: ReactNode;
   /** The app's own controls: Inbox, Settings, the coordinator's status. */
@@ -133,11 +145,15 @@ export function DevShell({
   const [query, setQuery] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [making, setMaking] = useState(false);
+  const [page, setPage] = useState<ShellPage | null>(null);
+  // A project the assistant just created, until the project list has it.
+  const created = useRef<string | null>(null);
 
   const select = useCallback((next: Selection) => {
     setSelection(next);
     setShownChat(null);
     setShowProjects(false);
+    setPage(null);
     setError(null);
     remember(SELECTED_KEY, next);
     if (next.scope !== TOP) {
@@ -175,6 +191,47 @@ export function DevShell({
   useEffect(() => {
     onProjectChange(selection.scope === TOP ? null : selection.scope);
   }, [selection.scope, onProjectChange]);
+
+  // A work order from the Inbox opens in its project, over the chat.
+  useEffect(() => {
+    if (!openOrder) return;
+    const { projectId, featureId } = openOrder;
+    expand(projectId);
+    setSelection((current) => {
+      if (current.scope === projectId) return current;
+      const next = { scope: projectId };
+      remember(SELECTED_KEY, next);
+      setShownChat(null);
+      return next;
+    });
+    setShowProjects(false);
+    setPage({ scope: projectId, mode: "order", orderId: featureId });
+    onOrderOpened();
+  }, [openOrder, onOrderOpened, expand]);
+  // A project the assistant created to plan opens on its vision; asking the
+  // assistant something goes back to the chat. A page that only opens the
+  // assistant beside it, as the Planning workspace does, stays.
+  useEffect(() => {
+    const planProject = (event: Event) => {
+      const id = (event as CustomEvent<string>).detail;
+      if (!id) return;
+      created.current = id;
+      expand(id);
+      select({ scope: id });
+      setPage({ scope: id, mode: "vision" });
+    };
+    const backToChat = (event: Event) => {
+      const asked = (event as CustomEvent<{ draft?: string; focus?: unknown; show?: boolean }>)
+        .detail;
+      if (asked?.draft || asked?.focus || asked?.show) setPage(null);
+    };
+    window.addEventListener(OPEN_PROJECT, planProject);
+    window.addEventListener(OPEN_ASSISTANT, backToChat);
+    return () => {
+      window.removeEventListener(OPEN_PROJECT, planProject);
+      window.removeEventListener(OPEN_ASSISTANT, backToChat);
+    };
+  }, [expand, select]);
 
   // Projects, and the chats of the loose list, the open projects, and the
   // one on screen.
@@ -234,9 +291,13 @@ export function DevShell({
     };
   }, [loadProjects, loadChats]);
 
-  // A project that is gone leaves its chats for the loose ones.
+  // A project that is gone leaves its chats for the loose ones; one just
+  // created waits for the list to catch up.
   useEffect(() => {
-    if (projects && selection.scope !== TOP && !projects.some((p) => p.id === selection.scope)) {
+    if (!projects || selection.scope === TOP) return;
+    if (projects.some((p) => p.id === selection.scope)) {
+      if (created.current === selection.scope) created.current = null;
+    } else if (created.current !== selection.scope) {
       select({ scope: TOP });
     }
   }, [projects, selection.scope, select]);
@@ -258,6 +319,14 @@ export function DevShell({
   );
   const currentChat = selection.chat ?? shownChat ?? undefined;
   const loose = selection.scope === TOP;
+  // A page belongs to the project it was opened in.
+  const shownPage = page && page.scope === selection.scope && !loose ? page : null;
+  const scope = selection.scope;
+  const setScopePage = useCallback(
+    (next: PageTarget | null) => setPage(next ? { ...next, scope } : null),
+    [scope],
+  );
+  const pageOpen = !!shownPage && !showProjects;
   const project = projects?.find((p) => p.id === selection.scope);
   const chatTitle = chats[selection.scope]?.find((c) => c.id === currentChat)?.title;
 
@@ -393,7 +462,10 @@ export function DevShell({
           Projects
           <button
             className="ghost chat-side__all"
-            onClick={() => setShowProjects(true)}
+            onClick={() => {
+              setPage(null);
+              setShowProjects(true);
+            }}
             title="All projects, with New project and Import"
           >
             All
@@ -463,9 +535,21 @@ export function DevShell({
             />
           </div>
         )}
-        {/* The chat stays mounted under the project list, so a project
-            created there can open its chat on a started message. */}
-        <div className="dev-shell__chat" hidden={showProjects}>
+        {!loose && (
+          <ProjectCentre
+            key={selection.scope}
+            projectId={selection.scope}
+            page={showProjects ? null : shownPage}
+            setPage={setScopePage}
+            attention={attention.items}
+            onForeground={onForeground}
+            onRenamed={loadProjects}
+          />
+        )}
+        {/* The chat stays mounted under the project list and the project's
+            pages, so a project created there can open its chat on a started
+            message, and coming back finds the chat as it was. */}
+        <div className="dev-shell__chat" hidden={showProjects || pageOpen}>
           <ChatView
             scope={selection.scope}
             chat={selection.chat}
@@ -478,7 +562,7 @@ export function DevShell({
               loadProjects();
               void loadChats();
             }}
-            onOpenOrder={loose ? undefined : (id) => onOpenOrder(selection.scope, id)}
+            onOpenOrder={loose ? undefined : (id) => setScopePage({ mode: "order", orderId: id })}
             chips={
               loose ? (
                 <span className="pill chat-view__chip">No project</span>
@@ -489,21 +573,13 @@ export function DevShell({
             actions={
               <>
                 {error && <span className="chat-view__error">{error}</span>}
-                {loose ? (
+                {loose && (
                   <button
                     className="primary"
                     onClick={() => void makeProject()}
                     disabled={making || !currentChat}
                   >
                     {making ? "Making it a project…" : "Make it a project"}
-                  </button>
-                ) : (
-                  <button
-                    className="ghost"
-                    onClick={() => onOpenProjectPage(selection.scope)}
-                    title="The project's page, with its work orders, preview, and settings"
-                  >
-                    Project page
                   </button>
                 )}
               </>
@@ -535,11 +611,66 @@ export function DevShell({
             projectId={selection.scope}
             project={project}
             attention={attention}
-            onOpenOrder={onOpenOrder}
-            onOpenProjectPage={onOpenProjectPage}
+            onOpenPage={(target) => {
+              setShowProjects(false);
+              setScopePage(target);
+            }}
           />
         )}
       </aside>
+    </div>
+  );
+}
+
+// The selected project's pages in the centre. It stays mounted while the
+// project is selected, page open or not, so its preview setup is followed
+// as on the project page.
+function ProjectCentre({
+  projectId,
+  page,
+  setPage,
+  attention,
+  onForeground,
+  onRenamed,
+}: {
+  projectId: string;
+  /** The page on screen, or null while the chat shows. */
+  page: PageTarget | null;
+  setPage: (page: PageTarget | null) => void;
+  attention: AttentionItem[];
+  onForeground: (featureId: string | null) => void;
+  /** The project's settings renamed it. */
+  onRenamed: () => void;
+}) {
+  const pages = useProjectPages(projectId, { page, setPage });
+  const items = useMemo(
+    () => attention.filter((i) => i.project_id === projectId),
+    [attention, projectId],
+  );
+  const { mode, orderId, project } = pages;
+  useEffect(() => {
+    onForeground(mode === "order" ? orderId : null);
+  }, [mode, orderId, onForeground]);
+  useEffect(() => () => onForeground(null), [onForeground]);
+  if (!mode) return null;
+
+  const fill = mode === "order";
+  return (
+    <div className={`dev-shell__page ${fill ? "dev-shell__page--fill" : ""}`}>
+      <button className="ghost dev-shell__back" onClick={() => setPage(null)}>
+        ← Back to chat
+      </button>
+      <div className={`main__inner ${fill ? "main__inner--fill" : ""}`}>
+        {pages.error && <div className="banner banner--error">{pages.error}</div>}
+        {/* What the project page's overview showed besides its work. */}
+        {mode === "settings" && project && (
+          <div className="dev-shell__extras">
+            {project.app && !pages.needsStack && <MarketplaceRelease projectId={projectId} />}
+            <ProjectCost projectId={projectId} onOpenOrder={pages.openOrder} />
+          </div>
+        )}
+        <ProjectPageBody pages={pages} attention={items} onLoaded={onRenamed} />
+      </div>
     </div>
   );
 }

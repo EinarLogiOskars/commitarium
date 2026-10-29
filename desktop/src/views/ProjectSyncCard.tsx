@@ -114,7 +114,7 @@ function needsFirstRemote(state: ProjectSyncState): boolean {
 
 // The chat shell's Sync card (ADR-038): the user's copy and each remote
 // against the project, with Pull and Push. Setting up a local copy or a first
-// remote takes a form, so those open the full card on the project page.
+// remote takes a form, so those open the full card on its own page.
 export function CompactProjectSync({
   projectId,
   onOpenFull,

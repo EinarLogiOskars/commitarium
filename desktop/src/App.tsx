@@ -66,9 +66,6 @@ function App() {
   const [autoEntered, setAutoEntered] = useState(false);
   const [projectId, setProjectId] = useState<string | null>(null);
   const [projectName, setProjectName] = useState<string | null>(null);
-  // In Developer mode a project shows as chats (ADR-038); its own page opens
-  // from the chat's header until D6 retires it.
-  const [projectPage, setProjectPage] = useState(false);
   const [showAgents, setShowAgents] = useState(false);
   const [showViewer, setShowViewer] = useState(false);
   const [showInbox, setShowInbox] = useState(false);
@@ -76,9 +73,14 @@ function App() {
   const [showUpdate, setShowUpdate] = useState(false);
   // Set while the native layer holds a quit, waiting for this answer.
   const [exitPrompt, setExitPrompt] = useState<{ timeoutMs: number } | null>(null);
-  // A work order to open once the workspace for `projectId` is mounted. The
-  // nonce lets the same item be re-opened after the user navigates away.
-  const [orderTarget, setOrderTarget] = useState<{ featureId: string; nonce: number } | null>(null);
+  // A work order to open once the workspace for `projectId` is mounted, or in
+  // Developer mode the chat shell. The nonce lets the same item be re-opened
+  // after the user navigates away.
+  const [orderTarget, setOrderTarget] = useState<{
+    projectId: string;
+    featureId: string;
+    nonce: number;
+  } | null>(null);
 
   // The work order on screen, if any — notifications skip what is already
   // visible. Stable setter, so it doesn't re-fire the workspace's report.
@@ -93,10 +95,7 @@ function App() {
   const [devMode, setDevModeState] = useState(() => readFlag(DEV_MODE_KEY));
   const setDevMode = (on: boolean) => {
     setDevModeState(on);
-    if (!on) {
-      setProjectId(null);
-      setProjectPage(false);
-    }
+    if (!on) setProjectId(null);
     try {
       localStorage.setItem(DEV_MODE_KEY, on ? "1" : "0");
     } catch {
@@ -120,7 +119,6 @@ function App() {
       if (!id) return;
       setAreaState("projects");
       setProjectName(null);
-      setProjectPage(false);
       setProjectId(id);
     };
     window.addEventListener(OPEN_PROJECT, open);
@@ -266,15 +264,11 @@ function App() {
     );
   }
 
-  // In Developer mode, Projects and a project's chats are the chat shell,
-  // and leaving the project page goes back to its chats.
-  const chatShell = devMode && !projectPage && (area === "projects" || projectId !== null);
+  // In Developer mode, Projects and a project's chats are the chat shell
+  // (ADR-038); a project's pages open in its centre.
+  const chatShell = devMode && (area === "projects" || projectId !== null);
   const exitProject = () => {
     setOrderTarget(null);
-    if (devMode) {
-      setProjectPage(false);
-      return;
-    }
     setProjectId(null);
     setProjectName(null);
   };
@@ -285,8 +279,7 @@ function App() {
       setProjectId(targetProject);
       setProjectName(null);
     }
-    if (devMode) setProjectPage(true);
-    setOrderTarget({ featureId, nonce: Date.now() });
+    setOrderTarget({ projectId: targetProject, featureId, nonce: Date.now() });
     setShowInbox(false);
   };
 
@@ -367,7 +360,7 @@ function App() {
     </button>
   );
   // Leaving a project is an explicit way back to where the user came from.
-  const backLabel = devMode ? "Chats" : area === "projects" ? "Projects" : "Apps";
+  const backLabel = area === "projects" ? "Projects" : "Apps";
   const projectSwitch = projectId && (
     <div className="rail__switch rail__switch--static">
       <button className="rail__back" onClick={exitProject}>
@@ -468,11 +461,9 @@ function App() {
             attention={attention}
             focusProject={projectId}
             onProjectChange={setProjectId}
-            onOpenOrder={openFromInbox}
-            onOpenProjectPage={(id) => {
-              setProjectId(id);
-              setProjectPage(true);
-            }}
+            openOrder={orderTarget}
+            onOrderOpened={() => setOrderTarget(null)}
+            onForeground={setForeground}
             areaNav={(["apps", "marketplace"] as const).map((value) => (
               <button
                 key={value}
