@@ -18,7 +18,8 @@ export interface WorkSignals {
 export interface ChatWork {
   /** The work orders its cards created or started that it still follows. */
   orders: string[];
-  /** Every work order its cards created or started, first started first. */
+  /** Every work order its applied cards acted on (created, started, set the
+   * preview up, recovered…), first acted on first. */
   started: string[];
   /** A card waits for the user's approval. */
   proposed: boolean;
@@ -59,12 +60,7 @@ export function chatWork(conversation: Conversation): ChatWork {
     started: [
       ...new Set(
         conversation.actions
-          .filter(
-            (a) =>
-              (a.type === "create_work_order" || a.type === "start_work_order") &&
-              a.status === "applied" &&
-              !!a.work_order_id,
-          )
+          .filter((a) => a.status === "applied" && !!a.work_order_id)
           .map((a) => a.work_order_id as string),
       ),
     ],
