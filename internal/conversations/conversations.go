@@ -140,6 +140,11 @@ type Action struct {
 	// ProjectID names the project a create_app or plan_project action
 	// created.
 	ProjectID string `json:"project_id,omitempty"`
+	// StartFailed says why what follows an applied create_app or
+	// plan_project failed: its chat moving in, the app's start, or the
+	// project's planning. Approving the card again finishes them on the same
+	// project (RecordStart).
+	StartFailed string `json:"start_failed,omitempty"`
 	// AutoTried marks an action autopilot took over, applied or not.
 	AutoTried bool `json:"auto_tried,omitempty"`
 	// Queued marks an action autopilot holds until the work it follows
@@ -739,6 +744,38 @@ func (service *Service) Resolve(ctx context.Context, scope, actionID string, sta
 			// once rather than at the next look at the vision.
 			stored.Goal.follow(action.VisionItemID, action.WorkOrderID)
 		}
+		stored.UpdatedAt = action.UpdatedAt
+		return stored.Conversation, service.write(stored)
+	}
+	return Conversation{}, ErrNotFound
+}
+
+// RecordStart records how what follows an applied create_app or
+// plan_project went: failure says why it failed, and "" clears it once a
+// retry finished it. The card is found in whichever chat of scope holds it.
+func (service *Service) RecordStart(ctx context.Context, scope, actionID, failure string) (Conversation, error) {
+	if err := service.checkScope(ctx, scope); err != nil {
+		return Conversation{}, err
+	}
+	chat, err := service.chatOfAction(InChat(ctx, ""), scope, actionID)
+	if err != nil {
+		return Conversation{}, err
+	}
+	stored, done, err := service.open(scope, chat)
+	if err != nil {
+		return Conversation{}, err
+	}
+	defer done()
+	for index := range stored.Actions {
+		action := &stored.Actions[index]
+		if action.ID != actionID {
+			continue
+		}
+		if action.Status != ActionApplied || (action.Type != featureartifact.AssistantCreateApp &&
+			action.Type != featureartifact.AssistantPlanProject) {
+			return Conversation{}, ErrNotPending
+		}
+		action.StartFailed, action.UpdatedAt = strings.TrimSpace(failure), service.now()
 		stored.UpdatedAt = action.UpdatedAt
 		return stored.Conversation, service.write(stored)
 	}

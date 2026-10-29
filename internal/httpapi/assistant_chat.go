@@ -370,6 +370,12 @@ func (api *API) approveConversationActionHandler(w http.ResponseWriter, r *http.
 		// starts reports there (ADR-038).
 		r = r.WithContext(conversations.InChat(r.Context(), action.Chat))
 	}
+	if action.Status == conversations.ActionApplied && action.StartFailed != "" {
+		// A created app or project whose start failed: approving it again
+		// finishes that on the same project, wherever the card now is.
+		api.retryStart(w, r, scope, action)
+		return
+	}
 	if action.Status != conversations.ActionProposed {
 		writeError(w, http.StatusConflict, "action_not_pending", "the action is no longer waiting for approval")
 		return
@@ -551,43 +557,31 @@ func (api *API) approveConversationActionHandler(w http.ResponseWriter, r *http.
 		writeConversationError(w, err)
 		return
 	}
-	if action.Type == featureartifact.AssistantCreateApp {
-		// In Developer mode, the loose chat that proposed it moves into the
-		// new app as its chat, with its applied card, and hears the app's
-		// launch there (ADR-038).
-		// The app does not have the top-level chat the request acts on: its
-		// calls act on the moved chat, or on the app's most recently used one.
-		moved := false
-		r = r.WithContext(conversations.InChat(r.Context(), ""))
-		if mover, ok := api.conversations.(chatMover); ok && conversation.Developer && action.Chat != "" {
-			chat, err := api.moveChatInto(r.Context(), mover, action.Chat, action.ID, projectID)
-			if err != nil {
-				writeError(w, http.StatusBadGateway, "app_not_started",
-					fmt.Sprintf("the app %q was created, but this chat could not move into it: %v", action.Title, err))
-				return
-			}
-			r, moved = r.WithContext(conversations.InChat(r.Context(), chat.Chat)), true
-		}
-		if !api.startApp(w, r, action, projectID) {
+	if action.Type == featureartifact.AssistantCreateApp || action.Type == featureartifact.AssistantPlanProject {
+		if conversation, err = api.startCreated(r.Context(), scope, action, projectID, conversation.Developer, false); err != nil {
+			writeError(w, http.StatusBadGateway, "project_not_started", err.Error())
 			return
-		}
-		if moved {
-			if current, err := api.conversations.Get(r.Context(), projectID); err == nil {
-				conversation = current
-			}
 		}
 	}
-	if action.Type == featureartifact.AssistantPlanProject {
-		// The chat that proposed it moves into the new project, with its
-		// applied card (ADR-038).
-		notes := "The project's brief, settled with the user before it was created:\n\n" + appBrief(action)
-		moved, ok := api.planProject(w, r, action.Chat, action.ID, projectID, action.Title, notes, action.Description)
-		if !ok {
-			return
-		}
-		if moved.Scope != "" {
-			conversation = moved
-		}
+	writeJSON(w, http.StatusOK, conversation, "assistant conversation")
+}
+
+// retryStart finishes what follows an applied create_app or plan_project
+// whose start failed (startCreated): the project exists, so nothing is
+// created again, and a chat that moved stays where it is.
+func (api *API) retryStart(w http.ResponseWriter, r *http.Request, scope string, action conversations.Action) {
+	conversation, err := api.conversations.Get(r.Context(), scope)
+	if err != nil {
+		writeConversationError(w, err)
+		return
+	}
+	if conversation.Status == conversations.StatusRunning {
+		writeConversationError(w, conversations.ErrBusy)
+		return
+	}
+	if conversation, err = api.startCreated(r.Context(), scope, action, action.ProjectID, conversation.Developer, true); err != nil {
+		writeError(w, http.StatusBadGateway, "project_not_started", err.Error())
+		return
 	}
 	writeJSON(w, http.StatusOK, conversation, "assistant conversation")
 }

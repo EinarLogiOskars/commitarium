@@ -28,6 +28,7 @@ export type QuietKind =
   | "vision"
   | "stack"
   | "answer"
+  | "order"
   | "note";
 
 export interface QuietLine {
@@ -319,6 +320,8 @@ export function kindPhrase(kind: QuietKind, n: number): string {
       return "set up the stack";
     case "answer":
       return plural(n, "answered a helper", `answered ${n} helpers`);
+    case "order":
+      return plural(n, "1 work order done", `${n} work orders done`);
     default:
       return plural(n, "1 update", `${n} updates`);
   }
@@ -382,3 +385,15 @@ export const QUIET_GLYPH: Record<QuietTone, string> = {
   needs: "!",
   failed: "✕",
 };
+
+/** A work order the chat started, as a quiet line: under way while an agent
+ * works on it, needing the user when it waits for them, done once merged,
+ * and otherwise just where it stands. */
+export function orderLine(
+  title: string,
+  state: string,
+  { running, waiting, done }: { running: boolean; waiting: boolean; done: boolean },
+): QuietLine {
+  const tone: QuietTone = waiting ? "needs" : running ? "busy" : done ? "done" : "info";
+  return { tone, kind: "order", count: 1, text: state ? `${title} · ${state}` : title };
+}

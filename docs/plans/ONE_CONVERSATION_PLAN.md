@@ -230,6 +230,11 @@ on.
   from there. The workspace is the vision being written; nothing is
   converted. It doubles as how a new project starts in Developer mode.
 
+  *Since then planning moved into the chat ([ADR-039](../adr/0039-planning-is-a-mode-of-the-chat.md),
+  [PLAN_MODE_PLAN.md](PLAN_MODE_PLAN.md)): plan mode is a switch on the
+  chat, the plan's working notes are its Insights, the written plan opens in
+  an overlay, and the planning workspace page is gone.*
+
 The "go for it" and "no endless questions" rules apply here too.
 
 | # | Commit | Contents | Depends on |

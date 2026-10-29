@@ -3,6 +3,7 @@ import { WorkOrderRail } from "./WorkOrderRail";
 import { ProjectDashboard } from "./ProjectDashboard";
 import { PreviewRailItem } from "./PreviewRailItem";
 import { ProjectPageBody, useProjectPages } from "./ProjectPages";
+import { PlanOverlay } from "./PlanPage";
 import type { PageMode, PageTarget } from "./pageTarget";
 import { WORK } from "../vocab";
 import type { AttentionItem } from "../api/types";
@@ -239,6 +240,8 @@ export function ProjectWorkspace({
           {mode !== "overview" && (
             <ProjectPageBody pages={pages} attention={attention} onLoaded={onLoaded} />
           )}
+          {/* The chat's "Open the plan" opens the written plan over the page. */}
+          <PlanOverlay projectId={id} />
         </div>
       </main>
     </>

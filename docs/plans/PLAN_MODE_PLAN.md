@@ -1,6 +1,10 @@
 # Plan Mode in the Chat: Implementation Plan
 
-**Status:** proposed 2026-10-29, [ADR-039](../adr/0039-planning-is-a-mode-of-the-chat.md).
+**Status:** merged (PM1–PM6, PRs #141 and #142), [ADR-039](../adr/0039-planning-is-a-mode-of-the-chat.md).
+Since then every "open the plan" (the chat's "Plan drafted · Open", the
+composer's + menu, the Plan card) opens the same plan overlay, and the plan
+page in the centre is gone. Nothing from this plan is left; see
+[Not in this plan](#not-in-this-plan) for what it leaves out.
 
 Planning keeps its coordinator model (the vision's Planning: checklist coverage,
 decisions, open questions, research, documents, Build it). These slices move
@@ -109,10 +113,9 @@ workspace page, so every slice ships on its own.
   and its built planning is kept as the first plan when the next one starts.
 - PlanningWorkspace is removed; its parts live in Insights, the plan
   overlay, and the vision page.
-- Still to do: change the instructions that send the user to "the planning
-  workspace" (plan_project, create_app) to the chat's plan mode, and update
-  the README's Developer mode section and ONE_CONVERSATION_PLAN.md's phase 2
-  note.
+- Done since: the instructions for plan_project and create_app send the
+  user to the chat's plan mode, and the README's Developer mode section and
+  ONE_CONVERSATION_PLAN.md's phase 2 note say planning happens in the chat.
 
 ## PM6: The written plan (coordinator, desktop)
 
@@ -134,8 +137,8 @@ workspace page, so every slice ships on its own.
   every slice ticks its own line (`- [x]`) in its commit.
 - Desktop: "Write the plan" (Plan card, composer + menu) sends the
   assistant a message asking for the draft; "Plan drafted · Open" in the
-  chat and on the Plan card opens the Plan page (the document with its
-  checklist, and Build it); revisions show as "Plan revised" with the
+  chat, the composer's + menu, and the Plan card open the plan in an overlay
+  (the document with its checklist, and Build it); revisions show as "Plan revised" with the
   slices added, changed, and taken out.
 - Tests: phase, Build it refused before a draft, the document stored and
   revised, slices as items or sub-items with built items kept, the first

@@ -17,12 +17,12 @@ import { openAppWindow, openExternal } from "../ipc";
 import { WORK } from "../vocab";
 import { WORK_CHANGED } from "./ChatView";
 import { chatPlanning, planPhase } from "./planMode";
-import { ASSISTANT_CHANGED, WRITE_PLAN } from "./chatEvents";
+import { ASSISTANT_CHANGED, OPEN_PLAN, WRITE_PLAN } from "./chatEvents";
 import { usePlanSwitch } from "./usePlanSwitch";
 import { ActivityDot } from "./chatActivity";
 import { CompactProjectSync } from "./ProjectSyncCard";
 import { Overlay } from "./Overlay";
-import { PlanDocumentView } from "./PlanPage";
+import { PlanOverlay } from "./PlanPage";
 import { PlanInsights } from "./PlanInsights";
 import { StopPlanDialog } from "./StopPlanDialog";
 import {
@@ -75,6 +75,8 @@ export function ProjectCards({
 
   return (
     <>
+      {/* The plan opens over the page, from the Plan card or the chat (OPEN_PLAN). */}
+      <PlanOverlay projectId={projectId} />
       <PlanCard
         projectId={projectId}
         name={project?.name ?? ""}
@@ -573,10 +575,10 @@ function PlanCard({
 }) {
   const planning = chatPlanning(vision ?? { planning: undefined }, chat);
   const plan = usePlanSwitch(projectId, name, chat, planning, { onChanged });
-  const [shown, setShown] = useState<null | "plan" | "insights">(null);
+  const [insights, setInsights] = useState(false);
   const [building, setBuilding] = useState(false);
   const [buildError, setBuildError] = useState<string | null>(null);
-  const close = useCallback(() => setShown(null), []);
+  const close = useCallback(() => setInsights(false), []);
   if (vision === undefined) return null;
   const drafted = planPhase(vision?.planning) === "drafted";
   const { on } = plan;
@@ -637,14 +639,14 @@ function PlanCard({
           <span className="shell-card__links plan-card__links">
             <button
               className="shell-card__link"
-              onClick={() => setShown("plan")}
+              onClick={() => window.dispatchEvent(new Event(OPEN_PLAN))}
               title={drafted ? "The written plan, to review" : "No draft yet"}
             >
               {drafted ? "Open the plan" : "The plan"}
             </button>
             <button
               className="shell-card__link"
-              onClick={() => setShown("insights")}
+              onClick={() => setInsights(true)}
               title="What Mayka works from: what the plan covers, decisions, open questions, research, and documents"
             >
               Insights
@@ -673,12 +675,7 @@ function PlanCard({
       )}
       {plan.error && !plan.stopping && <p className="banner banner--error">{plan.error}</p>}
       {buildError && <p className="banner banner--error">{buildError}</p>}
-      {shown === "plan" && (
-        <Overlay title="Plan" onClose={close}>
-          <PlanDocumentView projectId={projectId} onBack={close} inOverlay />
-        </Overlay>
-      )}
-      {shown === "insights" && vision && (
+      {insights && vision && (
         <Overlay title="Insights" onClose={close}>
           <PlanInsights projectId={projectId} vision={vision} />
         </Overlay>

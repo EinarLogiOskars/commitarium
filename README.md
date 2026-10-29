@@ -78,8 +78,11 @@ a private Forgejo instance keeping the history.
   the chat in the centre, and cards beside it for the project's plan, work
   orders, agents at work, preview, and sync. A work order, the vision, a
   session, or the project's settings open in the centre, with a way back to
-  the chat. It also shows the Forgejo history and the system's status.
-  Without it, Commitarium is just the apps.
+  the chat. The assistant is called Mayka. To think a change through before
+  anything is built, switch on plan mode on the Plan card (or type `/plan`):
+  Mayka asks what she needs, then writes a plan with commit-sized slices, and
+  **Build it** hands them to autopilot. It also shows the Forgejo history and
+  the system's status. Without it, Commitarium is just the apps.
 
 ## How a change happens
 
