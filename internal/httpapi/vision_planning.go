@@ -128,10 +128,10 @@ func (api *API) startPlanningHandler(w http.ResponseWriter, r *http.Request) {
 // planning instructions' opening says, unless the chat already asks for
 // something.
 func planningWake(round bool, idea string, withMessage bool) (note, text string) {
-	note, text = "Planning the project with the assistant.",
+	note, text = "Planning the project with Mayka.",
 		"The user switched plan mode on to plan this project with you before anything is built."
 	if round {
-		note, text = "Planning the project's next round with the assistant.",
+		note, text = "Planning the project's next round with Mayka.",
 			"The user switched plan mode on to plan the next round of this project with you: what is built stays, "+
 				"and nothing new is built until they press Build it."
 	}

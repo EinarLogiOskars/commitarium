@@ -107,8 +107,8 @@ export function PlanDocumentView({
       ) : (
         <div className="panel plan-page__empty">
           <p className="muted">
-            No written plan yet. The assistant writes the first draft once it has enough, or when
-            you ask; the draft lists the slices Build it hands to autopilot.
+            No written plan yet. Mayka writes the first draft once she has enough, or when you ask;
+            the draft lists the slices Build it hands to autopilot.
           </p>
           {open && (
             <button

@@ -405,7 +405,7 @@ func (api *API) approveConversationActionHandler(w http.ResponseWriter, r *http.
 		}
 		if !conversation.Developer {
 			writeError(w, http.StatusConflict, "developer_mode_required",
-				"planning a project needs Developer mode, in Settings; without it the assistant builds a self-contained app")
+				"planning a project needs Developer mode, in Settings; without it Mayka builds a self-contained app")
 			return
 		}
 		// Its chat moves into the project, which waits for its turn to end.
@@ -555,9 +555,12 @@ func (api *API) approveConversationActionHandler(w http.ResponseWriter, r *http.
 		// In Developer mode, the loose chat that proposed it moves into the
 		// new app as its chat, with its applied card, and hears the app's
 		// launch there (ADR-038).
+		// The app does not have the top-level chat the request acts on: its
+		// calls act on the moved chat, or on the app's most recently used one.
 		moved := false
+		r = r.WithContext(conversations.InChat(r.Context(), ""))
 		if mover, ok := api.conversations.(chatMover); ok && conversation.Developer && action.Chat != "" {
-			chat, err := mover.MoveChat(r.Context(), conversations.TopLevel, action.Chat, projectID)
+			chat, err := api.moveChatInto(r.Context(), mover, action.Chat, action.ID, projectID)
 			if err != nil {
 				writeError(w, http.StatusBadGateway, "app_not_started",
 					fmt.Sprintf("the app %q was created, but this chat could not move into it: %v", action.Title, err))
@@ -578,7 +581,7 @@ func (api *API) approveConversationActionHandler(w http.ResponseWriter, r *http.
 		// The chat that proposed it moves into the new project, with its
 		// applied card (ADR-038).
 		notes := "The project's brief, settled with the user before it was created:\n\n" + appBrief(action)
-		moved, ok := api.planProject(w, r, action.Chat, projectID, action.Title, notes, action.Description)
+		moved, ok := api.planProject(w, r, action.Chat, action.ID, projectID, action.Title, notes, action.Description)
 		if !ok {
 			return
 		}

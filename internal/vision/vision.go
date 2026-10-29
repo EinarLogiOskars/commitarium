@@ -148,7 +148,7 @@ func (service *Service) signInReply(ctx context.Context, agentID string, result 
 	if service.signIns != nil {
 		_ = service.signIns.MarkAgentNeedsSignIn(ctx, agentID, result.Error.Message)
 	}
-	return "The assistant's agent needs you to sign in again. Sign it in on the Agents page, then start again.", true
+	return "Mayka's agent needs you to sign in again. Sign it in on the Agents page, then start again.", true
 }
 
 var (
@@ -574,12 +574,12 @@ func (service *Service) refresh(ctx context.Context, record sessionRecord) (sess
 	if attempt.State != workerhttp.AttemptStateTerminal {
 		if attempt.State == workerhttp.AttemptStateIndeterminate {
 			record.Status = StatusFailed
-			record.Messages = append(record.Messages, Message{Role: "assistant", Text: "The assistant's turn could not be recovered. Start again.", OccurredAt: service.now()})
+			record.Messages = append(record.Messages, Message{Role: "assistant", Text: "Mayka's turn could not be recovered. Start again.", OccurredAt: service.now()})
 			service.releaseWorkspace(ctx, record.ID)
 		}
 		return record, service.writeSession(record)
 	}
-	reply := "The assistant's turn did not complete."
+	reply := "Mayka's turn did not complete."
 	switch {
 	case attempt.Result == nil || attempt.Result.Outcome != workerhttp.OutcomeCompleted:
 		record.Status = StatusFailed
@@ -607,7 +607,7 @@ func (service *Service) refresh(ctx context.Context, record sessionRecord) (sess
 		record.Status = StatusWritten
 	default:
 		record.Status = StatusFailed
-		reply = "The assistant returned no vision."
+		reply = "Mayka returned no vision."
 	}
 	record.UpdatedAt = service.now()
 	record.Messages = append(record.Messages, Message{Role: "assistant", Text: reply, OccurredAt: record.UpdatedAt})
@@ -721,7 +721,7 @@ func initialInstructions(
 	checkedOut bool,
 ) string {
 	var builder strings.Builder
-	builder.WriteString("You are Commitarium's project assistant. Write the vision for project " + projectName +
+	builder.WriteString("You are Mayka, Commitarium's project assistant. Write the vision for project " + projectName +
 		": a short statement of why the app exists, who it is for, and what it should become, and a prioritized " +
 		"plan of the work that gets it there. P0 holds what the app needs first to be useful, P1 what comes next, " +
 		"and so on; leave out empty priorities. Items nest at most three levels: a top-level item may group smaller " +

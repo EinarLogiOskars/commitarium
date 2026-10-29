@@ -358,7 +358,7 @@ func (service *Service) autopilotChat(ctx context.Context, scope, chat string, l
 				}
 			}
 		}
-		look.running, look.ceiling = service.running(ctx, scope, stored.earlyPlanners()), service.maxRunning(ctx)
+		look.running, look.ceiling = service.running(ctx, scope, stored.earlyPlanners()), SafetyCap
 	}
 	claims, created, closing := look.claims, look.created, look.closing
 	claimed := func(itemID string) bool {
@@ -477,8 +477,8 @@ func (service *Service) autopilotChat(ctx context.Context, scope, chat string, l
 				continue
 			}
 		}
-		// Work orders run side by side up to the ceiling the user set; a
-		// start beyond it waits for a slot (ADR-036).
+		// Work orders run side by side up to the safety cap; a start beyond
+		// it waits for a slot (ADR-036, revised).
 		// Planning early takes no slot: it counts once it implements.
 		if starts := (action.Type == featureartifact.AssistantStartWorkOrder && !action.PlansEarly) ||
 			(action.Type == featureartifact.AssistantCreateWorkOrder && !holdStart && !action.Brief); starts {
@@ -694,23 +694,14 @@ func (service *Service) ImplementationHold(ctx context.Context, scope, workOrder
 	if follows, _, waiting := stored.waitsFor(*start, titles, states); waiting {
 		return execution.ImplementationHoldReason(follows), true
 	}
-	if running := service.running(ctx, scope, stored.earlyPlanners()); running >= service.maxRunning(ctx) {
+	if running := service.running(ctx, scope, stored.earlyPlanners()); running >= SafetyCap {
 		return execution.ImplementationSlotReason(running), true
 	}
 	return "", false
 }
 
-// maxRunning is the most work orders autopilot runs at once in a project.
-func (service *Service) maxRunning(ctx context.Context) int {
-	settings, err := service.storedSettings(ctx)
-	if err != nil || settings.MaxRunning < 1 {
-		return DefaultMaxRunning
-	}
-	return settings.MaxRunning
-}
-
 func ceilingNote(running int) string {
-	return fmt.Sprintf("%d work orders already run here, the most at once (set in Settings). It starts when one "+
+	return fmt.Sprintf("%d work orders already run here, the most at once. It starts when one "+
 		"of them is done or waits to merge.", running)
 }
 
@@ -1035,7 +1026,8 @@ func goalInstructions(goal *Goal) string {
 		"never propose a second for the same item), start_work_order for one that is drafted, and change_models when a run " +
 		"needs a different model. Commitarium applies your actions for these items at once, without the user's " +
 		"approval, except those using a premium model. Start every item whose real dependencies have merged, " +
-		"all at once, like a team: work orders run side by side and merge one at a time, each lead bringing in " +
+		"side by side like a team, as many as the agents' usage left can carry without running out mid-work (say " +
+		"in a line what you hold back and why): work orders run side by side and merge one at a time, each lead bringing in " +
 		"what merged before it and resolving any conflicts. Touching the same screens or files is fine. Set after " +
 		"only when an item needs another's code or result, or both rewrite the same thing wholesale: an item " +
 		"waits on the plan's foundation, or on an item whose behaviour it truly uses (its description says " +

@@ -112,7 +112,7 @@ function MessageEntry({ e }: { e: TranscriptEntry }) {
       : e.role === "user"
         ? "You"
         : e.role === "assistant" || e.role === "assistant_guidance"
-          ? "Assistant"
+          ? "Mayka"
           : e.role === "commitarium_guidance"
             ? "Commitarium"
             : "Lead";

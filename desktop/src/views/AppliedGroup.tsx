@@ -1,38 +1,41 @@
 import { useState } from "react";
 import type { WorkItem } from "./appliedSummary";
+import { QUIET_GLYPH, type QuietTone } from "./quietLines";
 
 // A turn's work actions as one summary line, collapsed by default; expanded,
 // a line per work order whose title opens it.
 export function AppliedGroup({
   summary,
   items,
-  failed,
+  tone,
   onOpenOrder,
 }: {
   summary: string;
   items: WorkItem[];
-  failed: boolean;
+  tone: QuietTone;
   onOpenOrder?: (featureId: string) => void;
 }) {
   const [open, setOpen] = useState(false);
   return (
-    <div className="assistant__applied-wrap assistant__applied-group">
+    <div className={`quiet quiet--${tone}`}>
       <button
-        className={`linkish muted assistant__applied ${failed ? "assistant__applied--failed" : ""}`}
+        className="quiet__line quiet__toggle"
         aria-expanded={open}
         onClick={() => setOpen(!open)}
       >
-        {summary} {open ? "▾" : "▸"}
+        <span className="quiet__glyph" aria-hidden>
+          {QUIET_GLYPH[tone]}
+        </span>
+        <span className="quiet__text">
+          {summary.replace(/^✓ /, "")} {open ? "▾" : "▸"}
+        </span>
       </button>
       {open && (
-        <ul className="assistant__applied-items">
+        <ul className="quiet__items">
           {items.map((item) => (
-            <li
-              key={item.key}
-              className={`muted ${item.bucket === "failed" ? "assistant__applied--failed" : ""}`}
-            >
+            <li key={item.key} className={item.bucket === "failed" ? "quiet--failed" : undefined}>
               {item.workOrderId && onOpenOrder ? (
-                <button className="linkish" onClick={() => onOpenOrder(item.workOrderId!)}>
+                <button className="quiet__link" onClick={() => onOpenOrder(item.workOrderId!)}>
                   {item.title}
                 </button>
               ) : (

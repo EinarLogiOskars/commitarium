@@ -71,7 +71,7 @@ export function PlanInsights({ projectId, vision }: { projectId: string; vision:
           empty={
             researching.length > 0
               ? null
-              : "When something needs looking up, the assistant does it and the findings show here."
+              : "When something needs looking up, Mayka does it and the findings show here."
           }
         />
       </section>
@@ -241,7 +241,7 @@ export function ProjectDocuments({ projectId }: { projectId: string }) {
         <p className="muted note">Loading…</p>
       ) : docs.length === 0 ? (
         <p className="muted note">
-          Add specs, API docs, or sample files. The assistant and the agents can read them.
+          Add specs, API docs, or sample files. Mayka and the agents can read them.
         </p>
       ) : (
         <ul className="planning__list">

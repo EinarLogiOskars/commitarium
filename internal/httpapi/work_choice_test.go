@@ -322,7 +322,7 @@ func TestAProjectIsPlannedOnlyInDeveloperMode(t *testing.T) {
 		!strings.Contains(stub.woken["prj_shop"], "plan this project with you") {
 		t.Fatalf("name=%q notes=%v woken=%v", projects.receivedName, stub.notes, stub.woken)
 	}
-	if !strings.Contains(stub.resolvedResult, "Plan it with the assistant") {
+	if !strings.Contains(stub.resolvedResult, "Plan it with Mayka") {
 		t.Fatalf("result = %q", stub.resolvedResult)
 	}
 }

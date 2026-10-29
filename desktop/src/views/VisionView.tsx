@@ -44,7 +44,7 @@ import type {
 
 const MAX_DEPTH = 3;
 const VISION_SOURCE_LABELS: Record<Vision["source"], string> = {
-  assistant: "Written by the assistant",
+  assistant: "Written by Mayka",
   user: "Edited by you",
   repository: "Came with the app",
 };
@@ -208,7 +208,7 @@ export function VisionView({
               Edit
             </button>
             <button className="ghost" onClick={() => setRewriting((r) => !r)}>
-              Rewrite with the assistant
+              Rewrite with Mayka
             </button>
           </div>
         )}
@@ -297,8 +297,8 @@ export function VisionView({
               >
                 <p>
                   {plan.confidence === "low"
-                    ? "The assistant wrote this plan but isn't confident it had everything it needed. It guessed:"
-                    : "The assistant guessed some things:"}
+                    ? "Mayka wrote this plan but isn't confident she had everything she needed. She guessed:"
+                    : "Mayka guessed some things:"}
                 </p>
                 <ul>
                   {plan.guesses.map((g) => (
@@ -423,7 +423,7 @@ function PlanningNote({
         </button>
         {open && (
           <button className="ghost" onClick={() => openAssistant(true)}>
-            Talk to the assistant
+            Talk to Mayka
           </button>
         )}
       </span>
@@ -482,7 +482,7 @@ function PlanRecordView({
       {record.open_questions.length > 0 && (
         <section className="panel">
           <h3>Left open</h3>
-          <p className="muted note">Built with the assistant&apos;s suggested default for each.</p>
+          <p className="muted note">Built with Mayka&apos;s suggested default for each.</p>
           <ul className="planning__list planning__list--open">
             {record.open_questions.map((q) => (
               <li key={q}>{withoutTopic(q)}</li>
@@ -731,8 +731,8 @@ function ProjectSetupCard({
     <section className="panel vision__setup">
       <h3>Set the project up</h3>
       <p className="muted">
-        {stack.reason || "The assistant recommends this stack."} Commitarium scaffolds a minimal app
-        on it, with tests and a live-reloading preview, before the plan's items start.
+        {stack.reason || "Mayka recommends this stack."} Commitarium scaffolds a minimal app on it,
+        with tests and a live-reloading preview, before the plan's items start.
       </p>
       <div className="vision__presets">
         {presets.map((p) => (
@@ -788,8 +788,8 @@ function WriteVision({
     <section className="panel vision__write">
       <p>
         {rewriting
-          ? "Tell the assistant what should change. It rewrites the vision from the current one, keeping the work orders already started."
-          : "Describe the app: who it's for, what it should do, and what matters most. The assistant writes the vision and a prioritized plan from it."}
+          ? "Tell Mayka what should change. She rewrites the vision from the current one, keeping the work orders already started."
+          : "Describe the app: who it's for, what it should do, and what matters most. Mayka writes the vision and a prioritized plan from it."}
       </p>
       <textarea
         rows={6}
@@ -806,14 +806,14 @@ function WriteVision({
           className="primary"
           onClick={() => onStart("describe", message)}
           disabled={!message || busy !== null}
-          title="The assistant writes it at once and lists what it had to guess."
+          title="Mayka writes it at once and lists what she had to guess."
         >
           Write it from my description
         </button>
         <button
           onClick={() => onStart("converse", message)}
           disabled={!message || busy !== null}
-          title="The assistant asks what it needs to know first."
+          title="Mayka asks what she needs to know first."
         >
           Talk it through
         </button>
@@ -842,7 +842,7 @@ function VisionConversation({ session, onClose }: { session: VisionSession; onCl
       <div className="chat" ref={chatRef}>
         {session.messages.map((m, index) => (
           <div key={index} className={`msg ${m.role === "user" ? "msg--user" : "msg--lead"}`}>
-            <span className="msg__who">{m.role === "user" ? "You" : "Assistant"}</span>
+            <span className="msg__who">{m.role === "user" ? "You" : "Mayka"}</span>
             <div className="msg__text">
               <Markdown text={m.text} />
             </div>
@@ -863,7 +863,7 @@ function VisionConversation({ session, onClose }: { session: VisionSession; onCl
           <button
             onClick={() => openAssistantOn({ kind: "vision" }, "Let's continue with the vision.")}
           >
-            Continue with the assistant
+            Continue with Mayka
           </button>
         </div>
       )}
@@ -1164,7 +1164,8 @@ function hasEmptyTitle(plan: VisionPlan): boolean {
 
 function describe(e: unknown): string {
   if (e instanceof ApiError) {
-    if (e.code === "vision_unavailable") return "The vision assistant is unavailable: " + e.message;
+    if (e.code === "vision_unavailable")
+      return "Mayka can't write the vision just now: " + e.message;
     return e.message;
   }
   return String(e);
@@ -1218,9 +1219,9 @@ function PriorityAutopilot({
       {confirming && (
         <div className="vision__autopilot">
           <p className="muted note">
-            Let the assistant finish P{level}? It creates and starts work orders for the open items
-            without asking, except with premium models, and tells you when one needs you. You can
-            stop it at any time.
+            Let Mayka finish P{level}? She creates and starts work orders for the open items without
+            asking, except with premium models, and tells you when one needs you. You can stop it at
+            any time.
           </p>
           <div className="row">
             <button className="primary" onClick={() => void start()} disabled={starting}>

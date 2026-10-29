@@ -74,7 +74,7 @@ func (service *Service) waitForSignIn(ctx context.Context, stored *record, resul
 	if !known && !wait.NeedsUser && wait.Retries < len(signInBackoff) {
 		retryAt := now.Add(signInBackoff[wait.Retries])
 		if wait.Retries == 0 {
-			note(fmt.Sprintf("%s could not sign in just now. Your message is kept; the assistant tries again by itself.", name))
+			note(fmt.Sprintf("%s could not sign in just now. Your message is kept; Mayka tries again by herself.", name))
 		}
 		wait.Retries++
 		wait.RetryAt = &retryAt
@@ -107,7 +107,7 @@ func (service *Service) agentName(ctx context.Context, agentID string) string {
 			}
 		}
 	}
-	return "The assistant's agent"
+	return "Mayka's agent"
 }
 
 // retrySignIn starts again the turn a chat keeps for its agent's login,

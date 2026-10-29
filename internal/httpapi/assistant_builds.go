@@ -63,7 +63,7 @@ func (api *API) wakeForUsersWorkOrder(ctx context.Context, created feature.Featu
 	if err != nil || !owner.AssistantBuilds() {
 		return
 	}
-	note := fmt.Sprintf("You added “%s”; the assistant takes it from here.", created.Title)
+	note := fmt.Sprintf("You added “%s”; Mayka takes it from here.", created.Title)
 	text := fmt.Sprintf("The user created the work order “%s” (%s) by hand. You build everything here, so it is "+
 		"yours: start it with the agents and models you choose, or queue it with after when it changes the same "+
 		"part of the app as running work. Unless the user started it already.", created.Title, created.ID)

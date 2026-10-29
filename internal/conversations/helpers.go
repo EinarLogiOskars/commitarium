@@ -283,7 +283,7 @@ func (stored *record) propose(helper Helper, text string, now time.Time) {
 	switch helper.Kind {
 	case HelperBrief:
 		card.Type, card.WorkOrderID, card.Title = featureartifact.AssistantAcceptBrief, helper.WorkOrderID, helper.Title
-		card.Reason = "The brief writer wrote it from what you and the assistant settled."
+		card.Reason = "The brief writer wrote it from what you and Mayka settled."
 		stored.addEvent(fmt.Sprintf("The brief for “%s” is ready.", helper.Title), now)
 	case HelperStack:
 		card.Type = featureartifact.AssistantApplyStack

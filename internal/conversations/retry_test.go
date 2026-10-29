@@ -86,7 +86,7 @@ func TestRetriesRunOutInAPlainMessageAndRetry(t *testing.T) {
 		t.Fatalf("after the retries = %+v puts=%d err=%v", conversation, len(worker.puts), err)
 	}
 	last := conversation.Messages[len(conversation.Messages)-1]
-	if last.Role != "event" || last.Text != "The assistant couldn't finish its reply: it tried to do too much at once." {
+	if last.Role != "event" || last.Text != "Mayka couldn't finish her reply: it tried to do too much at once." {
 		t.Fatalf("the failure line = %+v", last)
 	}
 	if conversation.Failure == nil || conversation.Failure.MessageID != last.ID ||

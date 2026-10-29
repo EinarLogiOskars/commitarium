@@ -225,7 +225,7 @@ export function ProjectCost({
       {anyTokens(usage.assistant) && (
         <ul className="cost__list">
           <li>
-            <span>The assistant&apos;s own turns</span>
+            <span>Mayka&apos;s own turns</span>
             <span className="muted">{entry(usage.assistant)}</span>
           </li>
         </ul>

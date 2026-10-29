@@ -362,7 +362,7 @@ export function FeatureView({
           <div className="wait-banner wait-banner--warn">
             <span className="wait-banner__kind">Autopilot is handling this</span>
             <span className="wait-banner__reason">
-              The assistant is finding out why this stopped and continuing it. It asks you if it
+              Mayka is finding out why this stopped and continuing it. She asks you if she
               can&apos;t fix it.
             </span>
           </div>
@@ -371,12 +371,11 @@ export function FeatureView({
           <div className="wait-banner wait-banner--warn">
             <span className="wait-banner__kind">Autopilot hasn&apos;t finished this yet</span>
             <span className="wait-banner__reason">
-              It has been waiting for a while. Check in with the assistant to see what&apos;s
-              holding it up.
+              It has been waiting for a while. Check in with Mayka to see what&apos;s holding it up.
             </span>
             <div className="row">
               <button className="primary" onClick={() => askAssistantAbout(feature.title)}>
-                Ask the assistant
+                Ask Mayka
               </button>
             </div>
           </div>

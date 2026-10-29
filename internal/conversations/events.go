@@ -719,7 +719,7 @@ func (service *Service) TellChat(ctx context.Context, scope, chat, note, text st
 // everything and wakes the assistant to take the project over. Cards the
 // user dismissed before no longer stand: switching hands the work over.
 func (service *Service) HandOver(ctx context.Context, scope string) error {
-	return service.wake(ctx, scope, "", "You handed the project to the assistant: it builds everything from here.",
+	return service.wake(ctx, scope, "", "You handed the project to Mayka: she builds everything from here.",
 		"The user switched this project to Builds everything: you own it now. Take it over: write the vision "+
 			"if there is none, set up the stack, start autopilot on the vision's open items, and start or queue "+
 			"the waiting work orders, the user's too. Cards the user dismissed before this switch no longer "+

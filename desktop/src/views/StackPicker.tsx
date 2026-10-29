@@ -211,7 +211,7 @@ export function StackPicker({
             }
             disabled={busy}
           >
-            Ask the assistant
+            Ask Mayka
           </button>
           {current?.status === "configured" && (
             <button className="ghost" onClick={() => setEditing(false)} disabled={busy}>

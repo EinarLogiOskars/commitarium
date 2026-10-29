@@ -141,7 +141,7 @@ func (service *Service) focusInstructions(ctx context.Context, scope string, foc
 		return text
 	case FocusVision:
 		if service.planning(ctx, scope) {
-			return "\n\nThe user opened you on the plan being written in the planning workspace."
+			return "\n\nThe user opened you on the plan being written in plan mode."
 		}
 		return "\n\nThe user opened you on the project's vision. Talk it through with them as far as it needs: what the " +
 			"project is for, for whom, and what matters most. Then propose write_vision with everything they told " +

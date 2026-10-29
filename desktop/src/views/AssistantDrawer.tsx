@@ -74,14 +74,8 @@ export function AssistantDrawer({
       <button
         className={`assistant-fab ${open ? "assistant-fab--open" : ""} ${running && !open ? "assistant-fab--working" : ""} ${capturing ? "assistant--capturing" : ""}`}
         onClick={() => setOpen(!open)}
-        title={
-          open
-            ? "Close the assistant"
-            : running
-              ? "The assistant is answering"
-              : "Open the assistant"
-        }
-        aria-label={open ? "Close the assistant" : "Open the assistant"}
+        title={open ? "Close Mayka" : running ? "Mayka is answering" : "Talk to Mayka"}
+        aria-label={open ? "Close Mayka" : "Talk to Mayka"}
         aria-expanded={open}
       >
         {open ? (

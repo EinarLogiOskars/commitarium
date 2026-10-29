@@ -480,7 +480,7 @@ func TestAttentionSurfacesAutopilotThatHasNotFinished(t *testing.T) {
 				t.Fatalf("item = %+v", item)
 			}
 			if tc.kind == "autopilot_stalled" &&
-				(item.Detail != "Polish mobile has been waiting for 10 minutes. Check in with the assistant." ||
+				(item.Detail != "Polish mobile has been waiting for 10 minutes. Check in with Mayka." ||
 					item.ID != "autopilot-stalled:run_wait:run_one:blocker:"+updatedAt.Format(time.RFC3339Nano)) {
 				t.Fatalf("stalled item = %+v", item)
 			}

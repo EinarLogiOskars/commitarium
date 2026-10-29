@@ -123,7 +123,7 @@ export function AppWindow({ projectId }: { projectId: string }) {
     void tellAssistantPreviewFailed(projectId, failure, services).catch(() => undefined);
   }, [projectId, failure, services, status?.commitId]);
 
-  // "Let the assistant fix it": a checked fix of the app's setup.
+  // "Let Mayka fix it": a checked fix of the app's setup.
   const [fixError, setFixError] = useState<string | null>(null);
   const fix = async () => {
     setFixError(null);
@@ -176,7 +176,7 @@ export function AppWindow({ projectId }: { projectId: string }) {
                 />
               )}
               <p className="muted note">
-                It opens here as soon as it runs. The assistant asks if anything needs you.
+                It opens here as soon as it runs. Mayka asks if anything needs you.
               </p>
             </>
           ) : status?.state === "failed" || error ? (
@@ -197,7 +197,7 @@ export function AppWindow({ projectId }: { projectId: string }) {
               ) : (
                 <div className="row">
                   <button className="primary" onClick={() => void fix()}>
-                    Let the assistant fix it
+                    Let Mayka fix it
                   </button>
                   <button className="ghost" onClick={() => void start()}>
                     Try again

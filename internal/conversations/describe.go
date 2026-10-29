@@ -158,16 +158,14 @@ func (describer StateDescriber) writeAgents(ctx context.Context, builder *string
 	if describer.Settings != nil {
 		if settings, err := describer.Settings(ctx); err == nil {
 			if settings.Agent != "" {
-				builder.WriteString(fmt.Sprintf("You, the assistant, run on agent %s with %s; your turns use its usage too.\n",
+				builder.WriteString(fmt.Sprintf("You, Mayka, run on agent %s with %s; your turns use its usage too.\n",
 					settings.Agent, settings.Model))
-			}
-			if settings.MaxRunning > 0 {
-				builder.WriteString(fmt.Sprintf("Commitarium runs at most %d of your work orders at once in a project "+
-					"(the user's choice); a start beyond that waits for a slot. Start no more at once than the agents' "+
-					"usage left can carry.\n", settings.MaxRunning))
 			}
 		}
 	}
+	builder.WriteString(fmt.Sprintf("You decide how many work orders run at once, from the agents' usage left; "+
+		"Commitarium's safety cap is %d implementing or reviewing in a project, and a start beyond it waits for a slot.\n",
+		SafetyCap))
 }
 
 // usageNote says what is known of an agent's usage: not connected, at its

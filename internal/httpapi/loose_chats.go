@@ -50,7 +50,7 @@ func (api *API) makeProjectHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	if !loose.Developer {
 		writeError(w, http.StatusConflict, "developer_mode_required",
-			"making a project needs Developer mode, in Settings; without it the assistant builds a self-contained app")
+			"making a project needs Developer mode, in Settings; without it Mayka builds a self-contained app")
 		return
 	}
 	if loose.Status == conversations.StatusRunning {
@@ -73,7 +73,7 @@ func (api *API) makeProjectHandler(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	moved, ok := api.planProject(w, r, loose.Chat, projectID, name, "", goal)
+	moved, ok := api.planProject(w, r, loose.Chat, "", projectID, name, "", goal)
 	if !ok {
 		return
 	}

@@ -152,7 +152,7 @@ func (watcher Watcher) restartVision(ctx context.Context, scope string, launch L
 		return
 	}
 	stored.Launch.VisionRestartedAt = &now
-	stored.addEvent("Writing the app's plan stopped before it was done; the assistant starts it again.", now)
+	stored.addEvent("Writing the app's plan stopped before it was done; Mayka starts it again.", now)
 	stored.PendingEvents = append(stored.PendingEvents,
 		"Writing this new app's vision stopped before it was done. Write it again with write_vision.")
 	stored.UpdatedAt = now

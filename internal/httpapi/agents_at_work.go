@@ -310,7 +310,7 @@ func (api *API) helperAgent(ctx context.Context, projectID string, helper conver
 	} else {
 		agent.State = agentWaiting
 		if agent.Detail == "" {
-			agent.Detail = "Has a question for the assistant"
+			agent.Detail = "Has a question for Mayka"
 		}
 	}
 	return agent, true, nil

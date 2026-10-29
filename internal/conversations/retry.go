@@ -126,7 +126,7 @@ func (service *Service) failTurn(stored *record, kind failureKind, reason string
 	stored.Retry = nil
 	message := Message{
 		ID: messageID(*stored, len(stored.Messages)), Role: "event", OccurredAt: now,
-		Text: "The assistant couldn't finish its reply: " + plainFailure(kind, reason),
+		Text: "Mayka couldn't finish her reply: " + plainFailure(kind, reason),
 	}
 	stored.Messages = append(stored.Messages, message)
 	stored.Failure = &TurnFailure{MessageID: message.ID, Detail: reason}

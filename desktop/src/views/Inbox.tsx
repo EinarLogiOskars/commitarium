@@ -100,7 +100,7 @@ function Row({
         {item.project_name} · {item.feature_title}
       </span>
       {item.detail && <span className="inbox__detail">{item.detail}</span>}
-      {stalled && <span className="inbox__detail">Ask the assistant →</span>}
+      {stalled && <span className="inbox__detail">Ask Mayka →</span>}
     </button>
   );
 }

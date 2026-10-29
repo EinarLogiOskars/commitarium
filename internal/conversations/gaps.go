@@ -384,7 +384,7 @@ func (service *Service) tellGaps(scope string, found []gap) error {
 		texts = append(texts, item.Text)
 		kinds = append(kinds, gapNames[item.Kind])
 	}
-	stored.addEvent("The assistant picks up what the project still needs: "+strings.Join(kinds, ", ")+".", now)
+	stored.addEvent("Mayka picks up what the project still needs: "+strings.Join(kinds, ", ")+".", now)
 	stored.PendingEvents = append(stored.PendingEvents, "You build everything here, and the project still needs this "+
 		"to run:\n  - "+strings.Join(texts, "\n  - ")+"\nDo what you can now; a step that depends on another waits for it.")
 	stored.UpdatedAt = now

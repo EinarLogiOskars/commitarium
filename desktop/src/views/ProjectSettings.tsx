@@ -340,7 +340,7 @@ function HowTheAssistantWorks({
   };
   return (
     <section className="panel">
-      <h2>How the assistant works</h2>
+      <h2>How Mayka works</h2>
       {error && <div className="banner banner--error">{error}</div>}
       {ASSISTANT_MODES.map(({ value, label, description }) => (
         <label key={value} className="toggle assistant-mode">
@@ -358,8 +358,8 @@ function HowTheAssistantWorks({
         </label>
       ))}
       <p className="muted note">
-        Work orders you create yourself stay yours: the assistant only reminds you of them, and acts
-        on one only when you ask and approve its card.
+        Work orders you create yourself stay yours: Mayka only reminds you of them, and acts on one
+        only when you ask and approve its card.
       </p>
     </section>
   );

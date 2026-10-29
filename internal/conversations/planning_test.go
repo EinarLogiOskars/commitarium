@@ -48,7 +48,7 @@ func TestAPlannedProjectIsPlannedWithTheUser(t *testing.T) {
 		"This is a checklist, not an agenda", "plan.covered", "purpose (what it is for and who uses it)", "Cards are a tool, not a questionnaire",
 		"the card always offers the user's own answer", "Opening: Commitarium's note as planning starts", `"Suggest some ideas" (suggested)`,
 		"How apps run in Commitarium", "Where the app runs decides how it gets settings and secrets", "Never ask what the user, the vision, or earlier rounds already settled",
-		"don't push before then", "the plan being written in the planning workspace"} {
+		"don't push before then", "the plan being written in plan mode"} {
 		if !strings.Contains(worker.puts[0].Instructions, want) {
 			t.Fatalf("the planning turn lacks %q", want)
 		}
@@ -296,5 +296,17 @@ func TestPlanningBriefsAskForTheWrittenPlan(t *testing.T) {
 	writePlanning(&drafted, stored)
 	if !strings.Contains(drafted.String(), "Written plan (drafted, at docs/plans/plan.md") || !strings.Contains(drafted.String(), "- [ ] 1. Lists") {
 		t.Fatalf("drafted = %s", drafted.String())
+	}
+}
+
+func TestAProjectProposalLeavesTheQuestionsToPlanning(t *testing.T) {
+	text := newAppInstructions(true)
+	for _, want := range []string{"a reply proposing plan_project asks no question cards", "plan mode"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("Developer mode's new-app instructions lack %q", want)
+		}
+	}
+	if strings.Contains(text, "planning workspace") {
+		t.Fatal("the new-app instructions still send the user to the planning workspace")
 	}
 }

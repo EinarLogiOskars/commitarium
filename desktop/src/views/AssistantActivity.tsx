@@ -39,7 +39,7 @@ export function AssistantActivityLine({
   return (
     <div className="assistant__activity" aria-live="polite">
       <p className="muted status-line">
-        The assistant is thinking…
+        Mayka is thinking…
         {elapsed && <span className="assistant__elapsed"> {elapsed}</span>}
       </p>
       {step && (

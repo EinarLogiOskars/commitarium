@@ -23,7 +23,7 @@ func ImplementationHoldReason(follows string) string {
 // ImplementationSlotReason says that a run's plan is ready and it implements
 // once fewer than the most work orders that run at once are working.
 func ImplementationSlotReason(running int) string {
-	return fmt.Sprintf("%swhen a slot frees: %d work orders already run here, the most at once (set in Settings).",
+	return fmt.Sprintf("%swhen a slot frees: %d work orders already run here, the most at once.",
 		implementationHoldPrefix, running)
 }
 
