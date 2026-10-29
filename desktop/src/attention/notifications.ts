@@ -7,6 +7,7 @@ import type { NativeNotification } from "../ipc";
 // ordinary progress, `paused` is something the user did themselves,
 // `usage_limit` resumes by itself at the reset, `retrying` retries by itself,
 // `implementation_held` implements by itself once what it follows merges,
+// `merge_queued` merges by itself when its turn comes,
 // and `autopilot_handling` is autopilot's until it gives up.
 const NOTIFY: Partial<Record<AttentionKind, NativeNotification["kind"]>> = {
   clarification: "attention",
