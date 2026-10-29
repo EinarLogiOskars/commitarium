@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { AssistantAction, ChatSummary, Conversation } from "../api/assistant";
-import type { AttentionItem, RunningWorkOrder } from "../api/types";
-import { chatActivity, chatWork, projectActivity, workSignals } from "./chatActivity";
+import type { AttentionItem, Feature, RunningWorkOrder } from "../api/types";
+import { chatActivity, chatOrders, chatWork, projectActivity, workSignals } from "./chatActivity";
 
 const waiting = {
   id: "run_wait:run_one:merge_gate:t1",
@@ -64,9 +64,13 @@ describe("chatActivity", () => {
     const work = chatWork(conversation);
     expect(work.orders).toEqual(["fea_runs"]);
     expect(chatActivity(chat(), work, signals)).toBe("running");
-    expect(chatActivity(chat(), { orders: ["fea_waits"], proposed: false }, signals)).toBe(
-      "waiting",
-    );
+    expect(
+      chatActivity(
+        chat(),
+        { orders: ["fea_waits"], started: ["fea_waits"], proposed: false },
+        signals,
+      ),
+    ).toBe("waiting");
   });
 
   it("is amber while a card waits for approval", () => {
@@ -77,5 +81,34 @@ describe("chatActivity", () => {
   it("pulses while the assistant answers in it", () => {
     expect(chatActivity(chat({ status: "running" }), undefined, signals)).toBe("running");
     expect(chatActivity(chat(), undefined, signals)).toBe("idle");
+  });
+});
+
+describe("chatOrders", () => {
+  const feature = (id: string, state: Feature["state"]) => ({ id, title: id, state }) as Feature;
+  const signals = { running: new Set(["fea_run"]), waiting: new Set(["fea_wait"]) };
+  const features = [
+    feature("fea_d1", "completed"),
+    feature("fea_d2", "completed"),
+    feature("fea_run", "implementing"),
+    feature("fea_wait", "planning"),
+    feature("fea_d3", "cancelled"),
+    feature("fea_draft", "draft"),
+  ];
+  const started = ["fea_d1", "fea_d2", "fea_run", "fea_wait", "fea_d3", "fea_draft", "fea_gone"];
+
+  it("lists every order still going, then the latest finished up to the limit", () => {
+    const { orders, more } = chatOrders(started, features, signals, 4);
+    expect(orders.map((o) => [o.feature.id, o.dot])).toEqual([
+      ["fea_run", "running"],
+      ["fea_wait", "waiting"],
+      ["fea_d3", "cancelled"],
+      ["fea_draft", "idle"],
+    ]);
+    expect(more).toBe(2);
+  });
+
+  it("lists them all without a limit", () => {
+    expect(chatOrders(started, features, signals, Infinity)).toMatchObject({ more: 0 });
   });
 });
