@@ -4,7 +4,9 @@
 //! Commitarium. The page is served from 127.0.0.1, same-site with the app,
 //! so the app's sign-in works (app_pages.rs, ADR-029).
 
-use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::webview::NewWindowResponse;
+use tauri::{AppHandle, Manager, Url, WebviewUrl, WebviewWindowBuilder};
+use tauri_plugin_opener::OpenerExt;
 
 use crate::app_pages::AppPages;
 
@@ -20,6 +22,37 @@ fn app_window_label(project_id: &str) -> Result<String, String> {
         return Err("not a project ID".into());
     }
     Ok(format!("app-{project_id}"))
+}
+
+/// Runs in the app's frame: a click on a link to another site asks for a new
+/// window instead, which open_link sends to the user's browser. Followed in
+/// the frame, the site would mostly refuse to be framed (GitHub does) and
+/// the click would seem to do nothing. A click the app handles itself is
+/// left to it.
+const LINKS_OUT: &str = r#"
+if (window.top !== window) {
+  document.addEventListener("click", (event) => {
+    if (event.defaultPrevented || event.button !== 0) return;
+    const link = event.target instanceof Element ? event.target.closest("a[href]") : null;
+    if (!link || link.hasAttribute("download")) return;
+    const url = new URL(link.href, location.href);
+    const local = ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname);
+    if (!/^https?:$/.test(url.protocol) || local) return;
+    event.preventDefault();
+    window.open(url.href, "_blank", "noopener");
+  });
+}
+"#;
+
+/// A new window the app asks for opens in the user's browser: an app window
+/// shows only its app.
+fn open_link(app: &AppHandle, url: &Url) {
+    if !matches!(url.scheme(), "http" | "https") {
+        return;
+    }
+    if let Err(error) = app.opener().open_url(url.as_str(), None::<&str>) {
+        eprintln!("[apps] could not open {url} in the browser: {error}");
+    }
 }
 
 /// Opens an app's window, or brings it to the front when it is open.
@@ -52,6 +85,14 @@ pub async fn open_app_window(
         .inner_size(1100.0, 780.0)
         .min_inner_size(480.0, 360.0)
         .initialization_script(&script)
+        .initialization_script_for_all_frames(LINKS_OUT)
+        .on_new_window({
+            let app = app.clone();
+            move |url, _| {
+                open_link(&app, &url);
+                NewWindowResponse::Deny
+            }
+        })
         // Files dropped on a composer reach the page, to attach them.
         .disable_drag_drop_handler()
         .build()
