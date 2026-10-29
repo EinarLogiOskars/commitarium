@@ -941,7 +941,8 @@ func (client *Client) ClosePullRequest(
 	if err != nil {
 		return err
 	}
-	if status != http.StatusOK {
+	// Forgejo answers an edited pull request with 201 Created.
+	if status != http.StatusOK && status != http.StatusCreated {
 		return fmt.Errorf(
 			"%w: pull request close returned HTTP %d", project.ErrForgejoUnavailable, status,
 		)

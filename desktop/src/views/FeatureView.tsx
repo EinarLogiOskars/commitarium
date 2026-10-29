@@ -391,7 +391,8 @@ export function FeatureView({
 
       <div ref={splitRef} className={`order__split ${sideOverlay ? "order__split--overlay" : ""}`}>
         <div className="order__body">
-          {run && (
+          {/* A request only matters while its run can still use it. */}
+          {run && !terminal && (
             <EnvironmentApproval
               projectId={projectId}
               runId={run.id}
