@@ -131,3 +131,42 @@ func TestAutopilotActiveAtFollowsItsLastStep(t *testing.T) {
 		t.Fatalf("in a turn, active at %v, want now", got)
 	}
 }
+
+// A start_autopilot card left waiting settles once autopilot has since taken
+// on the same priority, or the whole vision, or finished it; a card newer
+// than both, or one for another priority, still waits.
+func TestAnAutopilotCardSettlesOnceAutopilotTookItOn(t *testing.T) {
+	service, _ := newTestService(t)
+	service.config.Projects = gapProjects{mode: project.AssistantModeAssists}
+	service.config.Features = &featuresStub{}
+	stored, err := service.read("prj_test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := time.Date(2026, time.October, 28, 18, 0, 0, 0, time.UTC)
+	ended := started.Add(time.Hour)
+	stored.Goal = &Goal{Title: "Finish P0", Level: 0, Status: GoalDone, StartedAt: started, EndedAt: &ended}
+	card := func(id string, priority int, at time.Time) Action {
+		return Action{ID: id, Status: ActionProposed, UpdatedAt: at, AssistantAction: featureartifact.AssistantAction{
+			Type: featureartifact.AssistantStartAutopilot, Reason: "Next", Title: "Build it", Priority: priority}}
+	}
+	stored.Actions = append(stored.Actions,
+		card("act_old", 0, started.Add(-time.Hour)),
+		card("act_during", 0, started.Add(time.Minute)),
+		card("act_new", 0, started.Add(2*time.Hour)),
+		card("act_other", 1, started.Add(-time.Hour)),
+	)
+	if err := service.write(stored); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.autopilotActions(t.Context(), "prj_test"); err != nil {
+		t.Fatal(err)
+	}
+	conversation, _ := service.Get(t.Context(), "prj_test")
+	for _, action := range conversation.Actions {
+		settled := action.ID == "act_old" || action.ID == "act_during"
+		if settled != (action.Status == ActionApplied && action.Settled) {
+			t.Errorf("%s = %s settled=%v %q", action.ID, action.Status, action.Settled, action.Result)
+		}
+	}
+}
