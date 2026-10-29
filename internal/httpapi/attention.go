@@ -435,6 +435,14 @@ func runWaitAttention(base attentionItem, run execution.Run) attentionItem {
 	case execution.RunWaitKindMergeGate:
 		base.Kind = "merge_approval"
 		base.Title = "Merge approval needed"
+		// A run in its project's merge queue merges when its turn comes, on
+		// its own: nothing waits on the user.
+		if execution.InMergeQueue(run.Reason) {
+			base.Kind = "merge_queued"
+			base.Severity = "info"
+			base.Actionable = false
+			base.Title = "Waiting to merge"
+		}
 	case execution.RunWaitKindPaused:
 		base.Title = "Run paused"
 	default:

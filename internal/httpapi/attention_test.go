@@ -338,6 +338,42 @@ func TestAttentionQuietsWorkWaitingToImplement(t *testing.T) {
 	}
 }
 
+// A run in its project's merge queue merges when its turn comes: the inbox
+// shows its place, but asks nothing. A merge gate that waits for the user's
+// approval still asks.
+func TestAttentionQuietsWorkInTheMergeQueue(t *testing.T) {
+	now := time.Date(2026, time.October, 29, 12, 0, 0, 0, time.UTC)
+	for reason, queued := range map[string]bool{
+		execution.MergeQueueReason(2):          true,
+		"Approve the merge when you're ready.": false,
+	} {
+		handler := New(
+			&recordingProjectService{listResult: []project.Project{{ID: "prj_one", Name: "One"}}},
+			&recordingFeatureService{listResult: []feature.Feature{{
+				ID: "fea_one", ProjectID: "prj_one", Title: "Live list", State: feature.StateReadyToMerge,
+			}}}, nil,
+			&recordingExecutionService{runs: []execution.Run{{
+				ID: "run_one", FeatureID: "fea_one", Status: execution.RunStatusWaitingForUser,
+				WaitKind: execution.RunWaitKindMergeGate, Reason: reason, StartedAt: now, UpdatedAt: now,
+			}}}, nil, nil,
+		)
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/v1/attention", nil))
+		var response attentionResponse
+		if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil {
+			t.Fatalf("decode attention response: %v", err)
+		}
+		if len(response.Items) != 1 {
+			t.Fatalf("%q: items = %+v", reason, response.Items)
+		}
+		item := response.Items[0]
+		if queued && (item.Kind != "merge_queued" || item.Actionable || item.Detail != reason) ||
+			!queued && (item.Kind != "merge_approval" || !item.Actionable) {
+			t.Fatalf("%q: item = %+v", reason, item)
+		}
+	}
+}
+
 func TestAttentionQuietsABlockerAutopilotIsHandling(t *testing.T) {
 	// Blocked just now: autopilot has yet to run out of time.
 	now := time.Now().UTC()

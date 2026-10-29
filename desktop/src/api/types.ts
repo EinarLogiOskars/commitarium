@@ -847,6 +847,9 @@ export type AttentionKind =
   // A work order planned early waits to implement until the work it builds
   // on merges or a slot frees, then goes on by itself.
   | "implementation_held"
+  // A work order waits its turn in the project's merge queue, then merges
+  // by itself.
+  | "merge_queued"
   // A blocked or failed run autopilot is still continuing; it becomes a
   // `blocker` / `run_failed` item (a new ID) if autopilot gives up.
   | "autopilot_handling"
