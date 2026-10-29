@@ -187,7 +187,8 @@ func TestClientClosesManagedPullRequestAndDeletesFeatureBranch(t *testing.T) {
 				t.Fatalf("unexpected close body %q err=%v", body, err)
 			}
 			pullRequest.State = "closed"
-			return pullRequestJSONResponse(t, http.StatusOK, pullRequest), nil
+			// As Forgejo answers an edited pull request.
+			return pullRequestJSONResponse(t, http.StatusCreated, pullRequest), nil
 		case 3:
 			if request.Method != http.MethodDelete || request.URL.Path != "/api/v1/repos/owner/repository/branches/commitarium/fea_test" {
 				t.Fatalf("unexpected branch deletion %s %s", request.Method, request.URL)
