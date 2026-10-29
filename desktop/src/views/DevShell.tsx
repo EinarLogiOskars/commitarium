@@ -35,6 +35,7 @@ const SELECTED_KEY = "commitarium.chats.selected";
 const EXPANDED_KEY = "commitarium.chats.expanded";
 const ALL_PROJECTS_KEY = "commitarium.chats.allProjects";
 const ORDERS_HIDDEN_KEY = "commitarium.chats.ordersHidden";
+const SYSTEM_OPEN_KEY = "commitarium.chats.systemOpen";
 const POLL_MS = 10_000;
 
 /** The chat on screen: a scope's chat, or its most recently used one. */
@@ -130,6 +131,15 @@ export function DevShell({
     readExpanded(ORDERS_HIDDEN_KEY),
   );
   const [ordersAll, setOrdersAll] = useState<Set<string>>(() => new Set());
+  // The app's own controls fold away under the sidebar's lists.
+  const [systemOpen, setSystemOpen] = useState(() => {
+    try {
+      return localStorage.getItem(SYSTEM_OPEN_KEY) === "true";
+    } catch {
+      return false;
+    }
+  });
+  const waitingForUser = attention.items.filter((i) => i.actionable).length;
   const read = useRef<Record<string, string>>({});
   const [showProjects, setShowProjects] = useState(false);
   const [allProjects, setAllProjects] = useState(() => {
@@ -400,12 +410,53 @@ export function DevShell({
     const key = `${chat.scope}/${chat.id}`;
     const shown =
       chat.scope === selection.scope && chat.id === currentChat && features?.scope === chat.scope;
-    const started = chatWorks[key]?.started ?? [];
-    if (!shown || started.length === 0) return chatButton(chat, true, all);
-    const hidden = ordersHidden.has(key);
+    const started = (chatWorks[key]?.started ?? []).filter(
+      (id) => features?.scope !== chat.scope || features.list.some((f) => f.id === id),
+    );
+    if (started.length === 0) return chatButton(chat, true, all);
+    const hidden = !shown || ordersHidden.has(key);
+    const unfold = () => {
+      setOrdersHidden((current) => {
+        if (!current.has(key)) return current;
+        const next = flip(current, key);
+        remember(ORDERS_HIDDEN_KEY, [...next]);
+        return next;
+      });
+      if (!shown) select({ scope: chat.scope, chat: chat.id });
+    };
+    // Folded, or under a chat not on screen, its work orders are one line, as
+    // Claude Code shows a session's nested sessions: how many, and what of
+    // them is going on.
+    const working = started.filter((id) => signals.running.has(id)).length;
+    const waiting = started.filter((id) => signals.waiting.has(id)).length;
+    const nested = (
+      <button
+        key={`${chat.id}:nested`}
+        className="chat-side__item chat-side__item--nested"
+        onClick={unfold}
+        title="Show its work orders"
+      >
+        <span className="chat-side__elbow" aria-hidden />
+        <span className="chat-side__name">
+          {started.length} work order{started.length === 1 ? "" : "s"}
+          {waiting > 0 && (
+            <span className="chat-side__nested-waiting"> · {waiting} waits for you</span>
+          )}
+          {working > 0 && <span className="chat-side__nested-working"> · {working} working</span>}
+        </span>
+      </button>
+    );
+    if (!shown) {
+      return (
+        <Fragment key={chat.id}>
+          {chatButton(chat, true, all)}
+          {nested}
+        </Fragment>
+      );
+    }
     const { orders, more } = chatOrders(
       started,
-      features.list,
+      features?.list ?? [],
       signals,
       ordersAll.has(key) ? Infinity : undefined,
     );
@@ -443,6 +494,7 @@ export function DevShell({
     return (
       <Fragment key={chat.id}>
         {chatButton(chat, true, all, toggle)}
+        {hidden && nested}
         {!hidden &&
           orders.map(({ feature, dot }) => (
             <button
@@ -544,66 +596,86 @@ export function DevShell({
           </button>
         )}
 
-        <div className="chat-side__label">
-          Projects
-          <button
-            className="ghost chat-side__all"
-            onClick={() => {
-              setPage(null);
-              setShowProjects(true);
-            }}
-            title="All projects, with New project and Import"
-          >
-            All
-          </button>
+        {/* Projects and chats scroll; New chat above and the app's own
+            controls below stay put. */}
+        <div className="chat-side__scroll">
+          <div className="chat-side__label">
+            Projects
+            <button
+              className="ghost chat-side__all"
+              onClick={() => {
+                setPage(null);
+                setShowProjects(true);
+              }}
+              title="All projects, with New project and Import"
+            >
+              All
+            </button>
+          </div>
+          {projects === null && <p className="muted chat-side__note">Loading…</p>}
+          {projects?.length === 0 && (
+            <p className="muted chat-side__note">None yet. Start a chat and make it a project.</p>
+          )}
+          {visibleProjects.map((p) => {
+            const open = expanded.has(p.id) || !!query.trim();
+            return (
+              <div key={p.id} className="chat-side__group">
+                <button
+                  className={`chat-side__item ${
+                    selection.scope === p.id && !open ? "chat-side__item--on" : ""
+                  }`}
+                  onClick={() => expand(p.id, !expanded.has(p.id))}
+                  aria-expanded={open}
+                  title={p.name}
+                >
+                  <Chevron open={open} />
+                  <span className="chat-side__name">{p.name}</span>
+                  <ActivityDot activity={activities[p.id]} />
+                </button>
+                {open && (
+                  <>
+                    {(chats[p.id] ?? []).map((chat) => chatWithOrders(chat, match(p.name)))}
+                    <button
+                      className="chat-side__item chat-side__item--sub chat-side__item--quiet"
+                      onClick={() => void newChat(p.id)}
+                    >
+                      + New chat here
+                    </button>
+                  </>
+                )}
+              </div>
+            );
+          })}
+          {folded > 0 && !query.trim() && (
+            <button
+              className="chat-side__item chat-side__item--quiet"
+              onClick={() => showAll(!allProjects)}
+            >
+              {allProjects ? "Show fewer" : `Show all (${folded} more)`}
+            </button>
+          )}
+
+          <div className="chat-side__label">Chats</div>
+          {(chats[TOP] ?? []).map((chat) => chatButton(chat, false))}
         </div>
-        {projects === null && <p className="muted chat-side__note">Loading…</p>}
-        {projects?.length === 0 && (
-          <p className="muted chat-side__note">None yet. Start a chat and make it a project.</p>
-        )}
-        {visibleProjects.map((p) => {
-          const open = expanded.has(p.id) || !!query.trim();
-          return (
-            <div key={p.id} className="chat-side__group">
-              <button
-                className={`chat-side__item ${
-                  selection.scope === p.id && !open ? "chat-side__item--on" : ""
-                }`}
-                onClick={() => expand(p.id, !expanded.has(p.id))}
-                aria-expanded={open}
-                title={p.name}
-              >
-                <Chevron open={open} />
-                <span className="chat-side__name">{p.name}</span>
-                <ActivityDot activity={activities[p.id]} />
-              </button>
-              {open && (
-                <>
-                  {(chats[p.id] ?? []).map((chat) => chatWithOrders(chat, match(p.name)))}
-                  <button
-                    className="chat-side__item chat-side__item--sub chat-side__item--quiet"
-                    onClick={() => void newChat(p.id)}
-                  >
-                    + New chat here
-                  </button>
-                </>
-              )}
-            </div>
-          );
-        })}
-        {folded > 0 && !query.trim() && (
+
+        <div className="chat-side__foot">
           <button
-            className="chat-side__item chat-side__item--quiet"
-            onClick={() => showAll(!allProjects)}
+            className="chat-side__item chat-side__item--quiet chat-side__foot-toggle"
+            onClick={() => {
+              setSystemOpen(!systemOpen);
+              remember(SYSTEM_OPEN_KEY, !systemOpen);
+            }}
+            aria-expanded={systemOpen}
           >
-            {allProjects ? "Show fewer" : `Show all (${folded} more)`}
+            <span className="chat-side__name">Inbox and settings</span>
+            {!systemOpen && waitingForUser > 0 && (
+              <span className="topbar__badge">{waitingForUser}</span>
+            )}
+            <Chevron open={systemOpen} />
           </button>
-        )}
-
-        <div className="chat-side__label">Chats</div>
-        {(chats[TOP] ?? []).map((chat) => chatButton(chat, false))}
-
-        <div className="chat-side__foot">{systemNav}</div>
+          {systemOpen && systemNav}
+        </div>
       </nav>
 
       <main className="dev-shell__main">

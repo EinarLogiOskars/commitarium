@@ -5179,7 +5179,8 @@ select:focus {
   padding: 12px 10px;
   border-right: 1px solid var(--border);
   background: color-mix(in srgb, var(--panel) 40%, var(--bg));
-  overflow-y: auto;
+  overflow: hidden;
+  min-height: 0;
 }
 .chat-side__brand {
   display: flex;
@@ -5249,6 +5250,30 @@ select:focus {
 .chat-side__name--fit {
   flex: 0 1 auto;
 }
+/* A chat's folded work orders, on a curved line from the chat. */
+.chat-side__item--nested {
+  padding-top: 2px;
+  padding-bottom: 4px;
+  padding-left: 34px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.chat-side__elbow {
+  flex: none;
+  width: 9px;
+  height: 11px;
+  margin-top: -9px;
+  margin-right: -2px;
+  border-left: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  border-bottom-left-radius: 6px;
+}
+.chat-side__nested-waiting {
+  color: var(--warn);
+}
+.chat-side__nested-working {
+  color: var(--accent);
+}
 /* A work order under the chat that started it. */
 .chat-side__item--order {
   padding-left: 46px;
@@ -5299,8 +5324,18 @@ select:focus {
   margin: 2px 10px;
   font-size: 12px;
 }
+.chat-side__scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0 -10px;
+  padding: 0 10px;
+}
 .chat-side__foot {
-  margin-top: auto;
+  flex: none;
   padding-top: 10px;
   border-top: 1px solid var(--border);
   display: flex;
