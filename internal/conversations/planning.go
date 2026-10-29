@@ -12,7 +12,7 @@ import (
 
 // Planning mode (ONE_CONVERSATION_PLAN.md phase 2): in Developer mode, a
 // project's vision can be planned with the assistant before anything is
-// built, in a workspace that shows the plan beside the conversation. The
+// built, in plan mode in the chat, with the plan on its card beside it. The
 // assistant's every turn carries the plan as they talk, and research it
 // starts is recorded on the plan with its sources.
 

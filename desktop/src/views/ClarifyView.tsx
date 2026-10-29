@@ -177,8 +177,8 @@ function AssistantChat({
       <section className="panel">
         <h2>Clarify</h2>
         <p className="muted">
-          This project has no internal repository yet, so the assistant can't look at the code.
-          Import a project or bind a repository first.
+          This project has no internal repository yet, so Mayka can't look at the code. Import a
+          project or bind a repository first.
         </p>
       </section>
     );
@@ -197,9 +197,9 @@ function AssistantChat({
           </div>
         )}
         <p className="muted">
-          The assistant can talk this {WORK.short} through with you and have its brief written from
-          the code. For a small, clear change, start right away: the title and description become
-          the goal.
+          Mayka can talk this {WORK.short} through with you and have its brief written from the
+          code. For a small, clear change, start right away: the title and description become the
+          goal.
         </p>
         <div className="row">
           <button
@@ -211,7 +211,7 @@ function AssistantChat({
               )
             }
           >
-            Clarify with the assistant
+            Clarify with Mayka
           </button>
           <button onClick={() => setChoice("start")}>Start without clarifying</button>
         </div>
@@ -233,7 +233,7 @@ function AssistantChat({
               pinnedToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
             }}
           >
-            <Transcript entries={entries} empty="Starting the assistant…" />
+            <Transcript entries={entries} empty="Starting Mayka…" />
           </div>
           {/* The conversation continues with the assistant (ADR-035); a
               clarification from before shows here as it was. */}
@@ -241,7 +241,7 @@ function AssistantChat({
             <p className="muted status-line">
               {running
                 ? "The brief is being written…"
-                : "Talk it through with the assistant; it has the brief written or revised."}
+                : "Talk it through with Mayka; she has the brief written or revised."}
             </p>
             <button
               onClick={() =>
@@ -251,7 +251,7 @@ function AssistantChat({
                 )
               }
             >
-              Continue with the assistant
+              Continue with Mayka
             </button>
           </div>
         </div>
@@ -278,8 +278,8 @@ function AssistantChat({
             </>
           ) : (
             <p className="muted note">
-              The assistant will propose a handoff brief here: the goal, the areas to touch, and
-              what is worth planning around.
+              Mayka will propose a handoff brief here: the goal, the areas to touch, and what is
+              worth planning around.
             </p>
           )}
         </aside>

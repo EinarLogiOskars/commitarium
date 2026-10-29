@@ -300,7 +300,7 @@ func (api *API) autopilotAttention(
 	if !api.conversations.AutopilotHandles(ctx, item.ProjectID, item.FeatureID, blockedAt) {
 		if app {
 			item.Title = "This needs your help"
-			item.Detail = item.FeatureTitle + " stopped and needs your help. Check in with the assistant."
+			item.Detail = item.FeatureTitle + " stopped and needs your help. Check in with Mayka."
 		}
 		return item, nil
 	}
@@ -314,7 +314,7 @@ func (api *API) autopilotAttention(
 		item.Severity = "warning"
 		item.Actionable = true
 		item.Title = "Autopilot hasn't finished this yet"
-		item.Detail = fmt.Sprintf("%s has been waiting for %d minutes. Check in with the assistant.",
+		item.Detail = fmt.Sprintf("%s has been waiting for %d minutes. Check in with Mayka.",
 			item.FeatureTitle, int(autopilotStallAfter/time.Minute))
 		item.UpdatedAt = stalledAt
 		return item, nil

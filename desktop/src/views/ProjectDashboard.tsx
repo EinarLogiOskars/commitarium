@@ -151,7 +151,7 @@ export function ProjectDashboard({
           <div>
             <h2>Set the project up</h2>
             <p className="muted">
-              Describe the app on the Vision page: the assistant recommends a stack, and Commitarium
+              Describe the app on the Vision page: Mayka recommends a stack, and Commitarium
               scaffolds the app with its preview. Or pick the stack yourself.
             </p>
           </div>

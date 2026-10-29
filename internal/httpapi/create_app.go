@@ -105,7 +105,7 @@ func (api *API) applyPlanProject(w http.ResponseWriter, r *http.Request, action 
 	if !ok {
 		return "", "", false
 	}
-	return fmt.Sprintf("Created the project “%s”. Plan it with the assistant, then build it.", action.Title), projectID, true
+	return fmt.Sprintf("Created the project “%s”. Plan it with Mayka, then build it.", action.Title), projectID, true
 }
 
 // createPlannedProject creates a project to plan, once the assistant can do
@@ -131,11 +131,15 @@ func (api *API) createPlannedProject(w http.ResponseWriter, r *http.Request, nam
 // in its own notes, and its vision is planned from goal with the user. The
 // assistant hears the chat's transcript as planning starts, so nothing said
 // there is asked again. It answers the moved chat, or an empty conversation
-// when the chat could not move (an assistant without chats).
+// when the chat could not move (an assistant without chats). actionID, when
+// a card asked for it, finds the chat a retry already moved.
 func (api *API) planProject(
-	w http.ResponseWriter, r *http.Request, chat, projectID, name, notes, goal string,
+	w http.ResponseWriter, r *http.Request, chat, actionID, projectID, name, notes, goal string,
 ) (conversations.Conversation, bool) {
-	ctx := r.Context()
+	// The request may act on the top-level chat it came from, which the
+	// project does not have: its calls act on the moved chat, or on the
+	// project's most recently used one.
+	ctx := conversations.InChat(r.Context(), "")
 	failed := func(err error) (conversations.Conversation, bool) {
 		writeError(w, http.StatusBadGateway, "project_not_started",
 			fmt.Sprintf("the project %q was created, but its planning could not start: %v", name, err))
@@ -144,9 +148,10 @@ func (api *API) planProject(
 	var moved conversations.Conversation
 	if mover, ok := api.conversations.(chatMover); ok && chat != "" {
 		var err error
-		if moved, err = mover.MoveChat(ctx, conversations.TopLevel, chat, projectID); err != nil {
+		if moved, err = api.moveChatInto(ctx, mover, chat, actionID, projectID); err != nil {
 			return failed(err)
 		}
+		ctx = conversations.InChat(ctx, moved.Chat)
 	}
 	conversation := "/api/v1/assistant/conversations/" + url.PathEscape(projectID)
 	if notes != "" {
@@ -167,6 +172,23 @@ func (api *API) planProject(
 		return moved, true
 	}
 	return current, true
+}
+
+// moveChatInto moves a top-level chat into a project. A chat an earlier,
+// partly failed try already moved is found in the project by the card that
+// moved it (actionID), so a retry carries on there instead of failing.
+func (api *API) moveChatInto(
+	ctx context.Context, mover chatMover, chat, actionID, projectID string,
+) (conversations.Conversation, error) {
+	moved, err := mover.MoveChat(ctx, conversations.TopLevel, chat, projectID)
+	if !errors.Is(err, conversations.ErrNotFound) || actionID == "" {
+		return moved, err
+	}
+	action, findErr := api.conversations.Action(conversations.InChat(ctx, ""), projectID, actionID)
+	if findErr != nil || action.Chat == "" {
+		return conversations.Conversation{}, err
+	}
+	return api.conversations.Get(conversations.InChat(ctx, action.Chat), projectID)
 }
 
 // appBrief is what the vision writer hears of a new app: the summary, the

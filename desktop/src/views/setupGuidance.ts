@@ -22,11 +22,11 @@ export function assistantGuidance(
 /** The guidance for each case: what to do, and the button that does it. */
 export const GUIDANCE: Record<NonNullable<AssistantGuidance>, { text: string; action: string }> = {
   add_agent: {
-    text: "To get started, connect an AI account, such as a Claude or ChatGPT subscription. The assistant and everything it builds run on it.",
+    text: "To get started, connect an AI account, such as a Claude or ChatGPT subscription. Mayka, your assistant, and everything she builds run on it.",
     action: "Add an agent",
   },
   set_up_assistant: {
-    text: "Choose which of your agents the assistant works with. It takes a moment, and you can change it later.",
-    action: "Set up the assistant",
+    text: "Choose which of your agents Mayka works with. It takes a moment, and you can change it later.",
+    action: "Set up Mayka",
   },
 };

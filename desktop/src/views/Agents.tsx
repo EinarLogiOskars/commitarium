@@ -245,7 +245,7 @@ export function Agents({ onClose, focus }: { onClose: () => void; focus?: "assis
   const tabs: { id: AgentsTab; label: string }[] = hasAgents
     ? [
         { id: "agents", label: "Agents" },
-        { id: "assistant", label: "Assistant" },
+        { id: "assistant", label: "Mayka" },
         { id: "models", label: "Models" },
       ]
     : [{ id: "agents", label: "Agents" }];
@@ -289,8 +289,8 @@ export function Agents({ onClose, focus }: { onClose: () => void; focus?: "assis
               <strong>Add your first agent</strong>
               <p className="muted">
                 An agent is one of your AI accounts, such as a Claude or ChatGPT (Codex)
-                subscription, or an API key. Name it, choose its provider, then connect it. The
-                assistant and all the work it starts run on your agents.
+                subscription, or an API key. Name it, choose its provider, then connect it. Mayka,
+                your assistant, and all the work she starts run on your agents.
               </p>
             </div>
           ) : (

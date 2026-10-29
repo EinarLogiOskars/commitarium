@@ -77,12 +77,12 @@ func TestAQueuedWorkOrderPlansEarlyAndHoldsBeforeImplementing(t *testing.T) {
 	}
 
 	// Implementing takes a slot, so with every slot taken it waits for one.
-	for index := range DefaultMaxRunning {
+	for index := range SafetyCap {
 		features.features = append(features.features, feature.Feature{
 			ID: fmt.Sprintf("fea_%d", index), Title: "Other", State: feature.StateImplementing})
 	}
 	reason, held = service.ImplementationHold(t.Context(), "prj_test", "fea_filters")
-	if !held || !strings.HasPrefix(reason, "Planned; implements when a slot frees: 4 work orders") {
+	if !held || !strings.HasPrefix(reason, "Planned; implements when a slot frees: 16 work orders") {
 		t.Fatalf("hold with every slot taken = %q, %v", reason, held)
 	}
 }

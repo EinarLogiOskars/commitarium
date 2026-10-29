@@ -53,8 +53,6 @@ export function QueuedStart({
 export function QueuedNote({ feature }: { feature: Feature }) {
   if (!feature.queued_after) return null;
   return (
-    <p className="muted note">
-      Queued: the assistant starts it once “{feature.queued_after}” has merged.
-    </p>
+    <p className="muted note">Queued: Mayka starts it once “{feature.queued_after}” has merged.</p>
   );
 }

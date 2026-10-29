@@ -202,7 +202,7 @@ function ExhaustedNote({ run }: { run: Run }) {
     "Recoveries tried:",
     ...(run.recoveries ?? []).map(
       (r) =>
-        `- ${r.how} by ${r.from_assistant ? "the assistant" : "the user"}${
+        `- ${r.how} by ${r.from_assistant ? "Mayka" : "the user"}${
           r.fingerprint === run.blocker?.fingerprint ? " (same failure)" : ""
         }${r.guidance ? `: ${r.guidance}` : ""}`,
     ),

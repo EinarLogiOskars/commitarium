@@ -21,7 +21,7 @@ export interface ModelGuide {
 }
 
 export const TIERS: { value: ModelTier; label: string; hint: string }[] = [
-  { value: "premium", label: "Premium", hint: "The assistant asks you first" },
+  { value: "premium", label: "Premium", hint: "Mayka asks you first" },
   { value: "frontier", label: "Frontier", hint: "Planning, plan review, hard problems" },
   { value: "strong", label: "Strong", hint: "Implementation and code review" },
   { value: "light", label: "Light", hint: "Mechanical changes" },

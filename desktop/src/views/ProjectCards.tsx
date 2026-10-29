@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { getAssistantSettings } from "../api/assistant";
 import { getAgentsAtWork } from "../api/projects";
 import { ApiError } from "../api/client";
 import { listFeatures } from "../api/features";
@@ -14,7 +13,7 @@ import type {
   Vision,
 } from "../api/types";
 import { finishPlanning, getVision } from "../api/vision";
-import { openExternal } from "../ipc";
+import { openAppWindow, openExternal } from "../ipc";
 import { WORK } from "../vocab";
 import { WORK_CHANGED } from "./ChatView";
 import { chatPlanning, planPhase } from "./planMode";
@@ -30,7 +29,6 @@ import {
   agentLabel,
   agentRoleLabel,
   agentSubject,
-  DEFAULT_MAX_RUNNING,
   priorityProgress,
   shownAgents,
   workBoard,
@@ -89,7 +87,6 @@ export function ProjectCards({
         features={data.features}
         items={items}
         running={running}
-        maxRunning={data.maxRunning}
         onOpen={openOrder}
         onNew={() => open("new")}
         onAll={() => open("work")}
@@ -99,6 +96,7 @@ export function ProjectCards({
         <PreviewCard
           projectId={projectId}
           appName={project?.app ? project.name : undefined}
+          name={project?.name ?? ""}
           toolchain={data.toolchain}
           onOpenPage={() => open("preview")}
         />
@@ -118,7 +116,6 @@ interface ProjectData {
   /** null when the project has no vision yet; undefined until read. */
   vision: Vision | null | undefined;
   toolchain: ProjectToolchain | null;
-  maxRunning: number;
   reload: () => void;
 }
 
@@ -127,7 +124,6 @@ function useProjectData(projectId: string): ProjectData {
   const [features, setFeatures] = useState<Feature[] | null>(null);
   const [vision, setVision] = useState<Vision | null | undefined>(undefined);
   const [toolchain, setToolchain] = useState<ProjectToolchain | null>(null);
-  const [maxRunning, setMaxRunning] = useState(DEFAULT_MAX_RUNNING);
 
   const load = useCallback(() => {
     listFeatures(projectId)
@@ -154,16 +150,7 @@ function useProjectData(projectId: string): ProjectData {
     };
   }, [load]);
 
-  // The ceiling on running work is the user's setting (ADR-036).
-  useEffect(() => {
-    getAssistantSettings()
-      .then((s) =>
-        setMaxRunning(s.max_running && s.max_running > 0 ? s.max_running : DEFAULT_MAX_RUNNING),
-      )
-      .catch(() => undefined);
-  }, []);
-
-  return { features, vision, toolchain, maxRunning, reload: load };
+  return { features, vision, toolchain, reload: load };
 }
 
 function ProjectCard({
@@ -258,7 +245,6 @@ function WorkOrdersCard({
   features,
   items,
   running,
-  maxRunning,
   onOpen,
   onNew,
   onAll,
@@ -266,7 +252,6 @@ function WorkOrdersCard({
   features: Feature[] | null;
   items: AttentionItem[];
   running: RunningWorkOrder[];
-  maxRunning: number;
   onOpen: (featureId: string) => void;
   onNew: () => void;
   /** Every work order and session, done ones included. */
@@ -293,9 +278,10 @@ function WorkOrdersCard({
         <p className="muted shell-card__text">None yet. Ask in the chat for something to build.</p>
       ) : (
         <>
-          {board.running.length > 0 && (
+          {board.running.length + board.slotWaiting > 0 && (
             <p className="muted shell-card__sub">
-              {board.running.length} working · up to {maxRunning} at once
+              {board.running.length} working
+              {board.slotWaiting > 0 && ` · ${board.slotWaiting} waiting for a free slot`}
             </p>
           )}
           {board.running.length + board.waiting.length > 0 ? (
@@ -489,12 +475,15 @@ function AgentTile({
 function PreviewCard({
   projectId,
   appName,
+  name,
   toolchain,
   onOpenPage,
 }: {
   projectId: string;
   /** An app's preview opens in its own window. */
   appName?: string;
+  /** The project's name, the title of its window. */
+  name: string;
   toolchain: ProjectToolchain | null;
   onOpenPage: () => void;
 }) {
@@ -529,7 +518,11 @@ function PreviewCard({
       {preview.error && <p className="sync-card__error">{preview.error}</p>}
       <div className="row shell-preview__actions">
         {url && (
-          <button className="primary" onClick={() => void openExternal(url)}>
+          <button
+            className="primary"
+            onClick={() => void openAppWindow(projectId, name)}
+            title="Open it in its own Commitarium window"
+          >
             Open
           </button>
         )}
@@ -541,6 +534,13 @@ function PreviewCard({
         {active && (
           <button className="ghost" onClick={() => void preview.stop()}>
             Stop
+          </button>
+        )}
+      </div>
+      <div className="row shell-preview__links">
+        {url && (
+          <button className="shell-card__link" onClick={() => void openExternal(url)}>
+            Open in browser ↗
           </button>
         )}
         <button className="shell-card__link" onClick={onOpenPage}>
@@ -626,7 +626,7 @@ function PlanCard({
                 ? "Move planning to this chat. The plan stays as it is; the other chat stops planning."
                 : planning.kind === "paused"
                   ? "Pick the kept plan up again in this chat."
-                  : "Plan with the assistant in this chat. Nothing new is built until you press Build it."
+                  : "Plan with Mayka in this chat. Nothing new is built until you press Build it."
           }
         >
           <span className="plan-switch__knob" aria-hidden />
@@ -645,7 +645,7 @@ function PlanCard({
             <button
               className="shell-card__link"
               onClick={() => setShown("insights")}
-              title="What the assistant works from: what the plan covers, decisions, open questions, research, and documents"
+              title="What Mayka works from: what the plan covers, decisions, open questions, research, and documents"
             >
               Insights
             </button>
@@ -653,7 +653,7 @@ function PlanCard({
               <button
                 className="shell-card__link"
                 onClick={() => window.dispatchEvent(new Event(WRITE_PLAN))}
-                title="Have the assistant write the plan's first draft now"
+                title="Have Mayka write the plan's first draft now"
               >
                 Write the plan
               </button>

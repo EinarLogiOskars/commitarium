@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -232,5 +233,118 @@ func TestApprovingPlanProjectMovesTheChat(t *testing.T) {
 	}
 	if left, _ := loose.service.Chats(t.Context(), conversations.TopLevel, true); len(left) != 0 {
 		t.Fatalf("the top level kept %+v", left)
+	}
+}
+
+// A plan_project card approved in a loose chat other than the first moves
+// that chat in under a new name (the project's main chat). Its notes and
+// planning then act on the moved chat, not on the loose chat's old name,
+// which the project does not have.
+func TestApprovingPlanProjectFromALaterLooseChat(t *testing.T) {
+	loose := newLooseChats(t, featureartifact.AssistantAction{
+		Type: featureartifact.AssistantPlanProject, Reason: "A real project", Title: "Bank import",
+		Description: "Reads the bank's CSV exports every night.", AppBrief: "Landsbankinn exports, nightly.",
+	})
+	if err := loose.service.SetDeveloperMode(t.Context(), conversations.TopLevel, true); err != nil {
+		t.Fatal(err)
+	}
+	loose.talk(t, "What is a good name for a cat?")
+	chat := loose.talk(t, "Could something read my bank's CSVs every night?")
+	if chat == conversations.MainChat {
+		t.Fatalf("the second loose chat is %q", chat)
+	}
+	_, conversation, _ := loose.call(t, http.MethodGet, "/api/v1/assistant/conversations/commitarium/chats/"+chat, "")
+	if len(conversation.Actions) != 1 {
+		t.Fatalf("actions = %+v", conversation.Actions)
+	}
+	code, moved, body := loose.call(t, http.MethodPost,
+		"/api/v1/assistant/conversations/commitarium/chats/"+chat+"/actions/"+conversation.Actions[0].ID+"/approve", `{}`)
+	if code != http.StatusOK {
+		t.Fatalf("status %d: %s", code, body)
+	}
+	if moved.Scope != "prj_bank" || moved.Chat != conversations.MainChat || !strings.Contains(moved.Notes, "Landsbankinn exports, nightly.") {
+		t.Fatalf("moved = %s", body)
+	}
+	if strings.Join(loose.visions.chats, ",") != moved.Chat {
+		t.Fatalf("planned in chats %v", loose.visions.chats)
+	}
+	if woken := loose.service.woken["prj_bank"]; !strings.HasPrefix(woken, moved.Chat+": ") {
+		t.Fatalf("the assistant was woken with %q", woken)
+	}
+}
+
+// A create_app card approved outside Developer mode, in a loose chat other
+// than the first, starts the app in the app's own chat: the loose chat
+// stays where it is and the app does not have it.
+func TestApprovingCreateAppFromALaterLooseChat(t *testing.T) {
+	loose := newLooseChats(t, featureartifact.AssistantAction{
+		Type: featureartifact.AssistantCreateApp, Reason: "Clear and small", Title: "Pep Talk",
+		Description: "A random motivational quote each time it opens.", AppBrief: "About 150 bundled quotes.",
+	})
+	loose.talk(t, "What is a good name for a cat?")
+	chat := loose.talk(t, "A tiny app that gives a motivational quote every time it opens?")
+	_, conversation, _ := loose.call(t, http.MethodGet, "/api/v1/assistant/conversations/commitarium/chats/"+chat, "")
+	if len(conversation.Actions) != 1 {
+		t.Fatalf("actions = %+v", conversation.Actions)
+	}
+	code, _, body := loose.call(t, http.MethodPost,
+		"/api/v1/assistant/conversations/commitarium/chats/"+chat+"/actions/"+conversation.Actions[0].ID+"/approve", `{}`)
+	if code != http.StatusOK {
+		t.Fatalf("status %d: %s", code, body)
+	}
+	app, err := loose.service.Get(t.Context(), "prj_bank")
+	if err != nil || app.Launch == nil || !strings.Contains(app.Notes, "About 150 bundled quotes.") {
+		t.Fatalf("the app has launch %+v notes %q err=%v", app.Launch, app.Notes, err)
+	}
+}
+
+// A retry after a partly failed move finds the chat the card already moved
+// into the project, and carries on there instead of failing.
+func TestMovingAChatAgainFindsItInTheProject(t *testing.T) {
+	loose := newLooseChats(t, featureartifact.AssistantAction{
+		Type: featureartifact.AssistantPlanProject, Reason: "A real project", Title: "Bank import",
+		Description: "Reads the bank's CSV exports every night.",
+	})
+	loose.talk(t, "What is a good name for a cat?")
+	chat := loose.talk(t, "Could something read my bank's CSVs every night?")
+	_, conversation, _ := loose.call(t, http.MethodGet, "/api/v1/assistant/conversations/commitarium/chats/"+chat, "")
+	actionID := conversation.Actions[0].ID
+	first, err := loose.service.MoveChat(t.Context(), conversations.TopLevel, chat, "prj_bank")
+	if err != nil {
+		t.Fatal(err)
+	}
+	api := &API{conversations: loose.service}
+	again, err := api.moveChatInto(t.Context(), loose.service, chat, actionID, "prj_bank")
+	if err != nil || again.Scope != "prj_bank" || again.Chat != first.Chat {
+		t.Fatalf("moved again = %+v err=%v", again, err)
+	}
+	if _, err := api.moveChatInto(t.Context(), loose.service, chat, "", "prj_bank"); !errors.Is(err, conversations.ErrNotFound) {
+		t.Fatalf("a chat with no card to find it by: %v", err)
+	}
+}
+
+// The same from the assistant drawer's own chat (main) outside Developer
+// mode: a brand-new app has no chat of that name either.
+func TestApprovingCreateAppFromTheMainChat(t *testing.T) {
+	loose := newLooseChats(t, featureartifact.AssistantAction{
+		Type: featureartifact.AssistantCreateApp, Reason: "Clear and small", Title: "Kotoba",
+		Description: "Japanese vocabulary flashcards.", AppBrief: "Spaced repetition, JLPT N5.",
+	})
+	chat := loose.talk(t, "An app to learn Japanese words?")
+	if chat != conversations.MainChat {
+		t.Fatalf("the first loose chat is %q", chat)
+	}
+	_, conversation, _ := loose.call(t, http.MethodGet, "/api/v1/assistant/conversations/commitarium", "")
+	code, _, body := loose.call(t, http.MethodPost,
+		"/api/v1/assistant/conversations/commitarium/actions/"+conversation.Actions[0].ID+"/approve", `{}`)
+	if code != http.StatusOK {
+		t.Fatalf("status %d: %s", code, body)
+	}
+	app, err := loose.service.Get(t.Context(), "prj_bank")
+	if err != nil || app.Launch == nil || !strings.Contains(app.Notes, "Spaced repetition, JLPT N5.") {
+		t.Fatalf("the app has launch %+v notes %q err=%v", app.Launch, app.Notes, err)
+	}
+	if len(loose.visions.described) != 1 {
+		t.Fatalf("the vision was described as %q", loose.visions.described)
 	}
 }

@@ -191,7 +191,7 @@ export function Projects({
 
         <textarea
           rows={3}
-          placeholder="What are you building? Optional: the assistant writes the vision from it and recommends a stack."
+          placeholder="What are you building? Optional: Mayka writes the vision from it and recommends a stack."
           value={idea}
           onChange={(e) => setIdea(e.target.value)}
           disabled={creating}
@@ -221,9 +221,9 @@ export function Projects({
               type="button"
               onClick={() => void submit("plan")}
               disabled={creating || !name.trim()}
-              title="Plan it with the assistant beside a live plan, then build it."
+              title="Plan it with Mayka beside a live plan, then build it."
             >
-              Plan it with the assistant
+              Plan it with Mayka
             </button>
           )}
         </div>

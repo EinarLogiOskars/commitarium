@@ -50,13 +50,13 @@ export function AssistantSettingsSection() {
 
   return (
     <section className="assistant-settings">
-      <h3>Assistant</h3>
+      <h3>Mayka</h3>
       <p className="muted note">
-        The agent the assistant runs on, for every project. It shares that agent&apos;s usage limit
-        with any work orders on it. It writes the vision and every work order, so a Frontier model
-        pays off here. The assistant chooses the agents, models, and efforts of the work it starts,
-        preferring the agent with the most usage left, and never an effort above the highest you set
-        here.
+        Mayka is your assistant. This is the agent she runs on, for every project. She shares that
+        agent&apos;s usage limit with any work orders on it. She writes the vision and every work
+        order, so a Frontier model pays off here. Mayka chooses the agents, models, and efforts of
+        the work she starts, preferring the agent with the most usage left, and never an effort
+        above the highest you set here.
       </p>
       <div className="assistant-settings__row">
         <label className="field">
@@ -108,31 +108,13 @@ export function AssistantSettingsSection() {
             ))}
           </select>
         </label>
-        <label className="field">
-          <span>Work orders at once, per project</span>
-          <select
-            value={settings.max_running ?? 4}
-            onChange={(e) => update({ max_running: Number(e.target.value) })}
-          >
-            {[1, 2, 3, 4, 5, 6, 8, 10, 12].map((count) => (
-              <option key={count} value={count}>
-                {count}
-              </option>
-            ))}
-          </select>
-        </label>
       </div>
       <p className="muted note">
         <strong>Effort</strong> is how long a model thinks before it acts. More effort can catch
         more on hard work, like planning or tricky logic, but each turn takes longer and uses more
-        of your agents&apos; limits. The assistant picks an effort for each phase of the work it
-        starts, usually high for planning and medium for implementing, and never above the highest
-        you set here. Your own work orders are not limited.
-      </p>
-      <p className="muted note">
-        <strong>Work orders at once</strong>: the assistant starts everything that is ready, like a
-        team, and the work merges one at a time. More at once builds faster but uses your
-        agents&apos; limits faster too; the rest start as running ones finish.
+        of your agents&apos; limits. Mayka picks an effort for each phase of the work she starts,
+        usually high for planning and medium for implementing, and never above the highest you set
+        here. Your own work orders are not limited.
       </p>
       {error && <div className="banner banner--error">{error}</div>}
       <div className="row">
@@ -144,7 +126,7 @@ export function AssistantSettingsSection() {
           {saving ? "Saving…" : "Save"}
         </button>
         {saved && (
-          <span className="muted note">Saved. It applies from the assistant&apos;s next turn.</span>
+          <span className="muted note">Saved. It applies from Mayka&apos;s next turn.</span>
         )}
       </div>
     </section>

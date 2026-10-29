@@ -59,13 +59,13 @@
 
 .boot__detail {
   margin: 0;
-  color: #c7c3d6;
+  color: #a1a1a1;
   font-size: 0.95rem;
 }
 
 .boot__detail--error {
   color: #ff9d9d;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
   font-size: 0.85rem;
   word-break: break-word;
 }

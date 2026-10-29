@@ -23,14 +23,14 @@ type TierTab = ModelTier | "unrated";
 
 const TIER_HELP: Record<TierTab, string> = {
   premium:
-    "The strongest and most expensive models. The assistant asks you before each work order that would use one.",
+    "The strongest and most expensive models. Mayka asks you before each work order that would use one.",
   frontier:
     "Top models for where strength pays most: planning, plan review, and hard design or debugging.",
   strong: "Everyday models for implementing and reviewing code. Most work runs here.",
   light: "Fast, cheap models for mechanical changes such as docs, copy, config, and renames.",
-  avoid: "Superseded or unwanted models. The assistant uses them only when nothing else fits.",
+  avoid: "Superseded or unwanted models. Mayka uses them only when nothing else fits.",
   unrated:
-    "Models the guide doesn't know yet, often just released. The assistant asks you before using one; move it to a tier to let it choose freely.",
+    "Models the guide doesn't know yet, often just released. Mayka asks you before using one; move it to a tier to let her choose freely.",
 };
 
 export function ModelTiersSection() {
@@ -107,9 +107,9 @@ export function ModelTiersSection() {
     <section className="model-tiers" aria-labelledby="model-tiers-heading">
       <h3 id="model-tiers-heading">Models</h3>
       <p className="muted note">
-        How the assistant rates each model when it chooses one for a work order. The ratings come
-        with Commitarium (as of {guide.as_of}); move a model to another tier and it stays there
-        until you reset it.
+        How Mayka rates each model when she chooses one for a work order. The ratings come with
+        Commitarium (as of {guide.as_of}); move a model to another tier and it stays there until you
+        reset it.
       </p>
 
       {changed.map((entry) => (

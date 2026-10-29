@@ -65,7 +65,7 @@ func TestTheStateListsEachAgentsUsageAndModels(t *testing.T) {
 		"agent codex (Codex, codex): at its usage limit until Oct 15 12:00 UTC, do not choose it; models: gpt-6-luna (Luna)",
 		"agent codex-work (Codex (work), codex): not connected right now",
 		"a lead and a reviewer of different providers",
-		"You, the assistant, run on agent claude-max with claude-sonnet-5-5",
+		"You, Mayka, run on agent claude-max with claude-sonnet-5-5",
 	} {
 		if !strings.Contains(state, want) {
 			t.Errorf("the state lacks %q:\n%s", want, state)

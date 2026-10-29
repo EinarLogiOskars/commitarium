@@ -157,7 +157,7 @@ export function groupSummary(actions: AssistantAction[], items: WorkItem[]): str
   const notable = tally.has("waiting") || tally.has("failed") || tally.has("busy");
   const settled = !tally.has("failed") && !tally.has("busy");
   const line =
-    types.has("create_work_order") || notable || tally.size > 1
+    parts.length > 0 && (types.has("create_work_order") || notable || tally.size > 1)
       ? `${lead}: ${parts.join(", ")}`
       : lead;
   return `${settled ? "✓ " : ""}${line}`;

@@ -1,7 +1,15 @@
 import { SCREENSHOT_PROMPT, captureScreenshot, nextPaint } from "./screenshot";
 import { AttachmentChips, SentAttachments, useAttachments } from "./Attachments";
 import { ComposerBox } from "./Composer";
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactElement,
+  type ReactNode,
+} from "react";
 import {
   approveAssistantAction,
   dismissAssistantAction,
@@ -45,6 +53,16 @@ import { appliedWhat, chooseAgent, choiceOverrides, type RoleChoice } from "./ac
 import { AssistantActivityLine, TurnFailureControls } from "./AssistantActivity";
 import { AppliedGroup } from "./AppliedGroup";
 import { foldedEvent, groupTurn } from "./appliedSummary";
+import {
+  appliedLine,
+  dropRepeats,
+  eventLine,
+  foldQuiet,
+  groupLine,
+  type QuietEntry,
+  type QuietLine,
+} from "./quietLines";
+import { QuietRow, QuietRun, QuietText } from "./QuietRow";
 import { ASSISTANT_CHANGED, OPEN_PLAN, WORK_CHANGED, WRITE_PLAN } from "./chatEvents";
 import {
   chatPlanning,
@@ -545,21 +563,55 @@ export function ChatView({
       ),
     ),
   );
-  const renderTurn = (messageId: string) =>
-    (turnPieces.get(messageId) ?? []).map((piece) =>
-      piece.kind === "one" ? (
-        renderAction(piece.action)
-      ) : (
-        <AppliedGroup
-          key={piece.actions[0].id}
-          summary={piece.summary}
-          items={piece.items}
-          failed={piece.items.some((item) => item.bucket === "failed")}
-          onOpenOrder={onOpenOrder}
-        />
-      ),
-    );
+  // The latest written plan's "Plan drafted · Open" stays in view.
+  const latestPlanDocument = [...(conversation?.actions ?? [])]
+    .reverse()
+    .find(
+      (action) =>
+        action.type === "update_plan" &&
+        action.status === "applied" &&
+        !!changes.get(action.id)?.document,
+    )?.id;
+  const turnEntries = (messageId: string): QuietEntry<ReactElement>[] =>
+    (turnPieces.get(messageId) ?? []).map((piece) => {
+      if (piece.kind === "group") {
+        const line = groupLine(piece);
+        return {
+          quiet: line,
+          node: (
+            <AppliedGroup
+              key={piece.actions[0].id}
+              summary={piece.summary}
+              items={piece.items}
+              tone={line.tone}
+              onOpenOrder={onOpenOrder}
+            />
+          ),
+        };
+      }
+      const action = piece.action;
+      if ((work && isLiveOrder(action)) || !asLine(action)) return { block: renderAction(action) };
+      const running =
+        action.type === "research" && (conversation?.researching ?? []).includes(action.title);
+      const change = changes.get(action.id);
+      const line = appliedLine(action, change, running);
+      if (action.id === latestPlanDocument) line.pinned = true;
+      return {
+        quiet: line,
+        node: (
+          <AppliedLine
+            key={action.id}
+            action={action}
+            line={line}
+            change={change}
+            running={running}
+          />
+        ),
+      };
+    });
 
+  // A card for what is not a quiet line: a live work order, or an action
+  // card.
   const renderAction = (action: AssistantAction) =>
     work && isLiveOrder(action) ? (
       <LiveWorkOrder
@@ -568,15 +620,6 @@ export function ChatView({
         order={orders.get(action.work_order_id)}
         work={work}
         onOpenOrder={onOpenOrder}
-      />
-    ) : asLine(action) ? (
-      <AppliedLine
-        key={action.id}
-        action={action}
-        change={changes.get(action.id)}
-        running={
-          action.type === "research" && (conversation?.researching ?? []).includes(action.title)
-        }
       />
     ) : (
       <ActionCard
@@ -590,6 +633,100 @@ export function ChatView({
         plain={builds}
       />
     );
+
+  // The chat's rows in order: messages and cards as they are, and the quiet
+  // lines between them deduplicated and folded into runs (quietLines.ts).
+  const chatEntries: QuietEntry<ReactElement>[] = [];
+  for (const message of conversation?.messages ?? []) {
+    if (message.role === "event") {
+      if (foldedEvent(message.text, groupedTitles)) continue;
+      if (conversation?.failure?.message_id === message.id) {
+        chatEntries.push({
+          block: (
+            <div key={message.id}>
+              <QuietRow tone="failed">{message.text}</QuietRow>
+              {!running && (
+                <TurnFailureControls
+                  detail={conversation.failure.detail}
+                  developer={developerModeOn()}
+                  onRetry={() =>
+                    retryAssistantTurn(target)
+                      .then(setConversation)
+                      .catch((e) => setError(describe(e)))
+                  }
+                />
+              )}
+            </div>
+          ),
+        });
+      } else {
+        const line = eventLine(message.text);
+        chatEntries.push({ quiet: line, node: <QuietText key={message.id} line={line} /> });
+      }
+    } else {
+      chatEntries.push({
+        block: (
+          <div
+            key={message.id}
+            className={`msg ${message.role === "user" ? "msg--user" : "msg--lead"}`}
+          >
+            <span className="msg__who">{message.role === "user" ? "You" : "Mayka"}</span>
+            <div className="msg__text">
+              <Markdown text={message.text} />
+              <SentAttachments owner={scope} names={message.attachments} />
+            </div>
+          </div>
+        ),
+      });
+      if (message.role === "assistant" && !!message.questions?.length) {
+        chatEntries.push({
+          block: (
+            <QuestionCards
+              key={`${message.id}:questions`}
+              target={chatId ? { scope, chat: chatId } : null}
+              messageId={message.id}
+              questions={message.questions}
+              passedOver={passedOver.has(message.id)}
+              onChanged={setConversation}
+            />
+          ),
+        });
+      }
+    }
+    // A helper's result comes back as a card under its event line.
+    chatEntries.push(...turnEntries(message.id));
+  }
+  const chatRows: ReactNode[] = [];
+  let quietStack: ReactElement[] = [];
+  const flushQuiet = () => {
+    if (quietStack.length > 0) {
+      chatRows.push(
+        <div key={`quiet:${quietStack[0].key}`} className="quiet-stack">
+          {quietStack}
+        </div>,
+      );
+    }
+    quietStack = [];
+  };
+  for (const segment of foldQuiet(dropRepeats(chatEntries))) {
+    if (segment.kind === "block") {
+      flushQuiet();
+      chatRows.push(segment.node);
+    } else if (segment.kind === "line") {
+      quietStack.push(segment.node);
+    } else {
+      quietStack.push(
+        <QuietRun
+          key={`run:${segment.lines[0].node.key}`}
+          summary={segment.summary}
+          tone={segment.tone}
+        >
+          {segment.lines.map((item) => item.node)}
+        </QuietRun>,
+      );
+    }
+  }
+  flushQuiet();
 
   // The mode and planning pills, and the planning toggle.
   const meta = (
@@ -611,8 +748,8 @@ export function ChatView({
           className="pill pill--planning assistant-drawer__mode"
           title={
             planning.round
-              ? "You're planning this project's next round with the assistant in this chat. What is built stays, and nothing new is built until you press Build it."
-              : "You're planning this project with the assistant in this chat. Nothing is built until you press Build it."
+              ? "You're planning this project's next round with Mayka in this chat. What is built stays, and nothing new is built until you press Build it."
+              : "You're planning this project with Mayka in this chat. Nothing is built until you press Build it."
           }
         >
           {planning.round ? "Planning next round" : "Planning"}
@@ -628,7 +765,7 @@ export function ChatView({
               ? "Stop planning: keep the plan for next time, or discard it. Nothing is built."
               : planning.kind === "elsewhere"
                 ? "Move planning to this chat. The plan stays as it is; the other chat stops planning."
-                : "Plan this project with the assistant in this chat. Nothing is built until you press Build it."
+                : "Plan this project with Mayka in this chat. Nothing is built until you press Build it."
           }
         >
           {planning.kind === "here"
@@ -690,55 +827,14 @@ export function ChatView({
           <p className="muted assistant__empty">
             {scope === "commitarium"
               ? page
-                ? "Talk it through: research, sketch, or explain. When it turns into something to build, make it a project."
-                : "Ask about your projects. Open a project to have it draft work there."
+                ? "Hi, I'm Mayka. Talk it through with me: research, sketch, or explain. When it turns into something to build, make it a project."
+                : "Hi, I'm Mayka. Ask about your projects. Open a project to have me draft work there."
               : builds
-                ? "Ask for a change and it builds it, along with work orders you add yourself. It asks before premium models."
-                : "Ask about the project, what to build next, or have it draft work orders. It proposes; nothing happens until you approve."}
+                ? "Hi, I'm Mayka. Ask for a change and I build it, along with work orders you add yourself. I ask before premium models."
+                : "Hi, I'm Mayka. Ask about the project, what to build next, or have me draft work orders. I propose; nothing happens until you approve."}
           </p>
         )}
-        {conversation.messages.map((message) =>
-          message.role === "event" ? (
-            foldedEvent(message.text, groupedTitles) ? null : (
-              <div key={message.id}>
-                <p className="muted assistant__event">{message.text}</p>
-                {!running && conversation.failure?.message_id === message.id && (
-                  <TurnFailureControls
-                    detail={conversation.failure.detail}
-                    developer={developerModeOn()}
-                    onRetry={() =>
-                      retryAssistantTurn(target)
-                        .then(setConversation)
-                        .catch((e) => setError(describe(e)))
-                    }
-                  />
-                )}
-                {/* A helper's result comes back as a card under its line. */}
-                {renderTurn(message.id)}
-              </div>
-            )
-          ) : (
-            <div key={message.id} className="assistant__turn">
-              <div className={`msg ${message.role === "user" ? "msg--user" : "msg--lead"}`}>
-                <span className="msg__who">{message.role === "user" ? "You" : "Assistant"}</span>
-                <div className="msg__text">
-                  <Markdown text={message.text} />
-                  <SentAttachments owner={scope} names={message.attachments} />
-                </div>
-              </div>
-              {message.role === "assistant" && !!message.questions?.length && (
-                <QuestionCards
-                  target={chatId ? { scope, chat: chatId } : null}
-                  messageId={message.id}
-                  questions={message.questions}
-                  passedOver={passedOver.has(message.id)}
-                  onChanged={setConversation}
-                />
-              )}
-              {renderTurn(message.id)}
-            </div>
-          ),
-        )}
+        {chatRows}
         {guidance && (
           <div className="banner banner--info assistant__setup">
             <span>{GUIDANCE[guidance].text}</span>
@@ -768,9 +864,7 @@ export function ChatView({
                 <SentAttachments owner={scope} names={message.attachments} />
               </div>
             </div>
-            <p className="muted note assistant__queued-note">
-              The assistant answers when it's free.
-            </p>
+            <p className="muted note assistant__queued-note">Mayka answers when she's free.</p>
           </div>
         ))}
       </div>
@@ -830,10 +924,10 @@ export function ChatView({
             askChange
               ? SCREENSHOT_PROMPT
               : running
-                ? "The assistant is busy; write anyway, it answers next…"
+                ? "Mayka is busy; write anyway, she answers next…"
                 : page && scope === "commitarium"
                   ? "Talk it through…"
-                  : "Ask the assistant…"
+                  : "Ask Mayka…"
           }
           onChange={setDraft}
           onPaste={attachments.onPaste}
@@ -850,7 +944,7 @@ export function ChatView({
               ? [
                   {
                     label: "Screenshot the app",
-                    hint: "Show the assistant what to change",
+                    hint: "Show Mayka what to change",
                     onSelect: () => void takeScreenshot(),
                   },
                 ]
@@ -862,7 +956,7 @@ export function ChatView({
                     hint:
                       planning.kind === "here"
                         ? "Keep the plan for next time, or discard it"
-                        : "Plan it with the assistant before anything is built",
+                        : "Plan it with Mayka before anything is built",
                     onSelect: () => void plan.toggle(),
                   },
                 ]
@@ -877,7 +971,7 @@ export function ChatView({
                       }
                     : {
                         label: "Write the plan",
-                        hint: "Have the assistant write the first draft now",
+                        hint: "Have Mayka write the first draft now",
                         onSelect: () => void send(WRITE_THE_PLAN),
                       },
                 ]
@@ -902,7 +996,7 @@ export function ChatView({
         open && (
           <aside
             className={`assistant-drawer ${docked ? "assistant-drawer--docked" : ""} ${capturing ? "assistant--capturing" : ""}`}
-            aria-label="Assistant"
+            aria-label="Mayka"
           >
             {header}
             {body}
@@ -1314,8 +1408,8 @@ function ActionCard({
         )}
         {action.type === "start_autopilot" && (
           <li>
-            The assistant creates and starts work orders for P{action.priority}'s open items without
-            asking, except with premium models. You can stop it at any time.
+            Mayka creates and starts work orders for P{action.priority}'s open items without asking,
+            except with premium models. You can stop it at any time.
           </li>
         )}
         {action.auto_tried && action.status === "applied" && <li>Applied by autopilot</li>}
@@ -1453,8 +1547,8 @@ function Notes({
   return (
     <div className="assistant-drawer__notes">
       <p className="muted note">
-        What the assistant keeps for itself: decisions, your preferences, and reusable work. You can
-        edit them.
+        What Mayka keeps for herself: decisions, your preferences, and reusable work. You can edit
+        them.
       </p>
       {editing === null ? (
         <>
@@ -1489,7 +1583,7 @@ function Notes({
 
 function describe(e: unknown): string {
   if (e instanceof ApiError) {
-    if (e.code === "assistant_unavailable") return "The assistant is unavailable: " + e.message;
+    if (e.code === "assistant_unavailable") return "Mayka is unavailable: " + e.message;
     return e.message;
   }
   return String(e);
@@ -1533,178 +1627,44 @@ function isPremium(model: string, families: string[]): boolean {
   return !!name && families.some((family) => family && name.includes(family.toLowerCase()));
 }
 
-// Where it builds everything, what the assistant set going, said in a line;
+// Where it builds everything, what Mayka set going, said in a quiet line;
 // why, and what came of it, show on hover.
 function AppliedLine({
   action,
+  line,
   change,
   running,
 }: {
   action: AssistantAction;
+  line: QuietLine;
   /** For update_plan: what it settled and changed. */
   change?: PlanChange;
   running?: boolean;
 }) {
-  // Research runs in the background: while it does, the line says so and
-  // that the user can carry on, instead of a tick that reads as done.
-  if (running) {
-    return (
-      <div
-        className="assistant__applied-wrap"
-        title={action.reason ? `Why: ${action.reason}` : undefined}
-      >
-        <p className="muted assistant__applied assistant__applied--running">
-          <span className="assistant__pulse" aria-hidden />
-          Looking up: {action.title}… You can keep answering meanwhile.
-        </p>
-      </div>
-    );
-  }
   return (
-    <div
-      className="assistant__applied-wrap"
-      title={[action.result, action.reason && `Why: ${action.reason}`].filter(Boolean).join("\n\n")}
+    <QuietRow
+      tone={line.tone}
+      pulse={running}
+      title={
+        running
+          ? action.reason && `Why: ${action.reason}`
+          : [action.result, action.reason && `Why: ${action.reason}`].filter(Boolean).join("\n\n")
+      }
+      below={change && action.status === "applied" && <PlanChangeLines change={change} />}
     >
-      <AppliedText action={action} change={change} />
-      {change && action.status === "applied" && <PlanChangeLines change={change} />}
-    </div>
-  );
-}
-
-function AppliedText({ action, change }: { action: AssistantAction; change?: PlanChange }) {
-  if (action.settled) {
-    // "Already started: Add a beginner glossary"
-    const why = (action.result ?? "").split(":")[0].replace(/\.$/, "") || "No longer needed";
-    return (
-      <p className="muted assistant__applied">
-        ✓ {why}: {appliedWhat(action.title) || "the work order"}
-      </p>
-    );
-  }
-  if (action.type === "answer_helper") {
-    return (
-      <p className="muted assistant__applied">
-        {action.status === "applied" ? "✓ Answered" : "Answering"}: {action.guidance}
-      </p>
-    );
-  }
-  if (action.type === "update_plan") {
-    // Writing or revising the plan's draft says so, with a way to it.
-    if (change?.document && action.status === "applied") {
-      return (
-        <p className="muted assistant__applied assistant__applied--drafted">
-          {change.document === "drafted" ? "✓ Plan drafted" : "✓ Plan revised"}
+      {line.text}
+      {line.planDocument && (
+        <>
           {" · "}
           <button
-            className="assistant__applied-link"
+            className="quiet__link"
             onClick={() => window.dispatchEvent(new Event(OPEN_PLAN))}
           >
             Open
           </button>
-        </p>
-      );
-    }
-    return (
-      <p className="muted assistant__applied">
-        {action.status === "applied" ? "✓ Updated the plan" : "Updating the plan…"}
-      </p>
-    );
-  }
-  if (action.type === "research") {
-    return (
-      <p className="muted assistant__applied">
-        {action.status === "applied" ? "✓ Looked up" : "Looking up"}: {action.title}
-      </p>
-    );
-  }
-  if (action.type === "design_stack" || action.type === "apply_stack") {
-    const done = action.status === "applied";
-    return (
-      <p className="muted assistant__applied">
-        {action.type === "apply_stack"
-          ? done
-            ? "✓ Set up the stack"
-            : "Setting up the stack…"
-          : done
-            ? "✓ Designing the stack"
-            : "Designing the stack…"}
-      </p>
-    );
-  }
-  if (action.type === "write_brief" || action.type === "accept_brief") {
-    const done = action.status === "applied";
-    return (
-      <p className="muted assistant__applied">
-        {action.type === "accept_brief"
-          ? `${done ? "✓ Accepted" : "Accepting"} the brief: ${action.title}`
-          : done
-            ? "✓ Writing the brief"
-            : "Writing the brief…"}
-      </p>
-    );
-  }
-  if (
-    action.type === "recover_work_order" ||
-    action.type === "close_work_order" ||
-    action.type === "add_vision_item" ||
-    action.type === "start_autopilot" ||
-    action.type === "build_plan" ||
-    action.type === "start_planning"
-  ) {
-    // These say what they did in their result ("Re-checked “Sort”.").
-    const fallback =
-      action.type === "close_work_order"
-        ? "Closing the work"
-        : action.type === "add_vision_item"
-          ? `Adding to the vision: ${action.title}`
-          : action.type === "start_autopilot"
-            ? `Turning autopilot on for P${action.priority}`
-            : action.type === "build_plan"
-              ? "Building the plan"
-              : action.type === "start_planning"
-                ? "Turning plan mode on"
-                : "Picking the work back up";
-    return (
-      <p className="muted assistant__applied">
-        {action.status === "applied" ? `✓ ${action.result || fallback}` : `${fallback}…`}
-      </p>
-    );
-  }
-  const what =
-    appliedWhat(action.title) ||
-    (action.type === "set_up_preview"
-      ? "the app's setup"
-      : action.type === "set_up_stack"
-        ? "the stack"
-        : action.type === "write_vision"
-          ? "the vision"
-          : "the work");
-  const failed = action.status === "failed";
-  const done = action.status === "applied";
-  const [verb, past] =
-    action.type === "change_models"
-      ? ["Switching models", "Switched models"]
-      : action.type === "continue_work_order"
-        ? ["Picking the work back up", "Picked the work back up"]
-        : action.type === "set_up_preview"
-          ? ["Fixing", "Fixing"]
-          : action.type === "write_vision"
-            ? ["Writing", "Writing"]
-            : action.type === "set_up_stack"
-              ? ["Setting up", "Setting up"]
-              : action.hold_start || action.brief
-                ? ["Creating", "Created"]
-                : ["Starting", "Started"];
-  return (
-    <p className={`muted assistant__applied ${failed ? "assistant__applied--failed" : ""}`}>
-      {failed
-        ? `Couldn't start: ${what}`
-        : done
-          ? `✓ ${past}: ${what}`
-          : action.queued
-            ? `Queued: ${what}, after ${action.after}`
-            : `${verb}: ${what}…`}
-    </p>
+        </>
+      )}
+    </QuietRow>
   );
 }
 
@@ -1714,29 +1674,21 @@ function PlanChangeLines({ change }: { change: PlanChange }) {
   return (
     <>
       {change.decided.slice(0, 3).map((decision) => (
-        <p key={decision} className="muted assistant__applied assistant__applied--plan">
+        <p key={decision} className="quiet__sub">
           Decided: {decision}
         </p>
       ))}
       {change.decided.length > 3 && (
-        <p className="muted assistant__applied assistant__applied--plan">
-          And {change.decided.length - 3} more decisions
-        </p>
+        <p className="quiet__sub">And {change.decided.length - 3} more decisions</p>
       )}
       {change.added.length > 0 && (
-        <p className="muted assistant__applied assistant__applied--plan">
-          Added to the plan: {someOf(change.added)}
-        </p>
+        <p className="quiet__sub">Added to the plan: {someOf(change.added)}</p>
       )}
       {change.changed.length > 0 && (
-        <p className="muted assistant__applied assistant__applied--plan">
-          Changed in the plan: {someOf(change.changed)}
-        </p>
+        <p className="quiet__sub">Changed in the plan: {someOf(change.changed)}</p>
       )}
       {change.removed.length > 0 && (
-        <p className="muted assistant__applied assistant__applied--plan">
-          Taken out of the plan: {someOf(change.removed)}
-        </p>
+        <p className="quiet__sub">Taken out of the plan: {someOf(change.removed)}</p>
       )}
     </>
   );
@@ -1752,7 +1704,7 @@ export function SignInNotice({ agentId, agentName }: { agentId: string; agentNam
       <AgentLogin
         agentId={agentId}
         agentName={agentName}
-        continuing="the assistant is picking your message back up"
+        continuing="Mayka is picking your message back up"
       />
     </div>
   );

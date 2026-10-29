@@ -52,18 +52,19 @@ best, so the lead keeps resolving its own conflicts.
   gate (a conflict the lead could not resolve, failing tests, a check that
   refused it), the reviewer asked for changes to the merge, or Forgejo still
   refused it with main where the lead brought it in from.
-- **A ceiling on resources, not a rule.** The assistant runs at most four of
-  a project's work orders at once (planned, implemented, or reviewed),
-  changeable in Settings. Autopilot queues a start beyond it, with a plain
-  note, and starts it when a slot frees; work waiting to merge holds no
-  slot. The assistant's state names the ceiling next to each agent's usage
-  left, so it starts no more than the agents can carry. The user's own
-  Starts are not limited.
+- **The assistant decides how much runs at once** (revised 2026-10-29;
+  this was a user setting of four, changeable in Settings). It judges from
+  each agent's usage left, dependencies, and the work, so no agent runs out
+  mid-work, and says in a line what it holds back and why. A hidden safety
+  cap of 16 work orders implementing or reviewing per project remains:
+  autopilot queues a start beyond it, with a plain note, and starts it when
+  a slot frees; planning early and waiting to merge hold no slot. The
+  assistant's state names the cap. The user's own Starts are not limited.
 
 ## Consequences
 
 - A new app's work orders plan and build at the same time; only their merges
-  take turns. Six started at once on a fresh app build four at a time and
+  take turns. Six started at once on a fresh app build side by side and
   merge one after another, each later one bringing in what merged before it.
 - A later work order in line spends an update, and with a reviewer a review
   round, per merge before it. A wholesale conflict the lead cannot resolve

@@ -11,10 +11,6 @@ import { ORDER_STATE_LABEL } from "./chatActivity";
 // What the chat shell's cards show (ADR-038), read from the project's vision,
 // its work orders, and the attention snapshot the Inbox uses.
 
-/** The most work orders that run at once in a project, when the settings
- * don't say (the coordinator's own default). */
-export const DEFAULT_MAX_RUNNING = 4;
-
 /** An item is done when the project already delivered it or its work order
  * merged; a group is done when every item under it is. */
 export function itemDone(item: VisionItem, features: Map<string, Feature>): boolean {
@@ -65,11 +61,17 @@ export interface WorkBoard {
   running: WorkRow[];
   waiting: WorkRow[];
   queue: QueueRow[];
+  /** Planned work orders that wait for a free slot to implement. */
+  slotWaiting: number;
   /** Work orders not started that wait on nothing the card can name. */
   notStarted: number;
   done: number;
   total: number;
 }
+
+// The coordinator's reason for planned work held until a slot frees (the
+// safety cap on work orders at once, ADR-036).
+const SLOT_HELD = /^Planned; implements when a slot frees/;
 
 const MERGE_QUEUE = /^Waiting to merge: (?:next|(\d+)(?:st|nd|rd|th)) in line/;
 
@@ -97,6 +99,7 @@ export function workBoard(
     running: [],
     waiting: [],
     queue: [],
+    slotWaiting: 0,
     notStarted: 0,
     done: 0,
     total: orders.length,
@@ -122,6 +125,7 @@ export function workBoard(
         // Planned early; it implements on its own once what it builds on
         // merges or a slot frees. Nothing waits on the user.
         board.waiting.push({ ...row, tone: "waiting", reason: item.detail });
+        if (SLOT_HELD.test(item.detail)) board.slotWaiting += 1;
       } else {
         board.waiting.push({
           ...row,

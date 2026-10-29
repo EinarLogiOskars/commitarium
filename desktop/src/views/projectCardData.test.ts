@@ -164,6 +164,18 @@ describe("workBoard", () => {
     expect(board.waiting).toEqual([
       { id: "fea_held", title: "Order fea_held", tone: "waiting", reason: detail },
     ]);
+    expect(board.slotWaiting).toBe(0);
+  });
+
+  it("counts planned work waiting for a free slot", () => {
+    const detail =
+      "Planned; implements when a slot frees: 16 work orders already run here, the most at once.";
+    const board = workBoard(
+      [order("fea_held", { state: "planning" })],
+      [item("fea_held", { kind: "implementation_held", actionable: false, detail })],
+      [],
+    );
+    expect(board.slotWaiting).toBe(1);
   });
 
   it("names the work a queued start follows, and counts the rest as not started", () => {

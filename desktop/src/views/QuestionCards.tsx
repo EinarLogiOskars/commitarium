@@ -181,7 +181,7 @@ function OpenCard({
       className={`qcard${passedOver ? " qcard--stale" : ""}`}
       tabIndex={0}
       role="group"
-      aria-label="The assistant's questions"
+      aria-label="Mayka's questions"
       onKeyDown={onKeyDown}
     >
       <AnsweredLines questions={answered} />
