@@ -81,7 +81,7 @@ export function Projects({
       if (mode === "plan" && description) {
         // Planning starts from the idea and wakes the project's assistant;
         // the project opens on the planning workspace.
-        await startPlanning(created.id, description);
+        await startPlanning(created.id, description, undefined, { idea: description });
       }
       onSelect(created.id);
       if (mode === "describe" && description) {

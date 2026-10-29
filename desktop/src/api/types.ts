@@ -903,6 +903,8 @@ export interface VisionItem {
   feature_id?: string;
   // Already delivered without a work order (e.g. built before the vision).
   done?: boolean;
+  /** The written plan the item is a slice of, by its repository path. */
+  document?: string;
 }
 
 export interface VisionPriority {
@@ -933,9 +935,39 @@ export interface Vision {
   source: "assistant" | "user" | "repository";
   revision: number;
   updated_at: string;
-  /** Set once the vision is planned with the assistant in the planning
-   * workspace; it stays, built, as its record. */
+  /** Set once the vision is planned with the assistant in plan mode; it
+   * stays, built, as its record. */
   planning?: VisionPlanning;
+  /** The planning sessions that were built, oldest first: the first plan,
+   * then each next round. Absent on visions planned before plan records. */
+  plans?: PlanRecord[];
+}
+
+/** A research note: what a helper found, with its sources. */
+export interface ResearchNote {
+  title: string;
+  findings: string;
+  sources: string[];
+  added_at: string;
+}
+
+/** A planning session that was built, kept as a plan of its own. */
+export interface PlanRecord {
+  id: string;
+  /** "Initial plan", or a round's written plan's title. */
+  title: string;
+  round?: boolean;
+  goal: string;
+  document?: string;
+  document_path?: string;
+  covered?: string[];
+  decisions: string[];
+  open_questions: string[];
+  research: ResearchNote[];
+  /** The vision items (IDs) the plan added or changed. */
+  slices: string[];
+  started_at: string;
+  built_at?: string;
 }
 
 /** A vision being planned: what the plan holds besides its goal (the
@@ -944,13 +976,34 @@ export interface VisionPlanning {
   /** Paused is planning the user stopped: the plan is kept and nothing is
    * built until planning resumes. */
   status: "planning" | "paused" | "built";
-  /** The agenda step the conversation is on (purpose … review). */
+  /** The checklist key the conversation is mostly on (purpose … stack, or
+   * round … priorities for a next round), or review. */
   step?: string;
+  /** The checklist keys the plan covers (ADR-039: a checklist, not an
+   * order); absent on plans from before it, which show by step. */
+  covered?: string[];
+  /** The chat planning belongs to (ADR-039); absent on older records,
+   * where every chat of the project plans. */
+  chat?: string;
+  /** Planning the next round of a built project, whose new items go in at
+   * round_priority. */
+  round?: boolean;
+  round_priority?: number;
   decisions: string[];
   open_questions: string[];
-  research: { title: string; findings: string; sources: string[]; added_at: string }[];
+  research: ResearchNote[];
   started_at: string;
   built_at?: string;
+  /** Talking (absent) until the assistant writes the plan's draft; Build it
+   * needs it. */
+  phase?: "drafted";
+  /** The written plan in markdown, with its slices as a numbered checklist,
+   * and where its first slice commits it. */
+  document?: string;
+  document_path?: string;
+  /** The vision as the session found it, which Discard puts back; absent
+   * on sessions from before it. */
+  before?: { existed: boolean; plan: VisionPlan; source?: string; planning?: VisionPlanning };
 }
 
 export type VisionMode = "describe" | "converse";

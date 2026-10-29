@@ -2,6 +2,7 @@ package featureartifact
 
 import (
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -79,5 +80,67 @@ func TestATurnsChatTitleIsOptional(t *testing.T) {
 	}
 	if _, err := (AssistantTurn{ChatTitle: strings.Repeat("x", MaxChatTitleBytes+1)}).Normalize(); !errors.Is(err, ErrInvalidArtifact) {
 		t.Fatalf("an overlong title = %v", err)
+	}
+}
+
+// A turn asks at most three questions, each with two to four answers and a
+// suggested one; what does not fit is left out rather than failing the turn.
+func TestATurnsQuestionsAreKeptWithinTheirLimits(t *testing.T) {
+	turn, err := AssistantTurn{Questions: []AssistantQuestion{
+		{Text: " Light   or dark? ", Options: []string{"Light", " Dark ", "Light", "", "System", "High contrast", "Sepia"}, Suggested: 1},
+		{Text: "Only one answer?", Options: []string{"Yes"}},
+		{Text: "", Options: []string{"A", "B"}},
+		{Text: "Where does it run?", Options: []string{"Commitarium", "Elsewhere"}, Suggested: 7},
+		{Text: "Who uses it?", Options: []string{"Me", "The team"}, Suggested: 1},
+		{Text: "One too many?", Options: []string{"Yes", "No"}},
+	}}.Normalize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(turn.Questions) != 3 {
+		t.Fatalf("questions = %+v", turn.Questions)
+	}
+	first := turn.Questions[0]
+	if first.Text != "Light or dark?" || strings.Join(first.Options, "|") != "Light|Dark|System|High contrast" || first.Suggested != 1 {
+		t.Fatalf("first = %+v", first)
+	}
+	if turn.Questions[1].Text != "Where does it run?" || turn.Questions[1].Suggested != 0 ||
+		turn.Questions[2].Text != "Who uses it?" || turn.Questions[2].Suggested != 1 {
+		t.Fatalf("questions = %+v", turn.Questions)
+	}
+	if none, err := (AssistantTurn{Questions: []AssistantQuestion{{Text: "Hm?"}}}).Normalize(); err != nil || none.Questions != nil {
+		t.Fatalf("none = %+v, %v", none.Questions, err)
+	}
+}
+
+// Suggesting plan mode needs only a reason; its goal is optional and
+// bounded.
+func TestStartPlanningNeedsOnlyAReason(t *testing.T) {
+	start := AssistantAction{Type: AssistantStartPlanning}
+	if _, err := (AssistantTurn{Actions: []AssistantAction{start}}).Normalize(); !errors.Is(err, ErrInvalidArtifact) {
+		t.Fatalf("plan mode without a reason = %v", err)
+	}
+	start.Reason = "Several screens and an outside service to settle"
+	if _, err := (AssistantTurn{Actions: []AssistantAction{start}}).Normalize(); err != nil {
+		t.Fatal(err)
+	}
+	start.Description = strings.Repeat("x", MaxGoalBytes+1)
+	if _, err := (AssistantTurn{Actions: []AssistantAction{start}}).Normalize(); !errors.Is(err, ErrInvalidArtifact) {
+		t.Fatalf("an unbounded goal = %v", err)
+	}
+	start.Description = "A weekly digest for the team"
+	if _, err := (AssistantTurn{Actions: []AssistantAction{start}}).Normalize(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestQuestionsLeaveOutCatchAllAnswers(t *testing.T) {
+	got := NormalizeQuestions([]AssistantQuestion{{
+		Text:      "What is this round for?",
+		Options:   []string{"More PR detail", "Something else", "Notifications", "Other…"},
+		Suggested: 2,
+	}})
+	if len(got) != 1 || !slices.Equal(got[0].Options, []string{"More PR detail", "Notifications"}) || got[0].Suggested != 1 {
+		t.Fatalf("questions = %+v", got)
 	}
 }

@@ -2,8 +2,10 @@ package featureartifact
 
 import (
 	"fmt"
-	"github.com/EinarLogiOskars/commitarium/internal/project"
+	"slices"
 	"strings"
+
+	"github.com/EinarLogiOskars/commitarium/internal/project"
 )
 
 // AssistantTurn is what the assistant returns besides its reply: the actions
@@ -17,6 +19,18 @@ type AssistantTurn struct {
 	// ChatTitle names the chat in a few words, while it has no name the user
 	// or the assistant gave it; empty keeps its name.
 	ChatTitle string `json:"chat_title,omitempty"`
+	// Questions are what the assistant asks the user as cards with suggested
+	// answers (ADR-039), at most MaxAssistantQuestions; the user answers each
+	// once, with an option or in their own words.
+	Questions []AssistantQuestion `json:"questions,omitempty"`
+}
+
+// AssistantQuestion is a question to the user with the answers the
+// assistant suggests: Suggested indexes the one it would pick.
+type AssistantQuestion struct {
+	Text      string   `json:"text"`
+	Options   []string `json:"options"`
+	Suggested int      `json:"suggested"`
 }
 
 type AssistantActionType string
@@ -97,14 +111,37 @@ const (
 	// AssistantBuildPlan finishes the vision being planned and hands it to
 	// autopilot, as the planning workspace's Build it does.
 	AssistantBuildPlan AssistantActionType = "build_plan"
+	// AssistantStartPlanning suggests plan mode in the chat that proposed it
+	// (ADR-039), for a request too big or vague to build without planning:
+	// Reason says why in a line, and Description, when set, is the goal of
+	// the planning round. Applying it starts, resumes, or moves the
+	// project's planning to that chat, as the chat's plan switch does.
+	AssistantStartPlanning AssistantActionType = "start_planning"
 )
 
-// PlanItem is one item of the build plan at a priority, 0 for P0.
+// PlanItem is one item of the build plan at a priority, 0 for P0. Items,
+// when any, are its sub-items: the slices of a feature planned as one item
+// (PLAN_MODE_PLAN.md PM6), each a work order of its own.
 type PlanItem struct {
-	Priority    int    `json:"priority"`
+	Priority    int           `json:"priority"`
+	Title       string        `json:"title"`
+	Description string        `json:"description"`
+	Items       []PlanSubItem `json:"items,omitempty"`
+}
+
+// PlanSubItem is a sub-item of a build plan's item: one slice.
+type PlanSubItem struct {
 	Title       string `json:"title"`
 	Description string `json:"description"`
 }
+
+const (
+	// MaxPlanDocumentBytes bounds the written plan (PLAN_MODE_PLAN.md PM6),
+	// and MaxPlanDocumentPathBytes the path it is committed at.
+	MaxPlanDocumentBytes     = 32 * 1024
+	MaxPlanDocumentPathBytes = 200
+	maxPlanSubItems          = 20
+)
 
 // AssistantAction is one proposed action. Fields that do not apply to its
 // type are empty.
@@ -178,9 +215,15 @@ type AssistantAction struct {
 	PlanItems     []PlanItem `json:"plan_items,omitempty"`
 	StackPresets  []string   `json:"stack_presets,omitempty"`
 	Frameworks    string     `json:"frameworks,omitempty"`
-	// PlanStep, for update_plan, is the planning agenda step the
-	// conversation is on.
-	PlanStep string `json:"plan_step,omitempty"`
+	// PlanStep, for update_plan, is the planning checklist key the
+	// conversation is mostly on, or review; PlanCovered, when any, are the
+	// checklist keys the plan covers.
+	PlanStep    string   `json:"plan_step,omitempty"`
+	PlanCovered []string `json:"plan_covered,omitempty"`
+	// PlanDocument, for update_plan, is the written plan in markdown (the
+	// draft, or its revision) with its slices as a numbered checklist;
+	// empty keeps it (PLAN_MODE_PLAN.md PM6).
+	PlanDocument string `json:"plan_document,omitempty"`
 }
 
 // PhaseChoices are the action's planning models and efforts (ADR-031); nil
@@ -208,10 +251,17 @@ const (
 	// MaxAppBriefBytes bounds a new app's brief, so it fits the new app's
 	// notes with a line that introduces it.
 	MaxAppBriefBytes = 15 * 1024
-	maxAssumptions   = 20
-	maxAttachments   = 10
-	maxPlanItems     = 60
-	maxPlanLines     = 40
+	// MaxAssistantQuestions bounds a turn's questions, and
+	// Min/MaxQuestionOptions a question's suggested answers.
+	MaxAssistantQuestions = 3
+	MinQuestionOptions    = 2
+	MaxQuestionOptions    = 4
+	maxQuestionBytes      = 1024
+	maxOptionBytes        = 200
+	maxAssumptions        = 20
+	maxAttachments        = 10
+	maxPlanItems          = 60
+	maxPlanLines          = 40
 )
 
 // Normalize trims the turn and checks its actions.
@@ -224,6 +274,7 @@ func (turn AssistantTurn) Normalize() (AssistantTurn, error) {
 	if len(turn.Notes) > MaxAssistantNoteBytes {
 		return AssistantTurn{}, fmt.Errorf("%w: the assistant's notes are too long", ErrInvalidArtifact)
 	}
+	turn.Questions = NormalizeQuestions(turn.Questions)
 	if len(turn.Actions) > MaxAssistantActions {
 		return AssistantTurn{}, fmt.Errorf("%w: at most %d actions per turn", ErrInvalidArtifact, MaxAssistantActions)
 	}
@@ -235,12 +286,13 @@ func (turn AssistantTurn) Normalize() (AssistantTurn, error) {
 			&action.LeadPlanModel, &action.LeadPlanEffort, &action.LeadEffort,
 			&action.ReviewerPlanModel, &action.ReviewerPlanEffort, &action.ReviewerEffort,
 			&action.WorkOrderID, &action.When, &action.How, &action.Guidance, &action.After, &action.Helper,
-			&action.AppBrief, &action.Frameworks, &action.PlanStep,
+			&action.AppBrief, &action.Frameworks, &action.PlanStep, &action.PlanDocument,
 		} {
 			*field = strings.TrimSpace(*field)
 		}
 		for _, list := range []*[]string{
 			&action.Assumptions, &action.Decisions, &action.OpenQuestions, &action.StackPresets, &action.Attachments,
+			&action.PlanCovered,
 		} {
 			kept := (*list)[:0:0]
 			for _, line := range *list {
@@ -253,12 +305,66 @@ func (turn AssistantTurn) Normalize() (AssistantTurn, error) {
 		for index := range action.PlanItems {
 			item := &action.PlanItems[index]
 			item.Title, item.Description = strings.TrimSpace(item.Title), strings.TrimSpace(item.Description)
+			for sub := range item.Items {
+				item.Items[sub].Title = strings.TrimSpace(item.Items[sub].Title)
+				item.Items[sub].Description = strings.TrimSpace(item.Items[sub].Description)
+			}
 		}
 		if err := action.validate(); err != nil {
 			return AssistantTurn{}, fmt.Errorf("%w: action %d: %v", ErrInvalidArtifact, index+1, err)
 		}
 	}
 	return turn, nil
+}
+
+// NormalizeQuestions trims questions and keeps those that fit: a question
+// without text or two answers, or too long, is left out rather than failing
+// the turn, past four answers the rest are dropped, a suggestion out of
+// range falls to the first answer, and past three questions the rest are
+// dropped. A catch-all answer ("Something else", "Other") is left out: the
+// card always offers the user their own.
+func NormalizeQuestions(questions []AssistantQuestion) []AssistantQuestion {
+	kept := make([]AssistantQuestion, 0, min(len(questions), MaxAssistantQuestions))
+	for _, question := range questions {
+		if len(kept) == MaxAssistantQuestions {
+			break
+		}
+		question.Text = strings.Join(strings.Fields(question.Text), " ")
+		if question.Text == "" || len(question.Text) > maxQuestionBytes {
+			continue
+		}
+		options := make([]string, 0, MaxQuestionOptions)
+		suggested := -1
+		for index, option := range question.Options {
+			option = strings.Join(strings.Fields(option), " ")
+			if option == "" || len(option) > maxOptionBytes || slices.Contains(options, option) ||
+				len(options) == MaxQuestionOptions || catchAll(option) {
+				continue
+			}
+			if index == question.Suggested {
+				suggested = len(options)
+			}
+			options = append(options, option)
+		}
+		if len(options) < MinQuestionOptions {
+			continue
+		}
+		question.Options, question.Suggested = options, max(suggested, 0)
+		kept = append(kept, question)
+	}
+	if len(kept) == 0 {
+		return nil
+	}
+	return kept
+}
+
+// catchAll reports an answer that only stands for "none of these".
+func catchAll(option string) bool {
+	switch strings.TrimRight(strings.ToLower(option), ".…!?") {
+	case "something else", "other", "others", "anything else", "none of these", "none of the above", "else":
+		return true
+	}
+	return false
 }
 
 func (action AssistantAction) validate() error {
@@ -359,7 +465,8 @@ func (action AssistantAction) validate() error {
 	case AssistantUpdatePlan:
 		if len(action.Description) > MaxGoalBytes || len(action.Frameworks) > MaxStepTextBytes ||
 			len(action.Decisions) > maxPlanLines || len(action.OpenQuestions) > maxPlanLines ||
-			len(action.PlanItems) > maxPlanItems || len(action.StackPresets) > maxVisionStackPresets {
+			len(action.PlanItems) > maxPlanItems || len(action.StackPresets) > maxVisionStackPresets ||
+			len(action.PlanDocument) > MaxPlanDocumentBytes {
 			return fmt.Errorf("the plan's update is too long")
 		}
 		for _, line := range append(append([]string{}, action.Decisions...), action.OpenQuestions...) {
@@ -372,8 +479,20 @@ func (action AssistantAction) validate() error {
 				item.Priority < 0 || item.Priority > maxVisionPriority {
 				return fmt.Errorf("each item of the build plan needs a title and a priority from 0 to %d", maxVisionPriority)
 			}
+			if len(item.Items) > maxPlanSubItems {
+				return fmt.Errorf("an item of the build plan has at most %d sub-items", maxPlanSubItems)
+			}
+			for _, sub := range item.Items {
+				if sub.Title == "" || len(sub.Title) > MaxStepTextBytes || len(sub.Description) > MaxStepTextBytes {
+					return fmt.Errorf("each sub-item of the build plan needs a title and a short description")
+				}
+			}
 		}
 	case AssistantBuildPlan:
+	case AssistantStartPlanning:
+		if len(action.Description) > MaxGoalBytes {
+			return fmt.Errorf("the planning goal is too long")
+		}
 	case AssistantStartAutopilot:
 		if action.Priority < 0 || action.Priority > maxVisionPriority {
 			return fmt.Errorf("priority runs from 0 to %d", maxVisionPriority)

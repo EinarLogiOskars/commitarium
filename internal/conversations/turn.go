@@ -53,6 +53,16 @@ func (service *Service) SendAttached(ctx context.Context, scope, message, key st
 		return Conversation{}, err
 	}
 	defer done()
+	return service.send(ctx, stored, settings, message, key, attachments)
+}
+
+// send adds the user's message to an open chat and starts the assistant's
+// turn, or queues the message while it answers. The caller holds the chat's
+// lock.
+func (service *Service) send(
+	ctx context.Context, stored record, settings Settings, message, key string, attachments []string,
+) (Conversation, error) {
+	var err error
 	if _, seen := stored.Keys[key]; seen {
 		return stored.Conversation, nil
 	}
@@ -171,16 +181,22 @@ func (service *Service) launchTurn(
 		}
 	}
 	instructions += service.focusInstructions(ctx, scope, stored.Focus, builds)
-	// While the vision is planned, every turn carries the plan as it stands.
+	// While the vision is planned, every turn of the chat it is planned in
+	// carries the plan as it stands (ADR-039).
 	contract := workerhttp.OutputContractAssistantTurn
 	// What an app can and cannot reach shapes every plan and change, so the
 	// assistant always knows how apps run here.
 	instructions += runtimeInstructions
 	if scope == TopLevel {
 		instructions += newAppInstructions(stored.Developer)
-	} else if service.planning(ctx, scope) {
-		instructions += planningInstructions
+	} else if planning := service.planningIn(ctx, stored); planning.here {
+		instructions += planning.instructions()
 		contract = workerhttp.OutputContractAssistantPlanningTurn
+	} else {
+		instructions += planning.instructions()
+		if stored.Developer {
+			instructions += suggestPlanningInstructions
+		}
 	}
 	if err := service.write(stored); err != nil {
 		return Conversation{}, err
@@ -293,9 +309,17 @@ func (service *Service) refresh(ctx context.Context, stored record) (record, err
 		if reply.Text == "" {
 			reply.Text = "(The assistant replied without a message.)"
 		}
+		if turn := attempt.Result.AssistantTurn; turn != nil {
+			reply.Questions = asked(turn.Questions)
+		}
 		stored.Messages = append(stored.Messages, reply)
 		if turn := attempt.Result.AssistantTurn; turn != nil {
 			for index, proposed := range turn.Actions {
+				if proposed.Type == featureartifact.AssistantStartPlanning && !service.maySuggestPlanning(ctx, stored) {
+					// Plan mode is suggested only in a Developer mode
+					// project chat that is not planning already.
+					continue
+				}
 				action := Action{
 					ID: fmt.Sprintf("act_%s_%d_%d", stored.idPart(), stored.Turn, index+1), MessageID: reply.ID,
 					AssistantAction: proposed, Status: ActionProposed, UpdatedAt: now,
@@ -447,6 +471,9 @@ func recentConversation(stored record, promptRole string) string {
 			text = text[:2000] + "…"
 		}
 		builder.WriteString(message.Role + ": " + text + "\n")
+		for _, question := range message.Questions {
+			builder.WriteString("  " + question.recap() + "\n")
+		}
 	}
 	return strings.TrimSpace(builder.String())
 }
@@ -527,6 +554,7 @@ How you recover blocked work:
 - Keep notes in notes: decisions, the user's preferences (including how they like their UIs to look), and a short catalog of reusable work across projects (what, which project, which files). Return your full notes when they change, otherwise leave notes empty.
 - start_autopilot (with priority) hands you a goal: the open items of that vision priority, which you then drive to merged on your own. Propose it when the user wants you to take a priority over ("finish P0").
 - Commitarium wakes you when something in the project's work needs you (a failure, a run that needs the user, and, where you drive the work, a merge); its reports appear as "event" lines. Other event lines are news the user has already seen: do not recap them. Say what they mean for the user and what comes next; act only through proposals, as always.
+- Question cards are a tool you may use when a crisp choice is the user's and a card is the clearest way to ask it; otherwise ask in your message. A card's questions go in questions: at most three, each with two to four short answers in options and the one you would pick in suggested. The card always offers the user's own answer, so leave out "Something else" or "Other". The user taps one or answers in their own words, and the answer comes back as their message. Ask only what changes what you do next.
 - Be brief and concrete.`
 }
 

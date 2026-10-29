@@ -420,3 +420,72 @@ func TestResolveAssistantPlanningTurn(t *testing.T) {
 		t.Fatalf("plain turn = %+v err=%v", plain, err)
 	}
 }
+
+// A planning turn's plan may carry the written plan and slices as sub-items
+// (PLAN_MODE_PLAN.md PM6); the schema asks for both.
+func TestResolveAssistantPlanningTurnWithTheWrittenPlan(t *testing.T) {
+	resolved, err := ResolveStructuredOutput(OutputContractAssistantPlanningTurn, []byte(`{
+		"message": "Here is the first draft.", "actions": [], "notes": "", "chat_title": "", "questions": [],
+		"plan": {"goal":"","step":"review","covered":[],"decisions":[],"open_questions":[],"stack_presets":[],"frameworks":"",
+			"items":[{"priority":2,"title":"Sharing","description":"Share a list.","items":[{"title":" Share links ","description":"A link per list."}]}],
+			"document":" # Sharing\n\n- [ ] 1. Share links "}}`))
+	if err != nil || resolved.AssistantTurn == nil {
+		t.Fatalf("resolved = %+v err=%v", resolved, err)
+	}
+	plan := resolved.AssistantTurn.Actions[0]
+	if plan.PlanDocument != "# Sharing\n\n- [ ] 1. Share links" || len(plan.PlanItems) != 1 ||
+		len(plan.PlanItems[0].Items) != 1 || plan.PlanItems[0].Items[0].Title != "Share links" {
+		t.Fatalf("plan = %+v", plan)
+	}
+	properties := OutputJSONSchema(OutputContractAssistantPlanningTurn).(map[string]any)["properties"].(map[string]any)
+	planSchema := properties["plan"].(map[string]any)
+	item := planSchema["properties"].(map[string]any)["items"].(map[string]any)["items"].(map[string]any)
+	if !slices.Contains(planSchema["required"].([]string), "document") || !slices.Contains(item["required"].([]string), "items") {
+		t.Fatal("the plan's schema does not ask for the written plan and slices")
+	}
+}
+
+// A turn's questions resolve with it, trimmed to their limits; a question
+// that does not fit is left out rather than failing the turn.
+func TestResolveAssistantTurnQuestions(t *testing.T) {
+	resolved, err := ResolveStructuredOutput(OutputContractAssistantPlanningTurn, []byte(`{
+		"message": "Got it: a dashboard for your team.", "actions": [], "notes": "", "chat_title": "",
+		"questions": [
+			{"text":"Light or dark?","options":["Light","Dark","Follow the system"],"suggested":1},
+			{"text":"Only one?","options":["Yes"],"suggested":0}
+		],
+		"plan": {"goal":"","step":"look","covered":["purpose","look"],"decisions":[],"open_questions":[],"items":[],"stack_presets":[],"frameworks":""}}`))
+	if err != nil || resolved.AssistantTurn == nil || len(resolved.AssistantTurn.Questions) != 1 {
+		t.Fatalf("resolved = %+v err=%v", resolved, err)
+	}
+	if plan := resolved.AssistantTurn.Actions[0]; plan.PlanStep != "look" || strings.Join(plan.PlanCovered, ",") != "purpose,look" {
+		t.Fatalf("plan = %+v", plan)
+	}
+	if question := resolved.AssistantTurn.Questions[0]; question.Text != "Light or dark?" || len(question.Options) != 3 ||
+		question.Suggested != 1 {
+		t.Fatalf("question = %+v", question)
+	}
+	if !slices.Contains(OutputJSONSchema(OutputContractAssistantTurn).(map[string]any)["required"].([]string), "questions") {
+		t.Fatal("the turn's schema does not ask for questions")
+	}
+}
+
+// A turn outside planning may suggest plan mode; a planning turn may not.
+func TestOnlyATurnOutsidePlanningSuggestsPlanMode(t *testing.T) {
+	types := func(contract OutputContract) []string {
+		schema := OutputJSONSchema(contract).(map[string]any)
+		actions := schema["properties"].(map[string]any)["actions"].(map[string]any)
+		action := actions["items"].(map[string]any)["properties"].(map[string]any)
+		return action["type"].(map[string]any)["enum"].([]string)
+	}
+	if !slices.Contains(types(OutputContractAssistantTurn), "start_planning") ||
+		slices.Contains(types(OutputContractAssistantPlanningTurn), "start_planning") {
+		t.Fatal("start_planning belongs only to turns outside planning")
+	}
+	resolved, err := ResolveStructuredOutput(OutputContractAssistantTurn, []byte(`{"message":"Let's plan it.","actions":[
+		{"type":"start_planning","reason":"Several screens to settle","title":"","description":"A team dashboard"}],"notes":""}`))
+	if err != nil || len(resolved.AssistantTurn.Actions) != 1 ||
+		resolved.AssistantTurn.Actions[0].Type != featureartifact.AssistantStartPlanning {
+		t.Fatalf("resolved = %+v err=%v", resolved, err)
+	}
+}

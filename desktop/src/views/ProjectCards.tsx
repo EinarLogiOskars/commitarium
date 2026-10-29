@@ -13,13 +13,19 @@ import type {
   RunningWorkOrder,
   Vision,
 } from "../api/types";
-import { getVision } from "../api/vision";
+import { finishPlanning, getVision } from "../api/vision";
 import { openExternal } from "../ipc";
 import { WORK } from "../vocab";
 import { WORK_CHANGED } from "./ChatView";
+import { chatPlanning, planPhase } from "./planMode";
+import { ASSISTANT_CHANGED, WRITE_PLAN } from "./chatEvents";
+import { usePlanSwitch } from "./usePlanSwitch";
 import { ActivityDot } from "./chatActivity";
 import { CompactProjectSync } from "./ProjectSyncCard";
 import { Overlay } from "./Overlay";
+import { PlanDocumentView } from "./PlanPage";
+import { PlanInsights } from "./PlanInsights";
+import { StopPlanDialog } from "./StopPlanDialog";
 import {
   agentLabel,
   agentRoleLabel,
@@ -43,12 +49,15 @@ const POLL_MS = 10_000;
 export function ProjectCards({
   projectId,
   project,
+  chat,
   attention,
   onOpenPage,
 }: {
   projectId: string;
   /** The project from the shell's list; undefined while it loads. */
   project: Project | undefined;
+  /** The chat on screen, which the plan switch plans in. */
+  chat: string | undefined;
   attention: { items: AttentionItem[]; running: RunningWorkOrder[] };
   /** Opens one of the project's pages in the centre, over the chat. */
   onOpenPage: (page: PageTarget) => void;
@@ -68,6 +77,13 @@ export function ProjectCards({
 
   return (
     <>
+      <PlanCard
+        projectId={projectId}
+        name={project?.name ?? ""}
+        chat={chat}
+        vision={data.vision}
+        onChanged={data.reload}
+      />
       <ProjectCard data={data} hasRepo={hasRepo} onOpen={open} />
       <WorkOrdersCard
         features={data.features}
@@ -103,6 +119,7 @@ interface ProjectData {
   vision: Vision | null | undefined;
   toolchain: ProjectToolchain | null;
   maxRunning: number;
+  reload: () => void;
 }
 
 // The shell mounts the cards afresh for each project, so nothing here resets.
@@ -146,7 +163,7 @@ function useProjectData(projectId: string): ProjectData {
       .catch(() => undefined);
   }, []);
 
-  return { features, vision, toolchain, maxRunning };
+  return { features, vision, toolchain, maxRunning, reload: load };
 }
 
 function ProjectCard({
@@ -530,6 +547,143 @@ function PreviewCard({
           Preview page
         </button>
       </div>
+    </section>
+  );
+}
+
+/** The Plan card (ADR-039, PLAN_MODE_PLAN.md PM4 reshaped): plan mode is a
+ * switch on the chat on screen. Switching it on starts, resumes, or moves
+ * planning here (a project with no vision yet starts its plan from its
+ * name); switching it off asks whether to keep the plan for next time or
+ * discard it. While planning, the plan opens over the page (its draft, or
+ * Write the plan while still talking), Insights shows the assistant's
+ * working notes, and Build it hands a drafted plan to autopilot. */
+function PlanCard({
+  projectId,
+  name,
+  chat,
+  vision,
+  onChanged,
+}: {
+  projectId: string;
+  name: string;
+  chat: string | undefined;
+  vision: Vision | null | undefined;
+  onChanged: () => void;
+}) {
+  const planning = chatPlanning(vision ?? { planning: undefined }, chat);
+  const plan = usePlanSwitch(projectId, name, chat, planning, { onChanged });
+  const [shown, setShown] = useState<null | "plan" | "insights">(null);
+  const [building, setBuilding] = useState(false);
+  const [buildError, setBuildError] = useState<string | null>(null);
+  const close = useCallback(() => setShown(null), []);
+  if (vision === undefined) return null;
+  const drafted = planPhase(vision?.planning) === "drafted";
+  const { on } = plan;
+  // Build it: the plan locks and its slices go to autopilot.
+  const build = async () => {
+    setBuilding(true);
+    setBuildError(null);
+    try {
+      await finishPlanning(projectId, true);
+      window.dispatchEvent(new Event(WORK_CHANGED));
+      window.dispatchEvent(new Event(ASSISTANT_CHANGED));
+      onChanged();
+    } catch (e) {
+      setBuildError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBuilding(false);
+    }
+  };
+  const state =
+    planning.kind === "here"
+      ? planning.round
+        ? "Planning next round"
+        : "Planning"
+      : planning.kind === "elsewhere"
+        ? "In another chat — move here"
+        : planning.kind === "paused"
+          ? "Off · plan kept"
+          : "Off";
+  return (
+    <section className={`shell-card plan-card ${on ? "plan-card--on" : ""}`}>
+      <div className="plan-card__row">
+        <span className="plan-card__label">
+          <span className="plan-card__name">Plan mode</span>
+          <span className="plan-card__state">{state}</span>
+        </span>
+        <button
+          role="switch"
+          aria-checked={on}
+          aria-label="Plan mode"
+          className={`plan-switch ${on ? "plan-switch--on" : ""}`}
+          onClick={() => void plan.toggle()}
+          disabled={plan.busy}
+          title={
+            on
+              ? "Turn plan mode off: keep the plan for next time, or discard it. Nothing is built."
+              : planning.kind === "elsewhere"
+                ? "Move planning to this chat. The plan stays as it is; the other chat stops planning."
+                : planning.kind === "paused"
+                  ? "Pick the kept plan up again in this chat."
+                  : "Plan with the assistant in this chat. Nothing new is built until you press Build it."
+          }
+        >
+          <span className="plan-switch__knob" aria-hidden />
+        </button>
+      </div>
+      {on && (
+        <div className="plan-card__actions">
+          <span className="shell-card__links plan-card__links">
+            <button
+              className="shell-card__link"
+              onClick={() => setShown("plan")}
+              title={drafted ? "The written plan, to review" : "No draft yet"}
+            >
+              {drafted ? "Open the plan" : "The plan"}
+            </button>
+            <button
+              className="shell-card__link"
+              onClick={() => setShown("insights")}
+              title="What the assistant works from: what the plan covers, decisions, open questions, research, and documents"
+            >
+              Insights
+            </button>
+            {!drafted && (
+              <button
+                className="shell-card__link"
+                onClick={() => window.dispatchEvent(new Event(WRITE_PLAN))}
+                title="Have the assistant write the plan's first draft now"
+              >
+                Write the plan
+              </button>
+            )}
+          </span>
+          {drafted && (
+            <button
+              className="primary plan-card__build"
+              onClick={() => void build()}
+              disabled={building}
+              title="Lock the plan and hand its slices to autopilot, a work order each."
+            >
+              {building ? "Starting…" : "Build it"}
+            </button>
+          )}
+        </div>
+      )}
+      {plan.error && !plan.stopping && <p className="banner banner--error">{plan.error}</p>}
+      {buildError && <p className="banner banner--error">{buildError}</p>}
+      {shown === "plan" && (
+        <Overlay title="Plan" onClose={close}>
+          <PlanDocumentView projectId={projectId} onBack={close} inOverlay />
+        </Overlay>
+      )}
+      {shown === "insights" && vision && (
+        <Overlay title="Insights" onClose={close}>
+          <PlanInsights projectId={projectId} vision={vision} />
+        </Overlay>
+      )}
+      <StopPlanDialog projectId={projectId} plan={plan} />
     </section>
   );
 }

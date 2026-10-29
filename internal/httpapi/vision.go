@@ -184,6 +184,7 @@ func (api *API) startVisionWorkOrderHandler(w http.ResponseWriter, r *http.Reque
 		description += "\n\n"
 	}
 	description += "Part of the project's vision as " + label + "."
+	description = withSlice(description, stored, item)
 	created, err := api.features.Create(r.Context(), projectID, item.Title, description, feature.SettingsOverrides{})
 	if err != nil {
 		log.Printf("create the work order for vision item %q: %v", itemID, err)
@@ -255,4 +256,19 @@ func (api *API) addVisionItemHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, addVisionItemResponse{Vision: stored, ItemID: itemID}, "vision item")
+}
+
+// withSlice ends a vision item's work order description with what it hears
+// of the written plan it is a slice of (PLAN_MODE_PLAN.md PM6); a plan too
+// long to fit is named by its path alone.
+func withSlice(description string, stored vision.Vision, item featureartifact.VisionItem) string {
+	slice := vision.SliceBrief(stored, item)
+	if slice == "" {
+		return description
+	}
+	if len(description)+len(slice)+2 > featureartifact.MaxGoalBytes {
+		stored.Planning = nil
+		slice = vision.SliceBrief(stored, item)
+	}
+	return strings.TrimSpace(description + "\n\n" + slice)
 }

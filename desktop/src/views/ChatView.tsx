@@ -21,11 +21,18 @@ import {
 } from "../api/assistant";
 import { ApiError } from "../api/client";
 import { openAppWindow, webviewSnapshot, webviewSnapshotSupported } from "../ipc";
-import { getVision, pausePlanning, startPlanning } from "../api/vision";
+import { getVision } from "../api/vision";
 import { developerModeOn } from "../devMode";
 import { getProject } from "../api/projects";
 import { listFeatures } from "../api/features";
-import type { AssistantMode, Feature, Vision, VisionItem, VisionPriority } from "../api/types";
+import type {
+  AssistantMode,
+  Feature,
+  Vision,
+  VisionItem,
+  VisionPlanning,
+  VisionPriority,
+} from "../api/types";
 import { appliesItself, assistantMode, assistantModeNote } from "./assistantMode";
 import { Markdown } from "./Markdown";
 import { useCatalogModels, useModelName } from "./useModelName";
@@ -38,21 +45,34 @@ import { appliedWhat, chooseAgent, choiceOverrides, type RoleChoice } from "./ac
 import { AssistantActivityLine, TurnFailureControls } from "./AssistantActivity";
 import { AppliedGroup } from "./AppliedGroup";
 import { foldedEvent, groupTurn } from "./appliedSummary";
+import { ASSISTANT_CHANGED, OPEN_PLAN, WORK_CHANGED, WRITE_PLAN } from "./chatEvents";
+import {
+  chatPlanning,
+  planChanges,
+  planChangeShows,
+  passedOverQuestions,
+  planCommand,
+  planMenuLabel,
+  planPhase,
+  WRITE_THE_PLAN,
+  someOf,
+  type PlanChange,
+} from "./planMode";
+import { usePlanSwitch } from "./usePlanSwitch";
+import { StopPlanDialog } from "./StopPlanDialog";
+import { QuestionCards } from "./QuestionCards";
 import { ActivityDot, isLiveOrder, ORDER_STATE_LABEL, type WorkSignals } from "./chatActivity";
 
 const IDLE_POLL_MS = 20_000;
 const POLL_MS = 2000;
 
-/** Fired when an approved assistant action changed the project's work. */
-export const WORK_CHANGED = "commitarium:work-changed";
+export { ASSISTANT_CHANGED, WORK_CHANGED };
 /** Asks the open project to show its Vision page. */
 export const OPEN_VISION = "commitarium:open-vision";
 /** Opens the assistant, optionally with a message started in its composer. */
 export const OPEN_ASSISTANT = "commitarium:open-assistant";
 /** Opens a project (detail: its ID), as one the assistant created to plan. */
 export const OPEN_PROJECT = "commitarium:open-project";
-/** Asks the assistant to reload its conversation, as after autopilot starts or stops. */
-export const ASSISTANT_CHANGED = "commitarium:assistant-changed";
 
 const STEPS_LABEL: Record<string, string> = {
   full: "Full (plan, review)",
@@ -77,6 +97,10 @@ export function ChatView({
   onLaunchChange,
   onConversation,
   onMoved,
+  onOpenChat,
+  chatName,
+  planSwitch = true,
+  projectName,
   onCapturingChange,
   screenshot = false,
   chips,
@@ -105,6 +129,16 @@ export function ChatView({
   /** The chat moved into the app or project an approved card created
    * (ADR-038): the shell follows it there. */
   onMoved?: (scope: string, chat: string) => void;
+  /** Opens another chat of the scope, as the one the project is planned in. */
+  onOpenChat?: (chat: string) => void;
+  /** Another chat's title, by its ID. */
+  chatName?: (chat: string) => string | undefined;
+  /** The header carries the plan switch; the chat shell has it on its
+   * cards instead. */
+  planSwitch?: boolean;
+  /** The project's name, which starts its vision when plan mode is turned
+   * on without one. */
+  projectName?: string;
   /** While a screenshot is taken, so the drawer's button hides too. */
   onCapturingChange?: (capturing: boolean) => void;
   /** Offers "Take a screenshot and describe what to change": over an app's
@@ -213,12 +247,12 @@ export function ChatView({
 
   // Vision items by ID, labelled "P0.2 Title", for the cards.
   const [visionItems, setVisionItems] = useState<Map<string, string>>(new Map());
-  // How the project's vision is planned (planning mode): null without a
-  // vision, "" for one not planned.
-  const [planning, setPlanning] = useState<string | null>(null);
+  // How the project's vision is planned (planning mode, ADR-039): null
+  // without a vision.
+  const [planned, setPlanned] = useState<{ planning?: VisionPlanning } | null>(null);
   const showVision = useCallback((vision: Vision) => {
     setVisionItems(visionLabels(vision.plan.priorities));
-    setPlanning(vision.planning?.status ?? "");
+    setPlanned({ planning: vision.planning });
   }, []);
   // The project's work orders by ID, for the live cards of the work the
   // assistant created or started.
@@ -241,7 +275,7 @@ export function ChatView({
         .then(showVision)
         .catch(() => {
           setVisionItems(new Map());
-          setPlanning(null);
+          setPlanned(null);
         });
       if (live) {
         listFeatures(scope)
@@ -249,28 +283,23 @@ export function ChatView({
           .catch(() => undefined);
       }
     } else {
-      setPlanning(null);
+      setPlanned(null);
     }
   }, [scope, target, targetKey, live, setConversation, showVision]);
 
-  // In Developer mode, planning starts or resumes from here, and stops
-  // with the plan kept as it is.
-  const [togglingPlan, setTogglingPlan] = useState(false);
-  const togglePlanning = async () => {
-    setTogglingPlan(true);
-    setError(null);
-    try {
-      const planned = planning === "planning";
-      showVision(planned ? await pausePlanning(scope) : await startPlanning(scope, ""));
-      window.dispatchEvent(new Event(WORK_CHANGED));
-      if (!planned) window.dispatchEvent(new Event(OPEN_VISION));
-      setConversation(await getConversation(target));
-    } catch (e) {
-      setError(describe(e));
-    } finally {
-      setTogglingPlan(false);
-    }
-  };
+  // In Developer mode, planning is a switch on the chat (ADR-039): it
+  // starts, resumes, or moves here, and stops with the plan kept as it is.
+  // The chat stays where it is.
+  const chatId = chat ?? conversation?.chat;
+  const planning = chatPlanning(planned, chatId);
+  const plan = usePlanSwitch(scope, projectName ?? "", chatId, planning, {
+    onChanged: (vision) => (vision ? showVision(vision) : setPlanned(null)),
+    onError: setError,
+  });
+  // The composer's + menu and /plan switch plan mode in a Developer mode
+  // project's chat, as the cards' Plan mode button does.
+  const planInComposer =
+    scope !== "commitarium" && developerModeOn() && (planning.kind !== "none" || !!projectName);
 
   useEffect(() => {
     const reload = () => void load();
@@ -431,16 +460,33 @@ export function ChatView({
   }, [loaded]);
 
   const canSend = !!draft.trim() || attachments.items.length > 0;
-  const send = async () => {
-    const text = draft.trim();
-    if (!canSend) return;
+  // A message from a control rather than the composer (Write the plan)
+  // leaves the user's draft as it is.
+  const send = async (fixed?: string) => {
+    let text = fixed ?? draft.trim();
+    if (!fixed && !canSend) return;
+    // /plan switches plan mode; /plan with a message turns it on and sends
+    // the message (ADR-039).
+    const command = planInComposer && !fixed ? planCommand(text) : null;
+    if (command) {
+      setError(null);
+      if (!command.message) {
+        if (await plan.toggle()) setDraft("");
+        return;
+      }
+      // The message says what to plan, and its turn hears planning start.
+      if (!(await plan.start({ withMessage: true }))) return;
+      text = command.message;
+    }
     setSending(true);
     setError(null);
     try {
-      const names = await attachments.upload();
+      const names = fixed ? [] : await attachments.upload();
       setConversation(await sendToAssistant(target, text, crypto.randomUUID(), names));
-      setDraft("");
-      attachments.clear();
+      if (!fixed) {
+        setDraft("");
+        attachments.clear();
+      }
       setAskChange(false);
     } catch (e) {
       if (e instanceof ApiError && (e.code === "no_agents" || e.code === "assistant_not_set_up")) {
@@ -455,10 +501,31 @@ export function ChatView({
     }
   };
 
+  // The Plan card's and the Plan page's Write the plan send here, in the
+  // chat that plans.
+  const writePlan = useRef<() => void>(() => undefined);
+  useEffect(() => {
+    writePlan.current = () => {
+      if (planning.kind === "here" && !sending) void send(WRITE_THE_PLAN);
+    };
+  });
+  useEffect(() => {
+    const write = () => writePlan.current();
+    window.addEventListener(WRITE_PLAN, write);
+    return () => window.removeEventListener(WRITE_PLAN, write);
+  }, []);
+
+  // What each plan update settled and changed, said in its line; one that
+  // only moved the open questions or the step is not said.
+  const changes = planChanges(conversation?.actions ?? []);
   const byMessage = new Map<string, AssistantAction[]>();
   for (const action of conversation?.actions ?? []) {
+    if (action.type === "update_plan" && !planChangeShows(changes.get(action.id))) continue;
     byMessage.set(action.message_id, [...(byMessage.get(action.message_id) ?? []), action]);
   }
+
+  // Questions the user has since written past fade, still answerable.
+  const passedOver = passedOverQuestions(conversation?.messages ?? []);
 
   const asLine = (action: AssistantAction) =>
     (builds ||
@@ -506,6 +573,7 @@ export function ChatView({
       <AppliedLine
         key={action.id}
         action={action}
+        change={changes.get(action.id)}
         running={
           action.type === "research" && (conversation?.researching ?? []).includes(action.title)
         }
@@ -538,30 +606,38 @@ export function ChatView({
           {assistantModeNote(mode)}
         </span>
       )}
-      {planning === "planning" && (
+      {planning.kind === "here" && (
         <span
           className="pill pill--planning assistant-drawer__mode"
-          title="You're planning this project with the assistant. The plan fills in beside you, and nothing is built until you press Build it."
-        >
-          Planning
-        </span>
-      )}
-      {planning !== null && developerModeOn() && (
-        <button
-          className="ghost"
-          onClick={() => void togglePlanning()}
-          disabled={togglingPlan}
           title={
-            planning === "planning"
-              ? "Stop planning. The plan stays as it is and nothing is built; you can resume any time."
-              : "Plan this project with the assistant beside a live plan. Nothing is built until you press Build it."
+            planning.round
+              ? "You're planning this project's next round with the assistant in this chat. What is built stays, and nothing new is built until you press Build it."
+              : "You're planning this project with the assistant in this chat. Nothing is built until you press Build it."
           }
         >
-          {planning === "planning"
+          {planning.round ? "Planning next round" : "Planning"}
+        </span>
+      )}
+      {planSwitch && planning.kind !== "none" && developerModeOn() && (
+        <button
+          className="ghost"
+          onClick={() => void plan.toggle()}
+          disabled={plan.busy}
+          title={
+            planning.kind === "here"
+              ? "Stop planning: keep the plan for next time, or discard it. Nothing is built."
+              : planning.kind === "elsewhere"
+                ? "Move planning to this chat. The plan stays as it is; the other chat stops planning."
+                : "Plan this project with the assistant in this chat. Nothing is built until you press Build it."
+          }
+        >
+          {planning.kind === "here"
             ? "Stop planning"
-            : planning === "paused"
-              ? "Resume planning"
-              : "Plan it"}
+            : planning.kind === "elsewhere"
+              ? "Plan here"
+              : planning.kind === "paused"
+                ? "Resume planning"
+                : "Plan"}
         </button>
       )}
     </>
@@ -595,7 +671,7 @@ export function ChatView({
         </strong>
         {notesButton}
       </div>
-      {(mode || planning !== null) && <div className="assistant-drawer__meta">{meta}</div>}
+      {(mode || planning.kind !== "none") && <div className="assistant-drawer__meta">{meta}</div>}
     </header>
   );
 
@@ -650,6 +726,15 @@ export function ChatView({
                   <SentAttachments owner={scope} names={message.attachments} />
                 </div>
               </div>
+              {message.role === "assistant" && !!message.questions?.length && (
+                <QuestionCards
+                  target={chatId ? { scope, chat: chatId } : null}
+                  messageId={message.id}
+                  questions={message.questions}
+                  passedOver={passedOver.has(message.id)}
+                  onChanged={setConversation}
+                />
+              )}
               {renderTurn(message.id)}
             </div>
           ),
@@ -690,6 +775,19 @@ export function ChatView({
         ))}
       </div>
       {error && <div className="banner banner--error">{error}</div>}
+      {planning.kind === "elsewhere" && (
+        <p className="muted assistant__planning-elsewhere">
+          {"This project is being planned in "}
+          {onOpenChat ? (
+            <button className="linkish" onClick={() => onOpenChat(planning.chat)}>
+              {chatName?.(planning.chat) || "another chat"}
+            </button>
+          ) : (
+            chatName?.(planning.chat) || "another chat"
+          )}
+          . Nothing new is built from the plan until you press Build it there.
+        </p>
+      )}
       <div
         className={`composer${attachments.dragging ? " composer--drop" : ""}`}
         {...attachments.dropProps}
@@ -718,6 +816,12 @@ export function ChatView({
           onRemove={attachments.remove}
           disabled={sending}
         />
+        {planInComposer && draft.startsWith("/") && (
+          <p className="muted note composer__hint">
+            <code>/plan</code> turns plan mode {planning.kind === "here" ? "off" : "on"};{" "}
+            <code>/plan</code> and a message plans it in this chat.
+          </p>
+        )}
         <ComposerBox
           textareaRef={composerRef}
           value={draft}
@@ -737,12 +841,12 @@ export function ChatView({
             if (e.key === "Escape") onOpenChange?.(false);
             if (e.key !== "Enter" || e.shiftKey) return;
             e.preventDefault();
-            if (!sending && !guidance && canSend) void send();
+            if (!sending && !plan.busy && !guidance && canSend) void send();
           }}
           disabled={sending}
           onFiles={attachments.add}
-          options={
-            canCapture
+          options={[
+            ...(canCapture
               ? [
                   {
                     label: "Screenshot the app",
@@ -750,10 +854,37 @@ export function ChatView({
                     onSelect: () => void takeScreenshot(),
                   },
                 ]
-              : []
-          }
+              : []),
+            ...(planInComposer
+              ? [
+                  {
+                    label: planMenuLabel(planning),
+                    hint:
+                      planning.kind === "here"
+                        ? "Keep the plan for next time, or discard it"
+                        : "Plan it with the assistant before anything is built",
+                    onSelect: () => void plan.toggle(),
+                  },
+                ]
+              : []),
+            ...(planInComposer && planning.kind === "here"
+              ? [
+                  planPhase(planned?.planning) === "drafted"
+                    ? {
+                        label: "Open the plan",
+                        hint: "Review the draft, then Build it",
+                        onSelect: () => window.dispatchEvent(new Event(OPEN_PLAN)),
+                      }
+                    : {
+                        label: "Write the plan",
+                        hint: "Have the assistant write the first draft now",
+                        onSelect: () => void send(WRITE_THE_PLAN),
+                      },
+                ]
+              : []),
+          ]}
           onSubmit={() => void send()}
-          submitDisabled={sending || !!guidance || !canSend}
+          submitDisabled={sending || plan.busy || !!guidance || !canSend}
           submitLabel={sending ? "Sending…" : "Send"}
         />
       </div>
@@ -778,6 +909,7 @@ export function ChatView({
           </aside>
         )
       )}
+      <StopPlanDialog projectId={scope} plan={plan} />
       {setUp && (
         <Agents
           focus={setUp === "assistant" ? "assistant" : undefined}
@@ -898,6 +1030,9 @@ function ActionCard({
           void openAppWindow(applied.project_id, applied.title);
         } else if (applied?.type === "plan_project" && applied.project_id) {
           window.dispatchEvent(new CustomEvent(OPEN_PROJECT, { detail: applied.project_id }));
+        } else if (applied?.type === "start_planning") {
+          // Plan mode is on in this chat: the cards and the chat show it.
+          window.dispatchEvent(new Event(ASSISTANT_CHANGED));
         } else if (applied?.type === "add_vision_item") {
           window.dispatchEvent(new Event(OPEN_VISION));
         } else if (applied?.work_order_id) {
@@ -960,9 +1095,11 @@ function ActionCard({
                                         ? `Look up: ${action.title}`
                                         : action.type === "build_plan"
                                           ? "Build it"
-                                          : action.type === "update_plan"
-                                            ? "Update the plan"
-                                            : "Switch models";
+                                          : action.type === "start_planning"
+                                            ? "Plan it first"
+                                            : action.type === "update_plan"
+                                              ? "Update the plan"
+                                              : "Switch models";
   const models = [
     action.lead_model &&
       `Lead ${action.lead_agent ? agentName(agents, action.lead_agent) + " · " : ""}${modelName(action.lead_model)}`,
@@ -981,7 +1118,9 @@ function ActionCard({
           ]
         : action.type === "recover_work_order" && action.how === "back_to_ready"
           ? [`Start ${what} over? What it has done so far is set aside.`, "Start over"]
-          : [`${APPLY_LABEL[action.type]} ${what}?`, APPLY_LABEL[action.type]];
+          : action.type === "start_planning"
+            ? [`Plan this first? ${action.reason}`, APPLY_LABEL[action.type]]
+            : [`${APPLY_LABEL[action.type]} ${what}?`, APPLY_LABEL[action.type]];
     return (
       <div
         className="assistant-action assistant-action--proposed"
@@ -1032,7 +1171,9 @@ function ActionCard({
             <Markdown text={action.description} />
           </div>
         ) : (
-          <p className="assistant-action__desc">{action.description}</p>
+          <p className="assistant-action__desc">
+            {action.type === "start_planning" ? `Goal: ${action.description}` : action.description}
+          </p>
         ))}
       {(action.type === "create_app" || action.type === "plan_project") &&
         (action.assumptions ?? []).length > 0 && (
@@ -1274,6 +1415,7 @@ const APPLY_LABEL: Record<AssistantAction["type"], string> = {
   research: "Look it up",
   update_plan: "Update",
   build_plan: "Build it",
+  start_planning: "Start plan mode",
 };
 
 const STATUS_LABEL: Record<AssistantAction["status"], string> = {
@@ -1393,7 +1535,16 @@ function isPremium(model: string, families: string[]): boolean {
 
 // Where it builds everything, what the assistant set going, said in a line;
 // why, and what came of it, show on hover.
-function AppliedLine({ action, running }: { action: AssistantAction; running?: boolean }) {
+function AppliedLine({
+  action,
+  change,
+  running,
+}: {
+  action: AssistantAction;
+  /** For update_plan: what it settled and changed. */
+  change?: PlanChange;
+  running?: boolean;
+}) {
   // Research runs in the background: while it does, the line says so and
   // that the user can carry on, instead of a tick that reads as done.
   if (running) {
@@ -1414,12 +1565,13 @@ function AppliedLine({ action, running }: { action: AssistantAction; running?: b
       className="assistant__applied-wrap"
       title={[action.result, action.reason && `Why: ${action.reason}`].filter(Boolean).join("\n\n")}
     >
-      <AppliedText action={action} />
+      <AppliedText action={action} change={change} />
+      {change && action.status === "applied" && <PlanChangeLines change={change} />}
     </div>
   );
 }
 
-function AppliedText({ action }: { action: AssistantAction }) {
+function AppliedText({ action, change }: { action: AssistantAction; change?: PlanChange }) {
   if (action.settled) {
     // "Already started: Add a beginner glossary"
     const why = (action.result ?? "").split(":")[0].replace(/\.$/, "") || "No longer needed";
@@ -1437,6 +1589,21 @@ function AppliedText({ action }: { action: AssistantAction }) {
     );
   }
   if (action.type === "update_plan") {
+    // Writing or revising the plan's draft says so, with a way to it.
+    if (change?.document && action.status === "applied") {
+      return (
+        <p className="muted assistant__applied assistant__applied--drafted">
+          {change.document === "drafted" ? "✓ Plan drafted" : "✓ Plan revised"}
+          {" · "}
+          <button
+            className="assistant__applied-link"
+            onClick={() => window.dispatchEvent(new Event(OPEN_PLAN))}
+          >
+            Open
+          </button>
+        </p>
+      );
+    }
     return (
       <p className="muted assistant__applied">
         {action.status === "applied" ? "✓ Updated the plan" : "Updating the plan…"}
@@ -1481,7 +1648,8 @@ function AppliedText({ action }: { action: AssistantAction }) {
     action.type === "close_work_order" ||
     action.type === "add_vision_item" ||
     action.type === "start_autopilot" ||
-    action.type === "build_plan"
+    action.type === "build_plan" ||
+    action.type === "start_planning"
   ) {
     // These say what they did in their result ("Re-checked “Sort”.").
     const fallback =
@@ -1493,7 +1661,9 @@ function AppliedText({ action }: { action: AssistantAction }) {
             ? `Turning autopilot on for P${action.priority}`
             : action.type === "build_plan"
               ? "Building the plan"
-              : "Picking the work back up";
+              : action.type === "start_planning"
+                ? "Turning plan mode on"
+                : "Picking the work back up";
     return (
       <p className="muted assistant__applied">
         {action.status === "applied" ? `✓ ${action.result || fallback}` : `${fallback}…`}
@@ -1535,6 +1705,40 @@ function AppliedText({ action }: { action: AssistantAction }) {
             ? `Queued: ${what}, after ${action.after}`
             : `${verb}: ${what}…`}
     </p>
+  );
+}
+
+// A plan update's decisions and build plan changes (ADR-039), as quiet lines
+// under it.
+function PlanChangeLines({ change }: { change: PlanChange }) {
+  return (
+    <>
+      {change.decided.slice(0, 3).map((decision) => (
+        <p key={decision} className="muted assistant__applied assistant__applied--plan">
+          Decided: {decision}
+        </p>
+      ))}
+      {change.decided.length > 3 && (
+        <p className="muted assistant__applied assistant__applied--plan">
+          And {change.decided.length - 3} more decisions
+        </p>
+      )}
+      {change.added.length > 0 && (
+        <p className="muted assistant__applied assistant__applied--plan">
+          Added to the plan: {someOf(change.added)}
+        </p>
+      )}
+      {change.changed.length > 0 && (
+        <p className="muted assistant__applied assistant__applied--plan">
+          Changed in the plan: {someOf(change.changed)}
+        </p>
+      )}
+      {change.removed.length > 0 && (
+        <p className="muted assistant__applied assistant__applied--plan">
+          Taken out of the plan: {someOf(change.removed)}
+        </p>
+      )}
+    </>
   );
 }
 

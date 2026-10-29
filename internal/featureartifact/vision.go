@@ -53,6 +53,10 @@ type VisionItem struct {
 	Items       []VisionItem `json:"items,omitempty"`
 	// FeatureID is the work order delivering a leaf item.
 	FeatureID string `json:"feature_id,omitempty"`
+	// Document is the repository path of the written plan the item is a
+	// slice of (PLAN_MODE_PLAN.md PM6), such as docs/plans/sharing.md; its
+	// work order commits or reads it there.
+	Document string `json:"document,omitempty"`
 	// Done marks a leaf item the project already delivers without a work
 	// order, such as one the code did before the vision was written.
 	Done bool `json:"done,omitempty"`
@@ -129,6 +133,9 @@ func validateVisionItems(items []VisionItem, depth int, seen map[string]bool, co
 		if item.Description != strings.TrimSpace(item.Description) || len(item.Description) > MaxStepTextBytes {
 			return fmt.Errorf("%w: vision item %q description is invalid", ErrInvalidArtifact, item.ID)
 		}
+		if len(item.Document) > MaxPlanDocumentPathBytes {
+			return fmt.Errorf("%w: vision item %q names too long a plan document", ErrInvalidArtifact, item.ID)
+		}
 		if len(item.Items) > 0 && (item.FeatureID != "" || item.Done) {
 			return fmt.Errorf("%w: vision item %q groups others, so it has no work order and is done when they are", ErrInvalidArtifact, item.ID)
 		}
@@ -201,7 +208,22 @@ func trimmedVisionTexts(values []string) []string {
 // order can be linked to it at once, as when work done outside the plan
 // joins it.
 func (plan VisionPlan) AddItem(level int, title, description, featureID string) (VisionPlan, string, error) {
-	title, description = strings.TrimSpace(title), strings.TrimSpace(description)
+	return plan.addItem(level, VisionItem{
+		Title: strings.TrimSpace(title), Description: strings.TrimSpace(description), FeatureID: strings.TrimSpace(featureID),
+	}, nil)
+}
+
+// AddPlannedItem adds a build plan's item at level, with its sub-items,
+// as AddItem does; document, when set, is the written plan the item and its
+// sub-items are slices of.
+func (plan VisionPlan) AddPlannedItem(level int, planned PlanItem, document string) (VisionPlan, string, error) {
+	item := VisionItem{
+		Title: strings.TrimSpace(planned.Title), Description: strings.TrimSpace(planned.Description), Document: document,
+	}
+	return plan.addItem(level, item, planned.Items)
+}
+
+func (plan VisionPlan) addItem(level int, item VisionItem, subItems []PlanSubItem) (VisionPlan, string, error) {
 	if level < 0 || level > maxVisionPriority {
 		return VisionPlan{}, "", fmt.Errorf("%w: priorities run from P0 to P%d", ErrInvalidArtifact, maxVisionPriority)
 	}
@@ -216,13 +238,24 @@ func (plan VisionPlan) AddItem(level int, title, description, featureID string) 
 	for _, priority := range plan.Priorities {
 		collect(priority.Items)
 	}
-	base := normalizeIDs([]string{title}, "item")[0]
-	id, suffix := base, 2
-	for seen[id] {
-		id = fmt.Sprintf("%s-%d", base, suffix)
-		suffix++
+	uniqueID := func(title string) string {
+		base := normalizeIDs([]string{title}, "item")[0]
+		id, suffix := base, 2
+		for seen[id] {
+			id = fmt.Sprintf("%s-%d", base, suffix)
+			suffix++
+		}
+		seen[id] = true
+		return id
 	}
-	item := VisionItem{ID: id, Title: title, Description: description, FeatureID: strings.TrimSpace(featureID)}
+	item.ID = uniqueID(item.Title)
+	for _, sub := range subItems {
+		title := strings.TrimSpace(sub.Title)
+		item.Items = append(item.Items, VisionItem{
+			ID: uniqueID(title), Title: title, Description: strings.TrimSpace(sub.Description), Document: item.Document,
+		})
+	}
+	id := item.ID
 	priorities := make([]VisionPriority, 0, len(plan.Priorities)+1)
 	added := false
 	for _, priority := range plan.Priorities {

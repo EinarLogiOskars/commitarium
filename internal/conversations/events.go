@@ -692,21 +692,46 @@ const PreviewFailure = "The app's preview failed to start"
 // assistant owns the project whether or not the user opened it. note is the
 // line the user sees; text what the assistant hears.
 func (service *Service) Wake(ctx context.Context, scope, note, text string) error {
-	return service.wake(ctx, scope, note, text, false)
+	return service.wake(ctx, scope, "", note, text, false)
+}
+
+// WakeChat wakes the assistant in one of the scope's chats, as Wake does
+// in its most recently used one.
+func (service *Service) WakeChat(ctx context.Context, scope, chat, note, text string) error {
+	if chat == "" {
+		return ErrNotFound
+	}
+	return service.wake(ctx, scope, chat, note, text, false)
+}
+
+// TellChat notes something in one of the scope's chats, as WakeChat does,
+// for the assistant to hear with its next turn there, without starting one:
+// the user's message that follows at once starts it (ADR-039: /plan and a
+// message). If none comes, the watcher starts it at its next look.
+func (service *Service) TellChat(ctx context.Context, scope, chat, note, text string) error {
+	if chat == "" {
+		return ErrNotFound
+	}
+	return service.wakeQuietly(ctx, scope, chat, note, text, false, false)
 }
 
 // HandOver records that the user switched the project to building
 // everything and wakes the assistant to take the project over. Cards the
 // user dismissed before no longer stand: switching hands the work over.
 func (service *Service) HandOver(ctx context.Context, scope string) error {
-	return service.wake(ctx, scope, "You handed the project to the assistant: it builds everything from here.",
+	return service.wake(ctx, scope, "", "You handed the project to the assistant: it builds everything from here.",
 		"The user switched this project to Builds everything: you own it now. Take it over: write the vision "+
 			"if there is none, set up the stack, start autopilot on the vision's open items, and start or queue "+
 			"the waiting work orders, the user's too. Cards the user dismissed before this switch no longer "+
 			"stand. Commitarium reports what is still missing as you go.", true)
 }
 
-func (service *Service) wake(ctx context.Context, scope, note, text string, handOver bool) error {
+func (service *Service) wake(ctx context.Context, scope, chat, note, text string, handOver bool) error {
+	return service.wakeQuietly(ctx, scope, chat, note, text, handOver, true)
+}
+
+// wakeQuietly is wake, which looks for the turn at once only with nudge.
+func (service *Service) wakeQuietly(ctx context.Context, scope, chat, note, text string, handOver, nudge bool) error {
 	text = strings.TrimSpace(text)
 	if scope == TopLevel || !scopePattern.MatchString(scope) || text == "" {
 		return ErrNotFound
@@ -714,7 +739,13 @@ func (service *Service) wake(ctx context.Context, scope, note, text string, hand
 	if err := service.checkScope(ctx, scope); err != nil {
 		return err
 	}
-	stored, done, err := service.open(scope, "")
+	if chat != "" {
+		var err error
+		if chat, err = service.chatFor(InChat(ctx, chat), scope); err != nil {
+			return err
+		}
+	}
+	stored, done, err := service.open(scope, chat)
 	if err != nil {
 		return err
 	}
@@ -729,7 +760,7 @@ func (service *Service) wake(ctx context.Context, scope, note, text string, hand
 	stored.UpdatedAt = now
 	err = service.write(stored)
 	done()
-	if err == nil {
+	if err == nil && nudge {
 		service.nudgeWatcher()
 	}
 	return err

@@ -509,6 +509,8 @@ func (api *API) approveConversationActionHandler(w http.ResponseWriter, r *http.
 		result, ok = api.applyUpdatePlan(w, r, scope, action)
 	case featureartifact.AssistantBuildPlan:
 		result, ok = api.applyBuildPlan(w, r, scope)
+	case featureartifact.AssistantStartPlanning:
+		result, ok = api.applyStartPlanning(w, r, scope, action)
 	case featureartifact.AssistantSetUpStack:
 		result, workOrderID, ok = api.applySetUpStack(w, r, scope)
 	case featureartifact.AssistantCloseWorkOrder:
@@ -705,8 +707,9 @@ func (api *API) applyCreateWorkOrder(
 	description := action.Description
 	if action.VisionItemID != "" && api.visions != nil {
 		if current, err := api.visions.Get(ctx, projectID); err == nil {
-			if _, label, found := vision.Find(current.Plan, action.VisionItemID); found {
+			if item, label, found := vision.Find(current.Plan, action.VisionItemID); found {
 				description = strings.TrimSpace(description + "\n\nPart of the project's vision as " + label + ".")
+				description = withSlice(description, current, item)
 			}
 		}
 	}

@@ -39,6 +39,11 @@ func (recorder *wakeRecorder) Wake(_ context.Context, scope, _, text string) err
 	return nil
 }
 
+func (recorder *wakeRecorder) WakeChat(_ context.Context, scope, chat, _, text string) error {
+	recorder.woken[scope] = chat + ": " + text
+	return nil
+}
+
 type looseChats struct {
 	service  *wakeRecorder
 	projects *recordingProjectService
@@ -136,8 +141,12 @@ func TestALooseChatBecomesAProject(t *testing.T) {
 		moved.Messages[0].Text != "Could something read my bank's CSVs every night?" {
 		t.Fatalf("moved = %s", body)
 	}
+	// The project is planned in the chat that moved, and woken there.
+	if strings.Join(loose.visions.chats, ",") != moved.Chat {
+		t.Fatalf("planned in chats %v", loose.visions.chats)
+	}
 	woken := loose.service.woken["prj_bank"]
-	if !strings.Contains(woken, "plan this project with you") || !strings.Contains(woken, "grew from the user's chat") ||
+	if !strings.HasPrefix(woken, moved.Chat+": ") || !strings.Contains(woken, "plan this project with you") || !strings.Contains(woken, "grew from the user's chat") ||
 		!strings.Contains(woken, "user: Could something read my bank's CSVs every night?") ||
 		!strings.Contains(woken, "assistant: A bank importer is a real project.") {
 		t.Fatalf("the assistant was woken with %q", woken)

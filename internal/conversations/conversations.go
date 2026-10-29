@@ -112,8 +112,11 @@ type Message struct {
 	Role string `json:"role"`
 	Text string `json:"text"`
 	// Attachments name the scope's documents the user attached to it.
-	Attachments []string  `json:"attachments,omitempty"`
-	OccurredAt  time.Time `json:"occurred_at"`
+	Attachments []string `json:"attachments,omitempty"`
+	// Questions are what an assistant's reply asks the user as cards
+	// (questions.go).
+	Questions  []Question `json:"questions,omitempty"`
+	OccurredAt time.Time  `json:"occurred_at"`
 }
 
 type ActionStatus string
