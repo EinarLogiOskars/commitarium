@@ -112,7 +112,9 @@ export function workBoard(
     }
     const item = items.find((i) => i.feature_id === order.id);
     if (item) {
-      const place = item.kind === "merge_approval" ? mergeQueuePlace(item.detail) : null;
+      // An older coordinator sends a queued merge as a merge approval.
+      const queued = item.kind === "merge_queued" || item.kind === "merge_approval";
+      const place = queued ? mergeQueuePlace(item.detail) : null;
       if (place !== null) {
         board.queue.push({ ...row, place });
       } else if (item.kind === "implementation_held") {
