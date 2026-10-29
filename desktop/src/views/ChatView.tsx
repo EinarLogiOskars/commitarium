@@ -363,10 +363,44 @@ export function ChatView({
   }, [running, load]);
 
   const count = (conversation?.messages.length ?? 0) + (conversation?.queued?.length ?? 0);
+  // The chat stays at its end while what it shows grows (cards and work
+  // orders fill in after the messages), until the user scrolls up to read.
+  const pinned = useRef(true);
+  useEffect(() => {
+    pinned.current = true;
+  }, [targetKey]);
   useEffect(() => {
     const el = chatRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
+    if (!el) return;
+    pinned.current = true;
+    el.scrollTop = el.scrollHeight;
   }, [count, running, open, notesOpen]);
+  const loaded = conversation !== null;
+  useEffect(() => {
+    const el = chatRef.current;
+    if (!el || !loaded) return;
+    const stick = () => {
+      if (pinned.current) el.scrollTop = el.scrollHeight;
+    };
+    const resized = new ResizeObserver(stick);
+    const watch = () => {
+      resized.disconnect();
+      for (const child of el.children) resized.observe(child);
+      stick();
+    };
+    const added = new MutationObserver(watch);
+    added.observe(el, { childList: true });
+    watch();
+    const onScroll = () => {
+      pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
+    };
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      resized.disconnect();
+      added.disconnect();
+      el.removeEventListener("scroll", onScroll);
+    };
+  }, [loaded]);
 
   const canSend = !!draft.trim() || attachments.items.length > 0;
   const send = async () => {
