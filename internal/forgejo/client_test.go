@@ -232,6 +232,104 @@ func TestClientClosesAPullRequestAtTheMergeGate(t *testing.T) {
 	}
 }
 
+func emptyPullRequestMergeSpec() workspace.PullRequestMergeSpec {
+	return workspace.PullRequestMergeSpec{
+		Number: 7, FeatureMarker: testPullRequestSpec().FeatureMarker,
+		BaseBranch: "main", HeadBranch: "commitarium/fea_test", HeadCommitID: forgejoTestCommitID,
+	}
+}
+
+func TestClientClosesPullRequestWhoseHeadIsAlreadyOnBase(t *testing.T) {
+	pullRequest := managedPullRequest(testPullRequestSpec())
+	pullRequest.MergeBase = pullRequest.HeadCommitID
+	var requests []string
+	client := newBranchTestClient(t, func(request *http.Request) (*http.Response, error) {
+		requests = append(requests, request.Method+" "+request.URL.Path)
+		switch {
+		case request.Method == http.MethodGet && request.URL.Path == "/api/v1/repos/owner/repository/compare/main..."+forgejoTestCommitID:
+			return jsonResponse(http.StatusOK, `{"total_commits":0,"commits":[],"files":[]}`), nil
+		case request.Method == http.MethodPatch:
+			pullRequest.State = "closed"
+			return pullRequestJSONResponse(t, http.StatusCreated, pullRequest), nil
+		default:
+			return pullRequestJSONResponse(t, http.StatusOK, pullRequest), nil
+		}
+	})
+	closed, err := client.CloseEmptyPullRequest(t.Context(), "owner", "repository", emptyPullRequestMergeSpec())
+	if err != nil || !closed || pullRequest.State != "closed" || len(requests) != 4 {
+		t.Fatalf("closed=%t requests=%v err=%v", closed, requests, err)
+	}
+	// A retry finds it closed and still on the base branch.
+	closed, err = client.CloseEmptyPullRequest(t.Context(), "owner", "repository", emptyPullRequestMergeSpec())
+	if err != nil || !closed {
+		t.Fatalf("retry: closed=%t err=%v", closed, err)
+	}
+}
+
+func TestClientLeavesPullRequestWithChangesToMerge(t *testing.T) {
+	merged := managedPullRequest(testPullRequestSpec())
+	merged.MergeBase = merged.HeadCommitID
+	merged.State, merged.Merged = "closed", true
+	merged.MergeCommitID = "dddddddddddddddddddddddddddddddddddddddd"
+	mergedAt := merged.CreatedAt.Add(time.Minute)
+	merged.MergedAt = &mergedAt
+	ahead := managedPullRequest(testPullRequestSpec())
+	ahead.MergeBase = "cccccccccccccccccccccccccccccccccccccccc"
+	tests := []struct {
+		name        string
+		pullRequest workspace.PullRequest
+		compare     string
+		requests    int
+	}{
+		// Main moved into conflicting changes: the head is not its merge base.
+		{name: "head ahead of its merge base", pullRequest: ahead, requests: 1},
+		// A stale merge base is checked against the branch itself.
+		{name: "commits the base lacks", pullRequest: func() workspace.PullRequest {
+			value := managedPullRequest(testPullRequestSpec())
+			value.MergeBase = value.HeadCommitID
+			return value
+		}(), compare: `{"total_commits":2,"commits":[{},{}],"files":[]}`, requests: 2},
+		// A merge whose response was lost is adopted by the merge itself.
+		{name: "already merged", pullRequest: merged, requests: 1},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			requests := 0
+			client := newBranchTestClient(t, func(request *http.Request) (*http.Response, error) {
+				requests++
+				if request.Method != http.MethodGet {
+					t.Fatalf("unexpected mutation %s %s", request.Method, request.URL)
+				}
+				if strings.Contains(request.URL.Path, "/compare/") {
+					return jsonResponse(http.StatusOK, test.compare), nil
+				}
+				return pullRequestJSONResponse(t, http.StatusOK, test.pullRequest), nil
+			})
+			closed, err := client.CloseEmptyPullRequest(t.Context(), "owner", "repository", emptyPullRequestMergeSpec())
+			if err != nil || closed || requests != test.requests {
+				t.Fatalf("closed=%t requests=%d err=%v", closed, requests, err)
+			}
+		})
+	}
+}
+
+func TestClientRefusesToCloseAnotherPullRequestAsEmpty(t *testing.T) {
+	pullRequest := managedPullRequest(testPullRequestSpec())
+	pullRequest.HeadCommitID = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+	pullRequest.MergeBase = pullRequest.HeadCommitID
+	client := newBranchTestClient(t, func(request *http.Request) (*http.Response, error) {
+		if request.Method != http.MethodGet || strings.Contains(request.URL.Path, "/compare/") {
+			t.Fatalf("unexpected request %s %s", request.Method, request.URL)
+		}
+		return pullRequestJSONResponse(t, http.StatusOK, pullRequest), nil
+	})
+	if _, err := client.CloseEmptyPullRequest(
+		t.Context(), "owner", "repository", emptyPullRequestMergeSpec(),
+	); !errors.Is(err, workspace.ErrPullRequestConflict) {
+		t.Fatalf("expected pull request conflict, got %v", err)
+	}
+}
+
 func TestClientRejectsMergedPullRequestDeletion(t *testing.T) {
 	pullRequest := managedPullRequest(testPullRequestSpec())
 	pullRequest.State = "closed"
@@ -1873,6 +1971,7 @@ func pullRequestJSON(t *testing.T, pullRequest workspace.PullRequest) string {
 		Merged        bool    `json:"merged"`
 		MergedAt      *string `json:"merged_at"`
 		MergeCommitID string  `json:"merge_commit_sha"`
+		MergeBase     string  `json:"merge_base"`
 		Base          struct {
 			Ref string `json:"ref"`
 		} `json:"base"`
@@ -1886,7 +1985,7 @@ func pullRequestJSON(t *testing.T, pullRequest workspace.PullRequest) string {
 		State: pullRequest.State, Draft: pullRequest.Draft,
 		CreatedAt: pullRequest.CreatedAt.Format(time.RFC3339Nano),
 		Merged:    pullRequest.Merged, MergedAt: mergedAt,
-		MergeCommitID: pullRequest.MergeCommitID,
+		MergeCommitID: pullRequest.MergeCommitID, MergeBase: pullRequest.MergeBase,
 		Base: struct {
 			Ref string `json:"ref"`
 		}{Ref: pullRequest.BaseBranch},

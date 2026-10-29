@@ -191,6 +191,18 @@ type PullRequestManager interface {
 	) (PullRequest, error)
 }
 
+// EmptyPullRequestCloser closes a managed pull request with nothing to
+// merge: its approved head commit is already on the base branch. It reports
+// false, changing nothing, for any other pull request.
+type EmptyPullRequestCloser interface {
+	CloseEmptyPullRequest(
+		ctx context.Context,
+		owner string,
+		repository string,
+		spec PullRequestMergeSpec,
+	) (bool, error)
+}
+
 type RepositoryAccessManager interface {
 	EnsureRepositoryAccess(
 		ctx context.Context,
@@ -372,15 +384,35 @@ func (service *Service) MergeApproved(
 	if branch.Name != stored.Branch || branch.CommitID != stored.ApprovedCommitID {
 		return Workspace{}, false, ErrBranchConflict
 	}
+	spec := PullRequestMergeSpec{
+		Number:        stored.PullRequestNumber,
+		FeatureMarker: "<!-- commitarium-feature: " + storedFeature.ID + " -->",
+		BaseBranch:    stored.BaseBranch, HeadBranch: stored.Branch,
+		HeadCommitID: stored.ApprovedCommitID,
+		ApprovalNote: strings.Join(approvalNote, "\n\n"),
+	}
+	// An approved commit already on the base branch, for example from a lead
+	// that found nothing to change, has nothing to merge and Forgejo refuses
+	// it. Its pull request is closed and the commit itself is recorded as the
+	// merge: it is on the base branch, so the work order completes.
+	if closer, ok := service.pullRequests.(EmptyPullRequestCloser); ok {
+		closed, err := closer.CloseEmptyPullRequest(ctx, stored.RepositoryOwner, stored.RepositoryName, spec)
+		if err != nil {
+			return Workspace{}, false, fmt.Errorf("close Forgejo pull request with nothing to merge: %w", err)
+		}
+		if closed {
+			recordedAt := service.now().UTC()
+			updated, err := service.store.MarkMerged(
+				ctx, featureID, stored.ApprovedCommitID, stored.ApprovedCommitID, recordedAt, recordedAt,
+			)
+			if err != nil {
+				return Workspace{}, false, fmt.Errorf("record pull request with nothing to merge: %w", err)
+			}
+			return updated, true, nil
+		}
+	}
 	merged, err := service.pullRequests.MergePullRequest(
-		ctx, stored.RepositoryOwner, stored.RepositoryName,
-		PullRequestMergeSpec{
-			Number:        stored.PullRequestNumber,
-			FeatureMarker: "<!-- commitarium-feature: " + storedFeature.ID + " -->",
-			BaseBranch:    stored.BaseBranch, HeadBranch: stored.Branch,
-			HeadCommitID: stored.ApprovedCommitID,
-			ApprovalNote: strings.Join(approvalNote, "\n\n"),
-		},
+		ctx, stored.RepositoryOwner, stored.RepositoryName, spec,
 	)
 	if err != nil {
 		return Workspace{}, false, fmt.Errorf("merge approved Forgejo pull request: %w", err)
@@ -586,6 +618,11 @@ func (service *Service) GetProjectHandoff(
 			!stored.PullRequestReady() || stored.ApprovedCommitID == "" || stored.MergeReadyAt == nil ||
 			stored.MergeCommitID == "" || stored.MergedAt == nil {
 			return ProjectHandoff{}, ErrConflict
+		}
+		if stored.NothingMerged() {
+			// It added no commit to the default branch, so there is nothing
+			// to hand off, and its recorded commit is another merge's.
+			continue
 		}
 		completed = append(completed, CompletedProjectHandoff{
 			FeatureID:     storedFeature.ID,

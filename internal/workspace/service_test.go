@@ -1532,6 +1532,74 @@ func TestServiceMergesOnlyPinnedRevisionAndAdoptsRecordedResult(t *testing.T) {
 	}
 }
 
+// emptyClosingPullRequests closes the pull request as one with nothing to
+// merge when empty is set, and otherwise merges as recordingPullRequests.
+type emptyClosingPullRequests struct {
+	*recordingPullRequests
+	empty      bool
+	closeSpecs []PullRequestMergeSpec
+}
+
+func (pullRequests *emptyClosingPullRequests) CloseEmptyPullRequest(
+	_ context.Context,
+	_ string,
+	_ string,
+	spec PullRequestMergeSpec,
+) (bool, error) {
+	pullRequests.closeSpecs = append(pullRequests.closeSpecs, spec)
+	return pullRequests.empty, nil
+}
+
+func TestServiceCompletesApprovedCommitAlreadyOnBaseWithoutMerging(t *testing.T) {
+	now := time.Date(2026, time.September, 11, 16, 0, 0, 0, time.UTC)
+	stored := readyTestWorkspace(now)
+	pullRequestAt := now.Add(3 * time.Minute)
+	mergeReadyAt := now.Add(4 * time.Minute)
+	approvedCommit := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	stored.PullRequestNumber = 8
+	stored.PullRequestURL = "http://localhost:3001/owner/repository/pulls/8"
+	stored.PullRequestRecordedAt = &pullRequestAt
+	stored.ApprovedCommitID = approvedCommit
+	stored.MergeReadyAt = &mergeReadyAt
+	stored.UpdatedAt = mergeReadyAt
+	ready := acceptedTestFeature(now)
+	ready.State = feature.StateReadyToMerge
+	for _, empty := range []bool{true, false} {
+		store := &memoryStore{stored: stored}
+		mergeCommit := "cccccccccccccccccccccccccccccccccccccccc"
+		pullRequests := &emptyClosingPullRequests{empty: empty, recordingPullRequests: &recordingPullRequests{
+			planResult: PullRequest{
+				Number: 8, State: "closed", BaseBranch: stored.BaseBranch, HeadBranch: stored.Branch,
+				HeadCommitID: approvedCommit, Merged: true, MergeCommitID: mergeCommit, MergedAt: &pullRequestAt,
+			},
+		}}
+		service := NewServiceWithPreparation(
+			store, fixedFeatureFinder{stored: ready},
+			fixedProjectFinder{stored: project.Project{ID: "prj_test", ForgejoRepository: testRepository(now)}},
+			&recordingBranches{base: Branch{Name: stored.Branch, CommitID: approvedCommit}},
+			&recordingCheckout{}, pullRequests,
+		)
+		service.now = func() time.Time { return now.Add(5 * time.Minute) }
+
+		merged, changed, err := service.MergeApproved(t.Context(), "prj_test", "fea_test")
+		if err != nil || !changed || len(pullRequests.closeSpecs) != 1 ||
+			pullRequests.closeSpecs[0].HeadCommitID != approvedCommit || store.mergedCalls != 1 {
+			t.Fatalf("empty=%t: changed=%t closes=%+v store_calls=%d err=%v",
+				empty, changed, pullRequests.closeSpecs, store.mergedCalls, err)
+		}
+		if empty {
+			// The commit already on main is the durable merge record; Forgejo
+			// is never asked to merge.
+			if merged.MergeCommitID != approvedCommit || !merged.NothingMerged() ||
+				len(pullRequests.mergeSpecs) != 0 {
+				t.Fatalf("nothing to merge: workspace=%+v merges=%d", merged, len(pullRequests.mergeSpecs))
+			}
+		} else if merged.MergeCommitID != mergeCommit || merged.NothingMerged() || len(pullRequests.mergeSpecs) != 1 {
+			t.Fatalf("a pull request with changes did not merge: workspace=%+v merges=%d", merged, len(pullRequests.mergeSpecs))
+		}
+	}
+}
+
 func TestServiceVerifiesReviewerPublicationWithoutWriting(t *testing.T) {
 	now := time.Date(2026, time.September, 10, 5, 0, 0, 0, time.UTC)
 	stored := readyTestWorkspace(now)
@@ -1748,6 +1816,36 @@ func TestGetProjectHandoffReturnsCanonicalHeadAndCompletedWork(t *testing.T) {
 		got.Completed[0].Title != completed.Title || got.Completed[0].MergeCommitID != stored.MergeCommitID ||
 		got.Completed[0].BaseCommitID != stored.BaseCommitID {
 		t.Fatalf("unexpected project handoff %+v", got)
+	}
+}
+
+// A work order completed with nothing to merge added no commit to the
+// default branch, so the handoff leaves it out rather than refusing.
+func TestGetProjectHandoffLeavesOutWorkWithNothingMerged(t *testing.T) {
+	now := time.Date(2026, time.September, 13, 10, 0, 0, 0, time.UTC)
+	completed := acceptedTestFeature(now)
+	completed.State = feature.StateCompleted
+	stored := readyTestWorkspace(now)
+	pullRequestAt := now.Add(3 * time.Minute)
+	mergeReadyAt := now.Add(4 * time.Minute)
+	mergedAt := now.Add(5 * time.Minute)
+	stored.PullRequestNumber = 14
+	stored.PullRequestURL = "http://localhost:3001/owner/repository/pulls/14"
+	stored.PullRequestRecordedAt = &pullRequestAt
+	stored.ApprovedCommitID = stored.BaseCommitID
+	stored.MergeReadyAt = &mergeReadyAt
+	stored.MergeCommitID = stored.BaseCommitID
+	stored.MergedAt = &mergedAt
+	stored.UpdatedAt = mergedAt
+	service := NewService(
+		&memoryStore{stored: stored},
+		fixedFeatureFinder{listed: []feature.Feature{completed}},
+		fixedProjectFinder{stored: project.Project{ID: "prj_test", ForgejoRepository: testRepository(now)}},
+		&recordingBranches{base: Branch{Name: "main", CommitID: commitOf("e")}},
+	)
+	got, err := service.GetProjectHandoff(t.Context(), "prj_test")
+	if err != nil || len(got.Completed) != 0 {
+		t.Fatalf("handoff=%+v err=%v, want no completed work", got, err)
 	}
 }
 
