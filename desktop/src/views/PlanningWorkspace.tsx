@@ -285,7 +285,7 @@ export function PlanningWorkspace({
         <div className="planning__bar">
           <h2>Planning</h2>
           <span className="planning__bar-actions">
-            <button className="ghost" onClick={openAssistant}>
+            <button className="ghost" onClick={() => openAssistant(true)}>
               Talk to the assistant
             </button>
             <button

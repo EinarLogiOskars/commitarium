@@ -14,9 +14,10 @@ export function askAssistantAbout(workOrderTitle: string) {
   );
 }
 
-/** Opens the assistant as it is, as beside the planning workspace. */
-export function openAssistant() {
-  window.dispatchEvent(new CustomEvent(OPEN_ASSISTANT, { detail: {} }));
+/** Opens the assistant as it is, as beside the planning workspace. show
+ * says the user asked for it, so the chat shell brings its chat forward. */
+export function openAssistant(show = false) {
+  window.dispatchEvent(new CustomEvent(OPEN_ASSISTANT, { detail: show ? { show } : {} }));
 }
 
 /**
