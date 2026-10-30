@@ -92,6 +92,7 @@ export function ProjectCards({
         onOpen={openOrder}
         onNew={() => open("new")}
         onAll={() => open("work")}
+        onGraph={() => open("graph")}
       />
       <AgentsCard projectId={projectId} onOpen={openOrder} />
       {hasRepo && (
@@ -250,6 +251,7 @@ function WorkOrdersCard({
   onOpen,
   onNew,
   onAll,
+  onGraph,
 }: {
   features: Feature[] | null;
   items: AttentionItem[];
@@ -258,6 +260,7 @@ function WorkOrdersCard({
   onNew: () => void;
   /** Every work order and session, done ones included. */
   onAll: () => void;
+  onGraph: () => void;
 }) {
   const board = useMemo(
     () => (features ? workBoard(features, items, running) : null),
@@ -329,6 +332,13 @@ function WorkOrdersCard({
           title="Every work order and session, done ones too"
         >
           All work
+        </button>
+        <button
+          className="shell-card__link"
+          onClick={onGraph}
+          title="The project's work as a graph, live and all its history"
+        >
+          Graph
         </button>
       </div>
     </section>

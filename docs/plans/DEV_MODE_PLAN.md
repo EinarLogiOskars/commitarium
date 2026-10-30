@@ -118,6 +118,4 @@ every slice ships on its own.
 
 ## Later
 
-- The pulse hand-over animation from one work order to the next (UI
-  overhaul).
 - Reordering projects in the sidebar.
