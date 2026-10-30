@@ -578,6 +578,7 @@ pub(crate) fn stack_up_with_manager(manager: &profiles::ProfileManager) -> Resul
     let agents_changed = refresh_agent_identities(&file);
     let credentials_changed = transport_changed || forgejo_changed;
     start_core_services(credentials_changed)?;
+    prepare_environment_images();
     reconcile_agent_workers(manager, credentials_changed || agents_changed)
 }
 
@@ -618,6 +619,7 @@ fn stack_update_with_manager(manager: &profiles::ProfileManager) -> Result<(), S
     let agents_changed = refresh_agent_identities(&file);
     let credentials_changed = transport_changed || forgejo_changed;
     start_core_services(credentials_changed)?;
+    prepare_environment_images();
     reconcile_agent_workers(manager, credentials_changed || agents_changed)
 }
 
@@ -670,7 +672,6 @@ pub(crate) fn reconcile_agent_workers(
 ) -> Result<(), String> {
     let agents = agents::fetch(true)?;
     let force_recreate = provision_agents(&agents, true)? || force_recreate;
-    pull_agent_base_images(&agents);
     let services: Vec<String> = agents
         .iter()
         .map(|agent| agents::worker_service(&agent.id))
@@ -720,26 +721,36 @@ pub(crate) fn reconcile_agent_workers(
     Ok(())
 }
 
-/// Bring the base worker images of the providers in use. With an approved
-/// environment the workers run derivatives, so nothing else fetches a new
-/// version's base for the background refresh to rebuild them from. Best
-/// effort: a worker that really lacks its image fails below, and says so.
-fn pull_agent_base_images(agents: &[agents::Agent]) {
+/// Move an approved environment onto this version's base images before the
+/// workers start, so no agent runs on the previous version's image. Without
+/// this the workers would wait for the background refresh. Best effort: that
+/// refresh retries, and the workers can still start on what is here.
+fn prepare_environment_images() {
     if !release_mode() {
         return;
     }
+    let refreshed = agents::fetch(true).and_then(|agents| {
+        pull_agent_base_images(&agents)?;
+        environment::refresh_stale_images()
+    });
+    if let Err(error) = refreshed {
+        eprintln!("[stack] could not refresh the approved environment: {error}");
+    }
+}
+
+/// Bring the base worker images of the providers in use. With an approved
+/// environment the workers run derivatives, so nothing else fetches them.
+fn pull_agent_base_images(agents: &[agents::Agent]) -> Result<(), String> {
     let mut args = vec!["pull", "--policy", "missing"];
     for provider in [agents::Provider::Codex, agents::Provider::Claude] {
         if agents.iter().any(|agent| agent.provider == provider) {
             args.push(provider.template_service());
         }
     }
-    if args.len() == 3 {
-        return;
+    if args.len() > 3 {
+        compose_base(&[TEMPLATE_PROFILE], &args)?;
     }
-    if let Err(error) = compose_base(&[TEMPLATE_PROFILE], &args) {
-        eprintln!("[stack] could not pull the agent base images: {error}");
-    }
+    Ok(())
 }
 
 /// Make each agent's worker addressable: its bearer token, its Forgejo

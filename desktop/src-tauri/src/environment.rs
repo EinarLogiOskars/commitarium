@@ -668,6 +668,20 @@ pub(crate) fn rebuild_environment_images(packages: &[String]) -> Result<(), Stri
     build_environment_images(packages).map(|_| ())
 }
 
+/// Rebuild the derivatives if a base image changed, before the workers start.
+pub(crate) fn refresh_stale_images() -> Result<(), String> {
+    let providers = [
+        (Provider::Codex, Vec::new()),
+        (Provider::Claude, Vec::new()),
+    ];
+    let images = inspect_environment(&providers)?;
+    if environment_plan(images.as_deref()) != EnvironmentPlan::Rebuild {
+        return Ok(());
+    }
+    let packages = tauri::async_runtime::block_on(approved_packages())?;
+    rebuild_environment_images(&packages)
+}
+
 /// Recreate the workers onto the current derivative images.
 pub(crate) fn recreate_environment_workers(
     manager: &profiles::ProfileManager,
