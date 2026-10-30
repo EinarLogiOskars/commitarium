@@ -54,6 +54,7 @@ export function useBoot() {
   const [detail, setDetail] = useState("Checking Docker…");
   const [probe, setProbe] = useState<DockerProbe | null>(null);
   const [progress, setProgress] = useState(0);
+  const [warning, setWarning] = useState<string | null>(null);
   const [request, setRequest] = useState({ id: 0, launchDocker: false });
 
   // Re-run the whole sequence (used by the docker-down "Re-check" button).
@@ -164,7 +165,7 @@ export function useBoot() {
       advanceProgress(30, 82);
       let startupError: string | null = null;
       try {
-        await stackUp();
+        setWarning(await stackUp());
       } catch (e) {
         if (cancelled) return;
         // Compose may report an error after creating some containers, so give
@@ -214,5 +215,5 @@ export function useBoot() {
     };
   }, [request]);
 
-  return { phase, detail, probe, progress, retry, launchDocker };
+  return { phase, detail, probe, progress, warning, retry, launchDocker };
 }

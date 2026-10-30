@@ -56,6 +56,9 @@ Docker / stack lifecycle:
   ready before continuing startup.
 - `stack_up()` / `stack_down()` / `stack_update()` — lifecycle. Start and
   update always bring up Forgejo, the coordinator, and the simulated worker.
+  Start and update resolve to a warning for the user, or null. In a release
+  they rebuild a stale approved environment before the workers start, and warn
+  if that failed while the stack still came up.
   They then read the agents from the coordinator (ADR-016), provision each
   agent's worker (bearer token, `<agent>-lead` and `<agent>-reviewer` Forgejo
   identities, and a generated `agent-<id>-worker` Compose service), and start

@@ -40,9 +40,10 @@ export interface ServiceStatus {
 export const dockerProbe = (): Promise<DockerProbe> => invoke("docker_probe");
 export const launchDockerDesktop = (): Promise<void> => invoke("launch_docker_desktop");
 
-export const stackUp = (): Promise<void> => invoke("stack_up");
+/** Resolves to a warning for the user when the stack is up but needs attention. */
+export const stackUp = (): Promise<string | null> => invoke("stack_up");
 export const stackDown = (): Promise<void> => invoke("stack_down");
-export const stackUpdate = (): Promise<void> => invoke("stack_update");
+export const stackUpdate = (): Promise<string | null> => invoke("stack_update");
 export const stackStatus = (): Promise<ServiceStatus[]> => invoke("stack_status");
 
 // A fixed restricted, non-admin Forgejo account the user sets a password for, to

@@ -29,6 +29,7 @@ const DOCKER_INSTALL_URL: &str = "https://docs.docker.com/get-docker/";
 /// connected services it is allowed to run. The provider templates they are
 /// generated from sit in a profile that is never activated for running.
 pub(crate) const PROVIDER_PROFILES: &[&str] = &[];
+const ENVIRONMENT_WARNING: &str = "Your agents may still be on the previous version, because Commitarium couldn't update their tools. It will keep trying in the background. Until then, work may fail to start.";
 const TEMPLATE_PROFILE: &str = "agent-template";
 const TEMPLATE_SERVICES: &[&str] = &["codex-agent-template", "claude-agent-template"];
 
@@ -548,21 +549,27 @@ pub fn launch_docker_desktop() -> Result<(), String> {
 /// Bring core services up and reconcile every real role worker against its
 /// exact provider profile. A disconnected, expired, or failed profile keeps
 /// only its matching worker stopped; it does not prevent the app from opening.
+/// Returns a warning for the user when the stack is up but something needs
+/// their attention.
 #[tauri::command]
 pub async fn stack_up(
     app: AppHandle,
     manager: State<'_, profiles::ProfileManager>,
-) -> Result<(), String> {
+) -> Result<Option<String>, String> {
     let manager = manager.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || stack_up_with_manager(&manager))
+    let warning = tauri::async_runtime::spawn_blocking(move || start_stack(&manager))
         .await
         .map_err(|_| "could not start the Commitarium stack".to_string())??;
     // The workers are up: check their CLIs now rather than at the next retry.
     cli_updates::wake(&app);
-    Ok(())
+    Ok(warning)
 }
 
 pub(crate) fn stack_up_with_manager(manager: &profiles::ProfileManager) -> Result<(), String> {
+    start_stack(manager).map(|_| ())
+}
+
+fn start_stack(manager: &profiles::ProfileManager) -> Result<Option<String>, String> {
     let file = compose_file()?;
     let transport_changed = bootstrap::prepare_transport_secrets(&file)?;
     if release_mode() {
@@ -578,8 +585,9 @@ pub(crate) fn stack_up_with_manager(manager: &profiles::ProfileManager) -> Resul
     let agents_changed = refresh_agent_identities(&file);
     let credentials_changed = transport_changed || forgejo_changed;
     start_core_services(credentials_changed)?;
-    prepare_environment_images();
-    reconcile_agent_workers(manager, credentials_changed || agents_changed)
+    let warning = prepare_environment_images();
+    reconcile_agent_workers(manager, credentials_changed || agents_changed)?;
+    Ok(warning)
 }
 
 /// Tear the whole Commitarium stack down (project-wide, all profiles).
@@ -601,16 +609,16 @@ pub(crate) fn stack_down_blocking() -> Result<(), String> {
 pub async fn stack_update(
     app: AppHandle,
     manager: State<'_, profiles::ProfileManager>,
-) -> Result<(), String> {
+) -> Result<Option<String>, String> {
     let manager = manager.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || stack_update_with_manager(&manager))
+    let warning = tauri::async_runtime::spawn_blocking(move || stack_update_with_manager(&manager))
         .await
         .map_err(|_| "could not update the Commitarium stack".to_string())??;
     cli_updates::wake(&app);
-    Ok(())
+    Ok(warning)
 }
 
-fn stack_update_with_manager(manager: &profiles::ProfileManager) -> Result<(), String> {
+fn stack_update_with_manager(manager: &profiles::ProfileManager) -> Result<Option<String>, String> {
     let file = compose_file()?;
     let transport_changed = bootstrap::prepare_transport_secrets(&file)?;
     compose_base(PROVIDER_PROFILES, &["pull"])?;
@@ -619,8 +627,9 @@ fn stack_update_with_manager(manager: &profiles::ProfileManager) -> Result<(), S
     let agents_changed = refresh_agent_identities(&file);
     let credentials_changed = transport_changed || forgejo_changed;
     start_core_services(credentials_changed)?;
-    prepare_environment_images();
-    reconcile_agent_workers(manager, credentials_changed || agents_changed)
+    let warning = prepare_environment_images();
+    reconcile_agent_workers(manager, credentials_changed || agents_changed)?;
+    Ok(warning)
 }
 
 /// Bring the known agents' Forgejo tokens up to date (scopes, the one-time
@@ -724,18 +733,19 @@ pub(crate) fn reconcile_agent_workers(
 /// Move an approved environment onto this version's base images before the
 /// workers start, so no agent runs on the previous version's image. Without
 /// this the workers would wait for the background refresh. Best effort: that
-/// refresh retries, and the workers can still start on what is here.
-fn prepare_environment_images() {
+/// refresh retries, and the workers can still start on what is here, so a
+/// failure comes back as a warning for the user.
+fn prepare_environment_images() -> Option<String> {
     if !release_mode() {
-        return;
+        return None;
     }
     let refreshed = agents::fetch(true).and_then(|agents| {
         pull_agent_base_images(&agents)?;
         environment::refresh_stale_images()
     });
-    if let Err(error) = refreshed {
-        eprintln!("[stack] could not refresh the approved environment: {error}");
-    }
+    let error = refreshed.err()?;
+    eprintln!("[stack] could not refresh the approved environment: {error}");
+    Some(ENVIRONMENT_WARNING.to_string())
 }
 
 /// Bring the base worker images of the providers in use. With an approved

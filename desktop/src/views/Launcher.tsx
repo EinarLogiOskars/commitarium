@@ -53,11 +53,12 @@ export function Launcher({ onStackChanged }: { onStackChanged?: () => void }) {
     return () => clearInterval(id);
   }, [ready, refreshStatus]);
 
-  const act = async (kind: Busy, fn: () => Promise<void>) => {
+  const act = async (kind: Busy, fn: () => Promise<string | null | void>) => {
     setBusy(kind);
     setError(null);
     try {
-      await fn();
+      const warning = await fn();
+      if (warning) setError(warning);
       await refreshStatus();
       onStackChanged?.();
     } catch (e) {
