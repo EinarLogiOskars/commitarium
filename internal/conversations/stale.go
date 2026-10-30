@@ -47,6 +47,7 @@ func (stored *record) settleStale(
 	for index := range stored.Actions {
 		action := &stored.Actions[index]
 		if action.Status == ActionProposed && stored.Goal.covers(*action) {
+			action.LeftForUser = false
 			action.Status, action.Settled, action.Result, action.UpdatedAt = ActionApplied, true,
 				"No longer needed: autopilot has taken this on since.", at
 			settled = true
@@ -72,6 +73,7 @@ func (stored *record) settleStale(
 			stored.addEvent(fmt.Sprintf("You started “%s”, so it no longer waits for “%s”.",
 				titles[action.WorkOrderID], followsName(action.After, titles)), at)
 		}
+		action.LeftForUser = false
 		action.Status, action.Settled, action.Queued, action.Result, action.UpdatedAt = ActionApplied, true, false, result, at
 		settled = true
 	}
@@ -103,6 +105,7 @@ func (service *Service) Settle(ctx context.Context, scope, actionID, result stri
 			return Conversation{}, ErrNotPending
 		}
 		now := service.now()
+		action.LeftForUser = false
 		action.Status, action.Settled, action.Queued, action.Result, action.UpdatedAt = ActionApplied, true, false, result, now
 		stored.UpdatedAt = now
 		return stored.Conversation, service.write(stored)

@@ -352,6 +352,7 @@ func (manager *Manager) reconcile(
 			if err != nil {
 				return manager.localConflict(ctx, "checkout status is unavailable")
 			}
+			status = withoutSeeded(target, status)
 			if status != "" {
 				return manager.agentConflict(ctx, "the checkout must be clean at the reported commit but has "+
 					"uncommitted changes ("+changedPaths(status)+"); commit what belongs to the work and "+

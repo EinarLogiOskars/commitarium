@@ -798,3 +798,43 @@ func TestAutopilotStartsWorkSideBySideUpToTheSafetyCap(t *testing.T) {
 		t.Fatalf("applied %+v err=%v, want %s in the freed slot", apply, err, next)
 	}
 }
+
+// An action autopilot leaves for the user says so on itself, for the app to
+// show, and stops saying so once it is applied.
+func TestAnActionLeftForTheUserIsMarkedUntilApplied(t *testing.T) {
+	service, worker := newTestService(t)
+	service.config.Visions = &visionStub{plan: featureartifact.VisionPlan{Priorities: []featureartifact.VisionPriority{
+		{Level: 0, Items: []featureartifact.VisionItem{{ID: "list", Title: "Show the log", FeatureID: "fea_list"}}},
+	}}}
+	service.config.Features = &featuresStub{features: []feature.Feature{{ID: "fea_list", State: feature.StateImplementing}}}
+	if _, err := service.StartGoal(t.Context(), "prj_test", 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Send(t.Context(), "prj_test", "Go on", "msg-1"); err != nil {
+		t.Fatal(err)
+	}
+	worker.finish(workerhttp.TerminalResult{
+		Outcome: workerhttp.OutcomeCompleted, Disposition: workerhttp.DispositionSucceeded, Summary: "Starting over.",
+		AssistantTurn: &featureartifact.AssistantTurn{Actions: []featureartifact.AssistantAction{
+			{Type: featureartifact.AssistantRecoverWorkOrder, Reason: "Unusable", WorkOrderID: "fea_list", How: "back_to_ready"},
+		}},
+	})
+	if _, err := service.Get(t.Context(), "prj_test"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.autopilotActions(t.Context(), "prj_test"); err != nil {
+		t.Fatal(err)
+	}
+	conversation, _ := service.Get(t.Context(), "prj_test")
+	left := conversation.Actions[len(conversation.Actions)-1]
+	if !left.LeftForUser {
+		t.Fatalf("left = %+v", left)
+	}
+	applied, err := service.Resolve(t.Context(), "prj_test", left.ID, ActionApplied, "Sent back to Ready.", Created{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if action := applied.Actions[len(applied.Actions)-1]; action.LeftForUser || action.Status != ActionApplied {
+		t.Fatalf("applied = %+v", action)
+	}
+}

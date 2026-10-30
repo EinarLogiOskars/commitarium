@@ -54,7 +54,15 @@ func (api *API) applyRecoverWorkOrder(
 			return "", false
 		}
 	}
+	roundCap := latest.Status == execution.RunStatusWaitingForUser && !latest.Paused &&
+		latest.WaitKind == execution.RunWaitKindRoundCap
+	if roundCap && how != execution.RecoveryBackToReady {
+		return api.continueRoundCap(w, r, stored, latest, action, how)
+	}
 	fingerprint, refusal := api.recoveryRefusal(r, latest.ID, how)
+	if roundCap {
+		fingerprint, refusal = execution.RoundCapFingerprint, api.roundCapRefusal(ctx, stored)
+	}
 	if refusal != "" {
 		writeError(w, http.StatusConflict, "recovery_refused", refusal)
 		return "", false
@@ -204,4 +212,89 @@ func exhaustedDetail(title string, kind execution.BlockerKind) string {
 			"problem in Commitarium. Report it, or start the work order over."
 	}
 	return title + " couldn't be finished. Report it, or start the work order over."
+}
+
+// roundCapWorkflow continues a planning run past its round limit.
+type roundCapWorkflow interface {
+	ContinueRoundCap(ctx context.Context, runID, actionID, guidance string, fromAssistant bool) (execution.Run, bool, error)
+}
+
+// continueRoundCap continues a work order whose run reached its planning
+// round limit, with a few more rounds and the assistant's guidance: the
+// assistant handles a work order's first round limit before the user does
+// (ADR-032). A review round limit cannot be continued.
+func (api *API) continueRoundCap(
+	w http.ResponseWriter, r *http.Request, stored feature.Feature, latest execution.Run,
+	action conversations.Action, how execution.RecoveryHow,
+) (string, bool) {
+	ctx := r.Context()
+	if how != execution.RecoveryContinue && how != execution.RecoveryMessage {
+		writeError(w, http.StatusConflict, "recovery_refused", fmt.Sprintf(
+			"“%s” waits on its round limit, not a blocker: continue it with guidance that settles the open point, "+
+				"or send it back to Ready (back_to_ready).", stored.Title))
+		return "", false
+	}
+	if refusal := api.roundCapRefusal(ctx, stored); refusal != "" {
+		writeError(w, http.StatusConflict, "recovery_refused", refusal)
+		return "", false
+	}
+	continuing, ok := api.realWorkflow.(roundCapWorkflow)
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable, "recovery_unavailable", "continuing a work order needs real agents")
+		return "", false
+	}
+	actionID := runActionIDForKey("assistant-" + action.ID)
+	if _, _, err := continuing.ContinueRoundCap(ctx, latest.ID, actionID, action.Guidance, true); err != nil {
+		if errors.Is(err, orchestration.ErrRoundCapNotContinuable) {
+			writeError(w, http.StatusConflict, "recovery_refused", fmt.Sprintf(
+				"“%s” stopped at its review round limit, which cannot be continued: send it back to Ready "+
+					"(back_to_ready) when the work went the wrong way, or tell the user plainly the one point its "+
+					"agents disagree on and ask for their decision.", stored.Title))
+			return "", false
+		}
+		log.Printf("continue the assistant's work order %q past its round limit: %v", stored.ID, err)
+		writeError(w, http.StatusConflict, "recovery_not_allowed", "the work order cannot continue now: "+err.Error())
+		return "", false
+	}
+	if store, ok := api.execution.(interface {
+		RecordRunRecovery(context.Context, execution.Recovery) error
+	}); ok {
+		if err := store.RecordRunRecovery(ctx, execution.Recovery{
+			ID: actionID, RunID: latest.ID, Fingerprint: execution.RoundCapFingerprint, How: execution.RecoveryContinue,
+			Guidance: action.Guidance, FromAssistant: true, CreatedAt: time.Now().UTC(),
+		}); err != nil {
+			log.Printf("record the round-limit continuation of run %q: %v", latest.ID, err)
+		}
+	}
+	return fmt.Sprintf("Continued “%s” with %d more planning rounds.", stored.Title, orchestration.RoundCapExtraRounds), true
+}
+
+// roundCapHandled reports whether the assistant already handled a round
+// limit of the work order, on any of its runs.
+func (api *API) roundCapHandled(ctx context.Context, featureID string) bool {
+	blockers, ok := api.execution.(runBlockers)
+	if !ok {
+		return false
+	}
+	runs, err := api.execution.RunsForFeature(ctx, featureID)
+	if err != nil {
+		return false
+	}
+	for _, run := range runs {
+		if recoveries, err := blockers.RunRecoveries(ctx, run.ID); err == nil && execution.RoundCapHandled(recoveries) {
+			return true
+		}
+	}
+	return false
+}
+
+// roundCapRefusal says why autopilot may not handle a work order's round
+// limit again: it handled one already, so this one is the user's.
+func (api *API) roundCapRefusal(ctx context.Context, stored feature.Feature) string {
+	if !approvedByAutopilot(ctx) || !api.roundCapHandled(ctx, stored.ID) {
+		return ""
+	}
+	return fmt.Sprintf("“%s” reached its round limit again after you handled it once; it is the user's now. "+
+		"Tell them plainly, in a sentence or two, the one point its agents cannot settle, and ask for their decision.",
+		stored.Title)
 }

@@ -41,7 +41,12 @@ import type {
   VisionPlanning,
   VisionPriority,
 } from "../api/types";
-import { appliesItself, assistantMode, assistantModeNote } from "./assistantMode";
+import {
+  appliesItself,
+  assistantMode,
+  assistantModeNote,
+  autoAppliedInBuilds,
+} from "./assistantMode";
 import { Markdown } from "./Markdown";
 import { useCatalogModels, useModelName } from "./useModelName";
 import { agentName, reloadAgents, useAgentList, useAgents } from "./useAgents";
@@ -547,14 +552,18 @@ export function ChatView({
   const passedOver = passedOverQuestions(conversation?.messages ?? []);
 
   // A created app or project that did not start keeps its card, with Try
-  // again.
+  // again. Where Mayka builds everything, what Commitarium applies by itself
+  // is a line from the moment she proposes it, with no card to approve in
+  // the gap before it is applied.
   const asLine = (action: AssistantAction) =>
     !action.start_failed &&
-    (builds ||
-      action.type === "answer_helper" ||
-      action.type === "research" ||
-      action.type === "update_plan") &&
-    appliesItself(action);
+    (builds && action.status === "proposed"
+      ? autoAppliedInBuilds(action, { goal: conversation?.goal })
+      : (builds ||
+          action.type === "answer_helper" ||
+          action.type === "research" ||
+          action.type === "update_plan") &&
+        appliesItself(action));
   // A turn's work actions fold into one summary line, and the autopilot
   // lines that repeat them are not shown again.
   const turnPieces = new Map(
@@ -576,75 +585,84 @@ export function ChatView({
         action.status === "applied" &&
         !!changes.get(action.id)?.document,
     )?.id;
+  // A work order created and then started has a card for each: its line
+  // shows once, at its latest card, beside the latest news about it.
+  const lastLiveCard = new Map<string, string>();
+  for (const action of conversation?.actions ?? []) {
+    if (isLiveOrder(action)) lastLiveCard.set(action.work_order_id, action.id);
+  }
   const turnEntries = (messageId: string): QuietEntry<ReactElement>[] =>
-    (turnPieces.get(messageId) ?? []).map((piece) => {
-      if (piece.kind === "group") {
-        const line = groupLine(piece);
+    (turnPieces.get(messageId) ?? [])
+      .map((piece): QuietEntry<ReactElement> | null => {
+        if (piece.kind === "group") {
+          const line = groupLine(piece);
+          return {
+            quiet: line,
+            node: (
+              <AppliedGroup
+                key={piece.actions[0].id}
+                summary={piece.summary}
+                items={piece.items}
+                tone={line.tone}
+                onOpenOrder={onOpenOrder}
+              />
+            ),
+          };
+        }
+        const action = piece.action;
+        if (work && isLiveOrder(action)) {
+          const id = action.work_order_id;
+          if (lastLiveCard.get(id) !== action.id) return null;
+          const order = orders.get(id);
+          const running = work.running.has(id);
+          const waiting = !running && work.waiting.has(id);
+          const title = order?.title ?? (appliedWhat(action.title) || action.title || id);
+          const state = waiting ? "Waits for you" : order ? ORDER_STATE_LABEL[order.state] : "";
+          const line = orderLine(title, state, {
+            running,
+            waiting,
+            done: order?.state === "completed" || order?.state === "cancelled",
+          });
+          return {
+            quiet: line,
+            node: (
+              <QuietRow
+                key={action.id}
+                tone={line.tone}
+                pulse={running}
+                title={action.reason ? `Why: ${action.reason}` : undefined}
+              >
+                {onOpenOrder ? (
+                  <button className="quiet__order" onClick={() => onOpenOrder(id)}>
+                    {line.text} ›
+                  </button>
+                ) : (
+                  line.text
+                )}
+              </QuietRow>
+            ),
+          };
+        }
+        if (!asLine(action)) return { block: renderAction(action) };
+        const running =
+          action.type === "research" && (conversation?.researching ?? []).includes(action.title);
+        const change = changes.get(action.id);
+        const line = appliedLine(action, change, running);
+        if (action.id === latestPlanDocument) line.pinned = true;
         return {
           quiet: line,
           node: (
-            <AppliedGroup
-              key={piece.actions[0].id}
-              summary={piece.summary}
-              items={piece.items}
-              tone={line.tone}
-              onOpenOrder={onOpenOrder}
+            <AppliedLine
+              key={action.id}
+              action={action}
+              line={line}
+              change={change}
+              running={running}
             />
           ),
         };
-      }
-      const action = piece.action;
-      if (work && isLiveOrder(action)) {
-        const id = action.work_order_id;
-        const order = orders.get(id);
-        const running = work.running.has(id);
-        const waiting = !running && work.waiting.has(id);
-        const title = order?.title ?? (appliedWhat(action.title) || action.title || id);
-        const state = waiting ? "Waits for you" : order ? ORDER_STATE_LABEL[order.state] : "";
-        const line = orderLine(title, state, {
-          running,
-          waiting,
-          done: order?.state === "completed" || order?.state === "cancelled",
-        });
-        return {
-          quiet: line,
-          node: (
-            <QuietRow
-              key={action.id}
-              tone={line.tone}
-              pulse={running}
-              title={action.reason ? `Why: ${action.reason}` : undefined}
-            >
-              {onOpenOrder ? (
-                <button className="quiet__order" onClick={() => onOpenOrder(id)}>
-                  {line.text} ›
-                </button>
-              ) : (
-                line.text
-              )}
-            </QuietRow>
-          ),
-        };
-      }
-      if (!asLine(action)) return { block: renderAction(action) };
-      const running =
-        action.type === "research" && (conversation?.researching ?? []).includes(action.title);
-      const change = changes.get(action.id);
-      const line = appliedLine(action, change, running);
-      if (action.id === latestPlanDocument) line.pinned = true;
-      return {
-        quiet: line,
-        node: (
-          <AppliedLine
-            key={action.id}
-            action={action}
-            line={line}
-            change={change}
-            running={running}
-          />
-        ),
-      };
-    });
+      })
+      .filter((entry): entry is QuietEntry<ReactElement> => entry !== null);
 
   // A card for what is not a quiet line: an action card.
   const renderAction = (action: AssistantAction) => (

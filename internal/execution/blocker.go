@@ -169,3 +169,24 @@ func NewestRun(runs []Run) Run {
 	}
 	return newest
 }
+
+// RoundCapFingerprint marks a recovery of a run waiting on its planning or
+// review round limit. The assistant handles a work order's first round
+// limit; once a recovery of one is recorded on any of its runs, the next
+// round limit is the user's.
+const RoundCapFingerprint = "round_cap"
+
+// RoundCapExtraRounds is how many planning rounds continuing a planning
+// discussion past its round limit grants.
+const RoundCapExtraRounds = 3
+
+// RoundCapHandled reports whether a round limit was already handled on one
+// of these recoveries.
+func RoundCapHandled(recoveries []Recovery) bool {
+	for _, recovery := range recoveries {
+		if recovery.Fingerprint == RoundCapFingerprint {
+			return true
+		}
+	}
+	return false
+}

@@ -114,13 +114,15 @@ func TestSlicesBecomeItemsAndBriefs(t *testing.T) {
 		t.Fatalf("the round's plan = %+v", round.Plan.Priorities)
 	}
 	firstBrief := SliceBrief(round, model)
-	if !strings.Contains(firstBrief, "Commit the plan, as it is, at "+path) || !strings.Contains(firstBrief, "- [ ] 3. Export a CSV") ||
-		!strings.Contains(firstBrief, "Digest model") {
+	if !strings.Contains(firstBrief, "The written plan is at "+path+" in your checkout") ||
+		!strings.Contains(firstBrief, "This is the first slice: commit the plan with it.") ||
+		!strings.Contains(firstBrief, "Digest model") || strings.Contains(firstBrief, "<plan") ||
+		strings.Contains(firstBrief, "- [ ] 3. Export a CSV") {
 		t.Fatalf("the first slice's brief = %q", firstBrief)
 	}
 	for _, later := range []featureartifact.VisionItem{page, export.Items[0]} {
 		brief := SliceBrief(round, later)
-		if !strings.Contains(brief, "read the plan there") || !strings.Contains(brief, path) ||
+		if !strings.Contains(brief, "This is a later slice") || !strings.Contains(brief, path) ||
 			!strings.Contains(brief, later.Title) || strings.Contains(brief, "<plan") {
 			t.Fatalf("a later slice's brief = %q", brief)
 		}
