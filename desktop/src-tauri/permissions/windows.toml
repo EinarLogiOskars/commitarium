@@ -32,6 +32,7 @@ permissions = [
   "allow-restore-backup",
   "allow-check-desktop-update",
   "allow-install-desktop-update",
+  "allow-restart-app",
   "allow-load-ui-state",
   "allow-save-ui-state",
   "allow-inspect-folder",
