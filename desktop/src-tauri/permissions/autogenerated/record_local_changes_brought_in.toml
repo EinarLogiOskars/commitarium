@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-record-local-changes-brought-in"
+description = "Enables the record_local_changes_brought_in command without any pre-configured scope."
+commands.allow = ["record_local_changes_brought_in"]
+
+[[permission]]
+identifier = "deny-record-local-changes-brought-in"
+description = "Denies the record_local_changes_brought_in command without any pre-configured scope."
+commands.deny = ["record_local_changes_brought_in"]

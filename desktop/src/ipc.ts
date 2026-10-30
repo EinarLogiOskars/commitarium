@@ -320,6 +320,9 @@ export interface ProjectTargetState {
   watermarkCommitId: string | null;
   localCommitId: string | null;
   unsyncedFeatures: CompletedProjectSyncItem[];
+  /** Commits on the user's computer that Commitarium has not seen. */
+  localCommits: number;
+  uncommittedFiles: number;
 }
 
 export interface ProjectSyncState {
@@ -406,6 +409,21 @@ export interface ProjectUpstreamResult {
 
 export const getProjectSyncState = (projectId: string): Promise<ProjectSyncState> =>
   invoke("get_project_sync_state", { projectId });
+
+export interface LocalChanges {
+  headCommitId: string;
+  commits: number;
+  files: string[];
+  uncommittedFiles: number;
+  patch: string;
+}
+
+/** The commits on the user's computer that Commitarium has not seen. */
+export const prepareLocalChanges = (projectId: string): Promise<LocalChanges> =>
+  invoke("prepare_local_changes", { projectId });
+
+export const recordLocalChangesBroughtIn = (projectId: string, commitId: string): Promise<void> =>
+  invoke("record_local_changes_brought_in", { projectId, commitId });
 
 export const getGitIdentity = (parentPath?: string): Promise<GitIdentityState> =>
   invoke("get_git_identity", { parentPath });

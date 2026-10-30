@@ -620,6 +620,14 @@ only the fixed commands below; it cannot provide an update URL, payload, or
 signature.
 
 - `check_desktop_update() -> DesktopUpdateCheck`
+- `prepare_local_changes(projectId) -> LocalChanges` returns the local commits
+  Commitarium has not seen as one patch, with the changed files and the count
+  of uncommitted files, which stay out. The renderer attaches the patch as a
+  project document and asks the assistant for a work order titled
+  `Bring in local changes <commit>`.
+- `record_local_changes_brought_in(projectId, commitId)` notes the commit taken.
+  Once that work order merges and the branch is still at that commit, a project
+  sync takes the merged project on top of it instead of applying a patch.
 - `restart_app()` closes the app and opens it again, skipping the quit
   confirmation. Services keep running, and startup reconciles the stack.
 - `install_desktop_update(expectedVersion) -> InstallDesktopUpdateResult`

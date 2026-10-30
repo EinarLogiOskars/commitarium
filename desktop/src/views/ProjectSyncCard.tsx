@@ -10,10 +10,16 @@ import {
   synchronizeProjectLocally,
   previewProjectUpstreamBranch,
   publishProjectUpstreamBranch,
+  prepareLocalChanges,
+  recordLocalChangesBroughtIn,
   type GitProviderProbe,
+  type LocalChanges,
   type ProjectSyncState,
   type ProjectUpstreamResult,
 } from "../ipc";
+import { sendToAssistant } from "../api/assistant";
+import { addDocument } from "../api/documents";
+import { bringInDocument, bringInMessage } from "./bringIn";
 
 const POLL_MS = 5000;
 
@@ -117,16 +123,20 @@ function needsFirstRemote(state: ProjectSyncState): boolean {
 // remote takes a form, so those open the full card on its own page.
 export function CompactProjectSync({
   projectId,
+  chat,
   onOpenFull,
 }: {
   projectId: string;
+  /** The chat on screen, which Mayka hears about local changes in. */
+  chat: string | undefined;
   onOpenFull: () => void;
 }) {
   const { state, error, load } = useProjectSync(projectId);
-  const [busy, setBusy] = useState<null | "pull" | "prepare" | "push">(null);
+  const [busy, setBusy] = useState<null | "pull" | "prepare" | "push" | "bring-in">(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [push, setPush] = useState<ProjectUpstreamResult | null>(null);
+  const [bringIn, setBringIn] = useState<LocalChanges | null>(null);
 
   if (!state) {
     return error ? (
@@ -138,6 +148,7 @@ export function CompactProjectSync({
 
   const git = state.source?.sourceType === "git";
   const behind = state.local.unsyncedFeatures.length;
+  const localCommits = state.local.localCommits;
   const localSynced = state.local.watermarkCommitId === state.canonical.headCommitId;
   const firstRemote = needsFirstRemote(state);
 
@@ -151,6 +162,42 @@ export function CompactProjectSync({
         `Sync from Commitarium (${state.canonical.headCommitId.slice(0, 12)})`,
       );
       setNote(r.created ? "Your copy has the latest work." : "Already up to date.");
+      await load();
+    } catch (e) {
+      setActionError(String(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  // Bring in shows what would leave the computer before anything does.
+  const prepareBringIn = async () => {
+    setBusy("bring-in");
+    setActionError(null);
+    setNote(null);
+    try {
+      setBringIn(await prepareLocalChanges(state.projectId));
+    } catch (e) {
+      setActionError(String(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+  const confirmBringIn = async () => {
+    if (!bringIn) return;
+    setBusy("bring-in");
+    setActionError(null);
+    try {
+      const name = bringInDocument(bringIn.headCommitId);
+      await addDocument(state.projectId, new File([bringIn.patch], name));
+      await sendToAssistant(
+        chat ? { scope: state.projectId, chat } : state.projectId,
+        bringInMessage(bringIn, name),
+        crypto.randomUUID(),
+      );
+      await recordLocalChangesBroughtIn(state.projectId, bringIn.headCommitId);
+      setBringIn(null);
+      setNote("Mayka is bringing your changes in. Pull once that work order merges.");
       await load();
     } catch (e) {
       setActionError(String(e));
@@ -214,6 +261,8 @@ export function CompactProjectSync({
               : behind
                 ? `${behind} work order${behind === 1 ? "" : "s"} to pull`
                 : "Up to date"}
+            {localCommits > 0 &&
+              ` · ${localCommits} local commit${localCommits === 1 ? "" : "s"} to bring in`}
           </span>
         </span>
         {!state.source ? (
@@ -234,7 +283,56 @@ export function CompactProjectSync({
             </button>
           )
         )}
+        {localCommits > 0 && (
+          <button
+            className="ghost sync-card__btn"
+            onClick={() => void prepareBringIn()}
+            disabled={busy !== null}
+            title="Send your local commits to Commitarium, where Mayka merges them"
+          >
+            {busy === "bring-in" && !bringIn ? "Checking…" : "Bring in"}
+          </button>
+        )}
       </div>
+
+      {bringIn && (
+        <div className="sync-card__confirm">
+          <p className="shell-card__text">
+            Send {bringIn.files.length} changed file{bringIn.files.length === 1 ? "" : "s"} to your
+            agents and their model provider? Mayka merges them through a reviewed work order.
+          </p>
+          <p className="muted shell-card__text">
+            {bringIn.files.slice(0, 8).join(", ")}
+            {bringIn.files.length > 8 && ` and ${bringIn.files.length - 8} more`}
+          </p>
+          {bringIn.uncommittedFiles > 0 && (
+            <p className="muted shell-card__text">
+              {bringIn.uncommittedFiles} uncommitted file
+              {bringIn.uncommittedFiles === 1 ? "" : "s"} won&apos;t be included. Commit first if
+              they belong in this.
+            </p>
+          )}
+          <p className="muted shell-card__text">
+            Works best when you&apos;ve paused work on these files.
+          </p>
+          <div className="row">
+            <button
+              className="primary"
+              onClick={() => void confirmBringIn()}
+              disabled={busy !== null}
+            >
+              {busy === "bring-in" ? "Sending…" : "Bring in"}
+            </button>
+            <button
+              className="ghost"
+              onClick={() => setBringIn(null)}
+              disabled={busy === "bring-in"}
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
 
       {git &&
         !firstRemote &&

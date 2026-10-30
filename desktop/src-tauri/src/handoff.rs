@@ -356,6 +356,19 @@ fn valid_object_id(value: &str) -> bool {
 }
 
 fn inspect_clean_target(repository: &Path) -> Result<(String, String), String> {
+    let target = inspect_target(repository)?;
+    let status = git_line_allow_empty(
+        repository,
+        &["status", "--porcelain=v1", "--untracked-files=all"],
+    )?;
+    if !status.is_empty() {
+        return Err("the local repository has uncommitted or untracked files".into());
+    }
+    Ok(target)
+}
+
+/// The checked-out branch and its commit, whatever else is in the checkout.
+fn inspect_target(repository: &Path) -> Result<(String, String), String> {
     let root = git_line(repository, &["rev-parse", "--show-toplevel"])?;
     let canonical_root =
         std::fs::canonicalize(&root).map_err(|e| format!("resolve local repository root: {e}"))?;
@@ -364,13 +377,6 @@ fn inspect_clean_target(repository: &Path) -> Result<(String, String), String> {
     }
     let current = git_line(repository, &["symbolic-ref", "--quiet", "--short", "HEAD"])?;
     check_branch_name(repository, &current)?;
-    let status = git_line_allow_empty(
-        repository,
-        &["status", "--porcelain=v1", "--untracked-files=all"],
-    )?;
-    if !status.is_empty() {
-        return Err("the local repository has uncommitted or untracked files".into());
-    }
     let head = git_line(repository, &["rev-parse", "HEAD"])?;
     Ok((current, head))
 }
@@ -620,7 +626,6 @@ fn apply_patch(repository: &Path, patch_path: &Path) -> Result<(), String> {
 
 /// Say in plain words which files clash, from `git apply`'s report.
 fn conflict_message(report: &str) -> String {
-    const SHOWN: usize = 5;
     let mut files: Vec<&str> = report
         .lines()
         .filter_map(|line| {
@@ -638,17 +643,61 @@ fn conflict_message(report: &str) -> String {
         "Your computer and Commitarium both changed the same files, so nothing was pulled and your copy is unchanged.",
     );
     if !files.is_empty() {
-        message.push_str(&format!(
-            " Files in conflict ({}): {}",
-            files.len(),
-            files[..files.len().min(SHOWN)].join(", ")
-        ));
-        if files.len() > SHOWN {
-            message.push_str(&format!(" and {} more", files.len() - SHOWN));
-        }
-        message.push('.');
+        message.push_str(&format!(" Files in conflict {}.", file_list(&files)));
     }
+    message.push_str(" Commit your work and use Bring in, and Mayka will merge both sides.");
     message
+}
+
+/// `(7): a, b, c, d, e and 2 more`
+fn file_list(files: &[&str]) -> String {
+    const SHOWN: usize = 5;
+    let shown = files[..files.len().min(SHOWN)].join(", ");
+    let more = files.len().saturating_sub(SHOWN);
+    match more {
+        0 => format!("({}): {shown}", files.len()),
+        _ => format!("({}): {shown} and {more} more", files.len()),
+    }
+}
+
+/// Move the branch to a commit made on top of it, leaving uncommitted work
+/// alone. Git refuses, changing nothing, when that work is in a file the
+/// commit changes.
+fn fast_forward_keeping_changes(
+    repository: &Path,
+    branch: &str,
+    expected_base: &str,
+    commit: &str,
+) -> Result<(), String> {
+    let (current, head) = inspect_target(repository)?;
+    if current != branch || head != expected_base {
+        return Err("the local branch moved while synchronization was prepared".into());
+    }
+    let output = crate::process::command("git")
+        .arg("-C")
+        .arg(repository)
+        .args(["-c", "core.hooksPath=/dev/null"])
+        .args(["merge", "--quiet", "--ff-only", "--no-stat", commit])
+        .output()
+        .map_err(|e| format!("fast-forward local target branch: {e}"))?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let report = String::from_utf8_lossy(&output.stderr);
+    let files: Vec<&str> = report
+        .lines()
+        .filter_map(|line| line.strip_prefix('\t'))
+        .collect();
+    if files.is_empty() {
+        return Err(format!(
+            "fast-forward local target branch: {}",
+            report.trim()
+        ));
+    }
+    Err(format!(
+        "Your uncommitted changes would be overwritten, so nothing was pulled. Files {}. Commit them, then try again.",
+        file_list(&files)
+    ))
 }
 
 fn create_clean_commit(
@@ -1089,7 +1138,7 @@ mod tests {
             .map(|file| format!("Applied patch to 'f{file}' with conflicts."))
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(conflict_message(&many).ends_with("and 2 more."));
+        assert!(conflict_message(&many).contains("and 2 more."));
     }
 
     struct GitFixture {

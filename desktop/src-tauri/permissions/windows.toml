@@ -33,6 +33,8 @@ permissions = [
   "allow-check-desktop-update",
   "allow-install-desktop-update",
   "allow-restart-app",
+  "allow-prepare-local-changes",
+  "allow-record-local-changes-brought-in",
   "allow-load-ui-state",
   "allow-save-ui-state",
   "allow-inspect-folder",
