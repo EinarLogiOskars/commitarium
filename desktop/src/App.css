@@ -1749,6 +1749,19 @@ button.primary:hover:not(:disabled) {
   color: var(--warn);
 }
 
+.startup-notice {
+  position: fixed;
+  left: 50%;
+  bottom: 16px;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: min(560px, calc(100vw - 32px));
+  background: var(--panel, var(--bg));
+  transform: translateX(-50%);
+}
+
 /* New work order — per-order options. */
 .neworder__options {
   flex: none;

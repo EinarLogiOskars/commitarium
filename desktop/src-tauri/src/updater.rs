@@ -255,6 +255,20 @@ pub async fn install_desktop_update(
     Ok(InstallDesktopUpdateResult::Installing { version })
 }
 
+/// Close the app and open it again; startup then brings the stack back in
+/// line. Services keep running throughout, so work in flight continues, and
+/// the quit confirmation is skipped as for an update.
+#[tauri::command]
+pub fn restart_app(
+    app: AppHandle,
+    coordinator: State<'_, UpdateCoordinator>,
+) -> Result<(), String> {
+    let _operation = UpdateOperation::begin(&coordinator)?;
+    coordinator.restarting.store(true, Ordering::Release);
+    app.request_restart();
+    Ok(())
+}
+
 pub fn is_restarting(app: &AppHandle) -> bool {
     app.state::<UpdateCoordinator>()
         .restarting

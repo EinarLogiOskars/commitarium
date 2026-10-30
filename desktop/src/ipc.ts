@@ -40,9 +40,10 @@ export interface ServiceStatus {
 export const dockerProbe = (): Promise<DockerProbe> => invoke("docker_probe");
 export const launchDockerDesktop = (): Promise<void> => invoke("launch_docker_desktop");
 
-export const stackUp = (): Promise<void> => invoke("stack_up");
+/** Resolves to a warning for the user when the stack is up but needs attention. */
+export const stackUp = (): Promise<string | null> => invoke("stack_up");
 export const stackDown = (): Promise<void> => invoke("stack_down");
-export const stackUpdate = (): Promise<void> => invoke("stack_update");
+export const stackUpdate = (): Promise<string | null> => invoke("stack_update");
 export const stackStatus = (): Promise<ServiceStatus[]> => invoke("stack_status");
 
 // A fixed restricted, non-admin Forgejo account the user sets a password for, to
@@ -164,6 +165,8 @@ export type DesktopUpdateProgress =
     }
   | { status: "installing"; version: string }
   | { status: "restarting"; version: string };
+
+export const restartApp = (): Promise<void> => invoke("restart_app");
 
 export const installDesktopUpdate = (
   expectedVersion: string,
@@ -317,6 +320,9 @@ export interface ProjectTargetState {
   watermarkCommitId: string | null;
   localCommitId: string | null;
   unsyncedFeatures: CompletedProjectSyncItem[];
+  /** Commits on the user's computer that Commitarium has not seen. */
+  localCommits: number;
+  uncommittedFiles: number;
 }
 
 export interface ProjectSyncState {
@@ -403,6 +409,21 @@ export interface ProjectUpstreamResult {
 
 export const getProjectSyncState = (projectId: string): Promise<ProjectSyncState> =>
   invoke("get_project_sync_state", { projectId });
+
+export interface LocalChanges {
+  headCommitId: string;
+  commits: number;
+  files: string[];
+  uncommittedFiles: number;
+  patch: string;
+}
+
+/** The commits on the user's computer that Commitarium has not seen. */
+export const prepareLocalChanges = (projectId: string): Promise<LocalChanges> =>
+  invoke("prepare_local_changes", { projectId });
+
+export const recordLocalChangesBroughtIn = (projectId: string, commitId: string): Promise<void> =>
+  invoke("record_local_changes_brought_in", { projectId, commitId });
 
 export const getGitIdentity = (parentPath?: string): Promise<GitIdentityState> =>
   invoke("get_git_identity", { parentPath });

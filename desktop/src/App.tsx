@@ -10,7 +10,7 @@ import { useNotifier } from "./attention/useNotifier";
 import { useDesktopSettings } from "./settings/useDesktopSettings";
 import { useBoot } from "./boot/useBoot";
 import { BootScreen } from "./views/BootScreen";
-import { onExitConfirmationRequested } from "./ipc";
+import { onExitConfirmationRequested, restartApp } from "./ipc";
 import { AppSettings } from "./views/AppSettings";
 import { ExitConfirm } from "./views/ExitConfirm";
 import { Inbox } from "./views/Inbox";
@@ -61,6 +61,7 @@ function readArea(): Area {
 
 function App() {
   const boot = useBoot();
+  const [dismissedWarning, setDismissedWarning] = useState<string | null>(null);
   const [reachable, setReachable] = useState(false);
   const [entered, setEntered] = useState(false);
   const [autoEntered, setAutoEntered] = useState(false);
@@ -211,6 +212,18 @@ function App() {
   // and one that draws attention only when it turns "unreachable".
   const statusPill = <span className={pillClass}>{pillInner}</span>;
 
+  const startupNotice = boot.warning && boot.warning !== dismissedWarning && (
+    <div className="banner banner--warn startup-notice" role="alert">
+      <span>{boot.warning}</span>
+      <button className="ghost" onClick={() => void restartApp()}>
+        Restart
+      </button>
+      <button className="ghost" onClick={() => setDismissedWarning(boot.warning)}>
+        Dismiss
+      </button>
+    </div>
+  );
+
   // Startup gate: hold the loading screen until Docker + the coordinator are up.
   // A down/missing Docker daemon drops it early into an actionable status view.
   if (boot.phase !== "ready") {
@@ -260,6 +273,7 @@ function App() {
         {showAgents && <Agents onClose={() => setShowAgents(false)} />}
         {showViewer && <ForgejoViewer onClose={() => setShowViewer(false)} />}
         {exitDialog}
+        {startupNotice}
       </main>
     );
   }
@@ -413,6 +427,7 @@ function App() {
       <CoordinatorBanner />
 
       {exitDialog}
+      {startupNotice}
       {showAgents && <Agents onClose={() => setShowAgents(false)} />}
       {showViewer && <ForgejoViewer onClose={() => setShowViewer(false)} />}
       {showUpdate && <UpdateModal u={update} onClose={() => setShowUpdate(false)} />}

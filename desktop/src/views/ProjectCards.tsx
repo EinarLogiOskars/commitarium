@@ -106,7 +106,7 @@ export function ProjectCards({
       {hasRepo && (
         <section className="shell-card">
           <h2 className="shell-card__head">Sync</h2>
-          <CompactProjectSync projectId={projectId} onOpenFull={() => open("sync")} />
+          <CompactProjectSync projectId={projectId} chat={chat} onOpenFull={() => open("sync")} />
         </section>
       )}
     </>

@@ -8,6 +8,7 @@
 
 use serde::Serialize;
 use std::collections::BTreeMap;
+use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -28,6 +29,8 @@ const DOCKER_INSTALL_URL: &str = "https://docs.docker.com/get-docker/";
 /// connected services it is allowed to run. The provider templates they are
 /// generated from sit in a profile that is never activated for running.
 pub(crate) const PROVIDER_PROFILES: &[&str] = &[];
+const ENVIRONMENT_WARNING: &str = "Your agents may still be on the previous version, because Commitarium couldn't update their tools. It will keep trying in the background. Until then, work may fail to start.";
+const TEMPLATE_PROFILE: &str = "agent-template";
 const TEMPLATE_SERVICES: &[&str] = &["codex-agent-template", "claude-agent-template"];
 
 /// Worker services from before agents (ADR-016); their containers are retired.
@@ -94,7 +97,8 @@ pub(crate) fn prepare_runtime(app: &AppHandle) -> Result<(), String> {
     // Best effort: a failed rewrite leaves the old overlay, whose role
     // services are then only created to be retired.
     let _ = environment::migrate_environment_overlay();
-    if std::env::var_os("COMMITARIUM_COMPOSE_FILE").is_some() || cfg!(debug_assertions) {
+    let compose_override = std::env::var_os("COMMITARIUM_COMPOSE_FILE");
+    if is_explicit_override(compose_override.as_deref(), &runtime_dir) || cfg!(debug_assertions) {
         return Ok(());
     }
 
@@ -105,6 +109,13 @@ pub(crate) fn prepare_runtime(app: &AppHandle) -> Result<(), String> {
     std::env::set_var("COMMITARIUM_IMAGE_TAG", env!("CARGO_PKG_VERSION"));
     std::env::set_var(RELEASE_MODE_ENV, "1");
     Ok(())
+}
+
+/// A restart after an update inherits this process's environment, so the
+/// runtime's own Compose file there is the previous version's setting, which
+/// must be replaced along with its image tag, not an override to respect.
+fn is_explicit_override(compose_file: Option<&OsStr>, runtime_dir: &Path) -> bool {
+    compose_file.is_some_and(|file| Path::new(file) != runtime_dir.join("compose.yml"))
 }
 
 fn materialize_release_compose(runtime_dir: &Path) -> Result<(PathBuf, PathBuf), String> {
@@ -229,11 +240,10 @@ pub(crate) fn compose(profiles: &[&str], args: &[&str]) -> Result<String, String
     compose_command(profiles, args, true, true)
 }
 
-/// Execute against the shipped/base definitions without the locally generated
-/// approved-environment overlay. Pulling base images and deriving a refreshed
-/// environment must not accidentally address the derivative image itself.
+/// Execute against the shipped definitions alone. Both generated overlays can
+/// name locally built environment images, which a pull could never fetch.
 pub(crate) fn compose_base(profiles: &[&str], args: &[&str]) -> Result<String, String> {
-    compose_command(profiles, args, false, true)
+    compose_command(profiles, args, false, false)
 }
 
 /// The resolved Compose model with the agent worker templates, including the
@@ -291,7 +301,7 @@ pub(crate) fn configured_service_image(service: &str) -> Result<String, String> 
         return Err("service is not an agent worker template".to_string());
     }
     let configured = compose_command(
-        &["agent-template"],
+        &[TEMPLATE_PROFILE],
         &["config", "--format", "json"],
         false,
         false,
@@ -539,21 +549,27 @@ pub fn launch_docker_desktop() -> Result<(), String> {
 /// Bring core services up and reconcile every real role worker against its
 /// exact provider profile. A disconnected, expired, or failed profile keeps
 /// only its matching worker stopped; it does not prevent the app from opening.
+/// Returns a warning for the user when the stack is up but something needs
+/// their attention.
 #[tauri::command]
 pub async fn stack_up(
     app: AppHandle,
     manager: State<'_, profiles::ProfileManager>,
-) -> Result<(), String> {
+) -> Result<Option<String>, String> {
     let manager = manager.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || stack_up_with_manager(&manager))
+    let warning = tauri::async_runtime::spawn_blocking(move || start_stack(&manager))
         .await
         .map_err(|_| "could not start the Commitarium stack".to_string())??;
     // The workers are up: check their CLIs now rather than at the next retry.
     cli_updates::wake(&app);
-    Ok(())
+    Ok(warning)
 }
 
 pub(crate) fn stack_up_with_manager(manager: &profiles::ProfileManager) -> Result<(), String> {
+    start_stack(manager).map(|_| ())
+}
+
+fn start_stack(manager: &profiles::ProfileManager) -> Result<Option<String>, String> {
     let file = compose_file()?;
     let transport_changed = bootstrap::prepare_transport_secrets(&file)?;
     if release_mode() {
@@ -569,7 +585,9 @@ pub(crate) fn stack_up_with_manager(manager: &profiles::ProfileManager) -> Resul
     let agents_changed = refresh_agent_identities(&file);
     let credentials_changed = transport_changed || forgejo_changed;
     start_core_services(credentials_changed)?;
-    reconcile_agent_workers(manager, credentials_changed || agents_changed)
+    let warning = prepare_environment_images();
+    reconcile_agent_workers(manager, credentials_changed || agents_changed)?;
+    Ok(warning)
 }
 
 /// Tear the whole Commitarium stack down (project-wide, all profiles).
@@ -591,16 +609,16 @@ pub(crate) fn stack_down_blocking() -> Result<(), String> {
 pub async fn stack_update(
     app: AppHandle,
     manager: State<'_, profiles::ProfileManager>,
-) -> Result<(), String> {
+) -> Result<Option<String>, String> {
     let manager = manager.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || stack_update_with_manager(&manager))
+    let warning = tauri::async_runtime::spawn_blocking(move || stack_update_with_manager(&manager))
         .await
         .map_err(|_| "could not update the Commitarium stack".to_string())??;
     cli_updates::wake(&app);
-    Ok(())
+    Ok(warning)
 }
 
-fn stack_update_with_manager(manager: &profiles::ProfileManager) -> Result<(), String> {
+fn stack_update_with_manager(manager: &profiles::ProfileManager) -> Result<Option<String>, String> {
     let file = compose_file()?;
     let transport_changed = bootstrap::prepare_transport_secrets(&file)?;
     compose_base(PROVIDER_PROFILES, &["pull"])?;
@@ -609,7 +627,9 @@ fn stack_update_with_manager(manager: &profiles::ProfileManager) -> Result<(), S
     let agents_changed = refresh_agent_identities(&file);
     let credentials_changed = transport_changed || forgejo_changed;
     start_core_services(credentials_changed)?;
-    reconcile_agent_workers(manager, credentials_changed || agents_changed)
+    let warning = prepare_environment_images();
+    reconcile_agent_workers(manager, credentials_changed || agents_changed)?;
+    Ok(warning)
 }
 
 /// Bring the known agents' Forgejo tokens up to date (scopes, the one-time
@@ -707,6 +727,39 @@ pub(crate) fn reconcile_agent_workers(
     }
     // The stack is up on its current images; the ones it replaced can go.
     cleanup::spawn();
+    Ok(())
+}
+
+/// Move an approved environment onto this version's base images before the
+/// workers start, so no agent runs on the previous version's image. Without
+/// this the workers would wait for the background refresh. Best effort: that
+/// refresh retries, and the workers can still start on what is here, so a
+/// failure comes back as a warning for the user.
+fn prepare_environment_images() -> Option<String> {
+    if !release_mode() {
+        return None;
+    }
+    let refreshed = agents::fetch(true).and_then(|agents| {
+        pull_agent_base_images(&agents)?;
+        environment::refresh_stale_images()
+    });
+    let error = refreshed.err()?;
+    eprintln!("[stack] could not refresh the approved environment: {error}");
+    Some(ENVIRONMENT_WARNING.to_string())
+}
+
+/// Bring the base worker images of the providers in use. With an approved
+/// environment the workers run derivatives, so nothing else fetches them.
+fn pull_agent_base_images(agents: &[agents::Agent]) -> Result<(), String> {
+    let mut args = vec!["pull", "--policy", "missing"];
+    for provider in [agents::Provider::Codex, agents::Provider::Claude] {
+        if agents.iter().any(|agent| agent.provider == provider) {
+            args.push(provider.template_service());
+        }
+    }
+    if args.len() > 3 {
+        compose_base(&[TEMPLATE_PROFILE], &args)?;
+    }
     Ok(())
 }
 
@@ -873,6 +926,20 @@ fn service_status_rank(status: &ServiceStatus) -> (u8, u8) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_restart_after_an_update_replaces_the_old_runtime_settings() {
+        let runtime = Path::new("/data/runtime");
+        assert!(!is_explicit_override(None, runtime));
+        assert!(!is_explicit_override(
+            Some(OsStr::new("/data/runtime/compose.yml")),
+            runtime
+        ));
+        assert!(is_explicit_override(
+            Some(OsStr::new("/elsewhere/compose.yml")),
+            runtime
+        ));
+    }
 
     #[cfg(target_os = "macos")]
     #[test]

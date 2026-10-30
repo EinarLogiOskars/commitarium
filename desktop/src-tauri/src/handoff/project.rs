@@ -15,6 +15,9 @@ use std::process::Stdio;
 const PROJECT_RECEIPTS_FILE: &str = "project-handoff-receipts.json";
 const PROJECT_UPSTREAM_RECEIPTS_FILE: &str = "project-upstream-receipts.json";
 const PROJECT_SETUP_RECEIPTS_FILE: &str = "project-workspace-setup-receipts.json";
+const BRING_IN_RECEIPTS_FILE: &str = "project-bring-in-receipts.json";
+// The coordinator's limit on a project document.
+const MAX_PATCH_BYTES: usize = 5 * 1024 * 1024;
 
 #[derive(Clone, Debug, Deserialize)]
 struct ProjectHandoff {
@@ -145,6 +148,42 @@ impl Default for ProjectSetupReceipts {
     }
 }
 
+/// The local commit a Bring in took, up to which Commitarium has the user's
+/// work once the work order named after it merges.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct BringInReceipt {
+    project_id: String,
+    source_path: String,
+    local_commit_id: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct BringInReceipts {
+    version: u32,
+    receipts: Vec<BringInReceipt>,
+}
+
+impl Default for BringInReceipts {
+    fn default() -> Self {
+        Self {
+            version: 1,
+            receipts: Vec::new(),
+        }
+    }
+}
+
+/// What Bring in would send: the commits on the user's computer that
+/// Commitarium has not seen, as one patch. Uncommitted work stays out.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalChanges {
+    head_commit_id: String,
+    commits: usize,
+    files: Vec<String>,
+    uncommitted_files: usize,
+    patch: String,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectSyncState {
@@ -176,6 +215,9 @@ struct ProjectTargetState {
     watermark_commit_id: Option<String>,
     local_commit_id: Option<String>,
     unsynced_features: Vec<ProjectHandoffFeature>,
+    /// Commits on the user's computer that Commitarium has not seen.
+    local_commits: usize,
+    uncommitted_files: usize,
 }
 
 #[derive(Debug, Serialize)]
@@ -752,11 +794,13 @@ pub async fn get_project_sync_state(
     let remote_setup_path = crate::git_providers::remote_receipts_path(&app)?;
     let feature_receipts_path = receipts_path_for_features(&app)?;
     let folder_receipts_path = super::plain_folder::folder_receipts_path(&app)?;
+    let bring_ins_path = bring_in_receipts_path(&app)?;
     tokio::task::spawn_blocking(move || {
         build_sync_state(
             &handoff,
             source.as_ref(),
             &receipts_path,
+            &bring_ins_path,
             &feature_receipts_path,
             &folder_receipts_path,
             &upstream_path,
@@ -765,6 +809,59 @@ pub async fn get_project_sync_state(
     })
     .await
     .map_err(|error| format!("project sync-state task failed: {error}"))?
+}
+
+/// The commits Commitarium has not seen, ready for the user to confirm.
+#[tauri::command]
+pub async fn prepare_local_changes(
+    app: AppHandle,
+    project_id: String,
+) -> Result<LocalChanges, String> {
+    validate_identifier("project ID", &project_id)?;
+    let handoff = fetch_project_handoff(&project_id).await?;
+    validate_project_handoff(&handoff, &project_id)?;
+    let source = crate::import::get_project_source_record(&app, &project_id)?
+        .filter(|source| source.source_type == "git")
+        .ok_or("this project has no local Git repository")?;
+    let receipts_path = project_receipts_path(&app)?;
+    let bring_ins_path = bring_in_receipts_path(&app)?;
+    tokio::task::spawn_blocking(move || {
+        let receipts = load_project_receipts(&receipts_path)?;
+        let receipt = latest_completed_project_receipt(&receipts, &handoff, &source);
+        let bring_ins = load_bring_ins(&bring_ins_path)?;
+        local_changes(
+            Path::new(&source.path),
+            &handoff.project_id,
+            &source,
+            receipt,
+            &bring_ins,
+        )
+    })
+    .await
+    .map_err(|error| format!("read local changes task failed: {error}"))?
+}
+
+/// Note the local commit a Bring in took, once it is on its way.
+#[tauri::command]
+pub async fn record_local_changes_brought_in(
+    app: AppHandle,
+    project_id: String,
+    commit_id: String,
+) -> Result<(), String> {
+    validate_identifier("project ID", &project_id)?;
+    let source = crate::import::get_project_source_record(&app, &project_id)?
+        .ok_or("this project has no local repository")?;
+    let path = bring_in_receipts_path(&app)?;
+    let _guard = HANDOFF_LOCK
+        .lock()
+        .map_err(|_| "the local handoff lock is unavailable".to_string())?;
+    record_bring_in(
+        &path,
+        Path::new(&source.path),
+        &project_id,
+        &source.path,
+        &commit_id,
+    )
 }
 
 #[tauri::command]
@@ -782,6 +879,7 @@ pub async fn synchronize_project_locally(
     let receipts_path = project_receipts_path(&app)?;
     let feature_receipts_path = receipts_path_for_features(&app)?;
     let folder_receipts_path = super::plain_folder::folder_receipts_path(&app)?;
+    let bring_ins_path = bring_in_receipts_path(&app)?;
     let token = forgejo_token_path()
         .ok()
         .and_then(|path| std::fs::read_to_string(path).ok())
@@ -797,6 +895,7 @@ pub async fn synchronize_project_locally(
             &receipts_path,
             &feature_receipts_path,
             &folder_receipts_path,
+            &bring_ins_path,
             &handoff,
             &commit_message,
             &internal_url,
@@ -934,10 +1033,12 @@ fn validate_project_handoff(handoff: &ProjectHandoff, project_id: &str) -> Resul
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_sync_state(
     handoff: &ProjectHandoff,
     source: Option<&ProjectSource>,
     receipts_path: &Path,
+    bring_ins_path: &Path,
     feature_receipts_path: &Path,
     folder_receipts_path: &Path,
     upstream_path: &Path,
@@ -963,10 +1064,28 @@ fn build_sync_state(
                     .map(|item| item.base_commit_id.clone())
             })
         });
+    let (local_commits, uncommitted_files) = source
+        .filter(|source| source.source_type == "git")
+        .and_then(|source| {
+            let bring_ins = load_bring_ins(bring_ins_path).ok()?;
+            let repository = Path::new(&source.path);
+            let (_, commits) = unseen_local_commits(
+                repository,
+                &handoff.project_id,
+                source,
+                local_receipt,
+                &bring_ins,
+            )
+            .ok()??;
+            Some((commits, uncommitted_file_count(repository).unwrap_or(0)))
+        })
+        .unwrap_or((0, 0));
     let local = ProjectTargetState {
         watermark_commit_id: local_watermark.clone(),
         local_commit_id: local_receipt.and_then(|receipt| receipt.local_commit_id.clone()),
         unsynced_features: features_after(&handoff.completed_features, local_watermark.as_deref()),
+        local_commits,
+        uncommitted_files,
     };
 
     let mut upstreams = Vec::new();
@@ -1025,6 +1144,149 @@ fn build_sync_state(
         local,
         upstreams,
     })
+}
+
+/// The local commit Commitarium last has, and how many commits sit on top of
+/// it: the nearest of the latest Bring in, the latest Pull, and the import.
+/// None when the checked-out branch holds none of them.
+fn unseen_local_commits(
+    repository: &Path,
+    project_id: &str,
+    source: &ProjectSource,
+    receipt: Option<&ProjectReceipt>,
+    bring_ins: &BringInReceipts,
+) -> Result<Option<(String, usize)>, String> {
+    let brought_in = latest_bring_in(bring_ins, project_id, &source.path);
+    let candidates = [
+        brought_in.map(|receipt| receipt.local_commit_id.as_str()),
+        receipt.and_then(|receipt| receipt.local_commit_id.as_deref()),
+        source.import_commit_id.as_deref(),
+    ];
+    let mut nearest: Option<(String, usize)> = None;
+    for commit in candidates.into_iter().flatten() {
+        let range = format!("{commit}..HEAD");
+        let Ok(count) = git_line(repository, &["rev-list", "--count", &range]) else {
+            continue;
+        };
+        let ancestor = crate::process::command("git")
+            .arg("-C")
+            .arg(repository)
+            .args(["merge-base", "--is-ancestor", commit, "HEAD"])
+            .status()
+            .is_ok_and(|status| status.success());
+        let count: usize = count.parse().map_err(|_| "unexpected commit count")?;
+        if ancestor && nearest.as_ref().is_none_or(|(_, best)| count < *best) {
+            nearest = Some((commit.to_string(), count));
+        }
+    }
+    Ok(nearest)
+}
+
+fn uncommitted_file_count(repository: &Path) -> Result<usize, String> {
+    let status = git_line_allow_empty(
+        repository,
+        &["status", "--porcelain=v1", "--untracked-files=all"],
+    )?;
+    Ok(status.lines().count())
+}
+
+fn latest_bring_in<'a>(
+    bring_ins: &'a BringInReceipts,
+    project_id: &str,
+    source_path: &str,
+) -> Option<&'a BringInReceipt> {
+    bring_ins
+        .receipts
+        .iter()
+        .rev()
+        .find(|receipt| receipt.project_id == project_id && receipt.source_path == source_path)
+}
+
+/// Whether Commitarium has merged the user's work up to this exact commit:
+/// the work order that brought it in carries the commit in its title.
+fn bring_in_merged(handoff: &ProjectHandoff, receipt: Option<&BringInReceipt>, head: &str) -> bool {
+    let Some(receipt) = receipt.filter(|receipt| receipt.local_commit_id == head) else {
+        return false;
+    };
+    let marker = &receipt.local_commit_id[..12];
+    handoff
+        .completed_features
+        .iter()
+        .any(|feature| feature.title.contains(marker))
+}
+
+fn local_changes(
+    repository: &Path,
+    project_id: &str,
+    source: &ProjectSource,
+    receipt: Option<&ProjectReceipt>,
+    bring_ins: &BringInReceipts,
+) -> Result<LocalChanges, String> {
+    let Some((base, commits)) =
+        unseen_local_commits(repository, project_id, source, receipt, bring_ins)?
+            .filter(|(_, commits)| *commits > 0)
+    else {
+        return Err("there are no local commits to bring in".into());
+    };
+    let head = git_line(repository, &["rev-parse", "HEAD"])?;
+    let names = git_line_allow_empty(
+        repository,
+        &["diff", "--name-only", "--no-renames", &base, &head],
+    )?;
+    let files: Vec<String> = names.lines().map(str::to_string).collect();
+    if files.is_empty() {
+        return Err("your local commits don't change any files".into());
+    }
+    let output = crate::process::command("git")
+        .arg("-C")
+        .arg(repository)
+        .args([
+            "diff",
+            "--binary",
+            "--full-index",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--no-renames",
+        ])
+        .arg(&base)
+        .arg(&head)
+        .output()
+        .map_err(|error| format!("read your local commits: {error}"))?;
+    if !output.status.success() {
+        return Err("could not read your local commits".into());
+    }
+    if output.stdout.len() > MAX_PATCH_BYTES {
+        return Err("your local changes are too large to bring in at once (over 5 MB)".into());
+    }
+    let patch = String::from_utf8(output.stdout)
+        .map_err(|_| "your local changes are not readable as text".to_string())?;
+    Ok(LocalChanges {
+        head_commit_id: head,
+        commits,
+        files,
+        uncommitted_files: uncommitted_file_count(repository)?,
+        patch,
+    })
+}
+
+fn record_bring_in(
+    path: &Path,
+    repository: &Path,
+    project_id: &str,
+    source_path: &str,
+    commit: &str,
+) -> Result<(), String> {
+    if !valid_object_id(commit) {
+        return Err("the local commit is not a valid Git object ID".into());
+    }
+    require_commit(repository, commit, "local commit")?;
+    let mut receipts = load_bring_ins(path)?;
+    receipts.receipts.push(BringInReceipt {
+        project_id: project_id.to_string(),
+        source_path: source_path.to_string(),
+        local_commit_id: commit.to_string(),
+    });
+    save_json(path, &receipts, "Bring in receipts")
 }
 
 fn features_after(
@@ -1095,6 +1357,7 @@ fn synchronize_project(
     receipts_path: &Path,
     feature_receipts_path: &Path,
     folder_receipts_path: &Path,
+    bring_ins_path: &Path,
     handoff: &ProjectHandoff,
     commit_message: &str,
     internal_url: &str,
@@ -1133,8 +1396,11 @@ fn synchronize_project(
     }
     let material = prepare_project_material(internal_url, handoff, &base_commit, token)?;
     if source.source_type == "git" {
+        let bring_ins = load_bring_ins(bring_ins_path)?;
+        let brought_in = latest_bring_in(&bring_ins, &handoff.project_id, &source.path);
         synchronize_project_repository(
             &source_path,
+            brought_in,
             receipts_path,
             &mut receipts,
             handoff,
@@ -1263,8 +1529,10 @@ fn prepare_project_material(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn synchronize_project_repository(
     source: &Path,
+    brought_in: Option<&BringInReceipt>,
     receipts_path: &Path,
     receipts: &mut ProjectReceipts,
     handoff: &ProjectHandoff,
@@ -1275,7 +1543,7 @@ fn synchronize_project_repository(
     if !crate::import::is_repo_root(source) {
         return Err("the recorded project source is no longer a Git repository root".into());
     }
-    let (target_branch, local_base) = inspect_clean_target(source)?;
+    let (target_branch, local_base) = inspect_target(source)?;
     let local_tree = git_line(source, &["rev-parse", &format!("{local_base}^{{tree}}")])?;
     if material.patch.is_none() || local_tree == material.head_tree {
         let receipt = new_project_receipt(
@@ -1301,14 +1569,26 @@ fn synchronize_project_repository(
     prepare_local_clone(source, &local_clone, &local_base)?;
     let synthetic = synthetic_handoff(handoff, base_commit);
     import_internal_patch_objects(&local_clone, &material.repository, &synthetic)?;
-    apply_patch(
-        &local_clone,
-        material
-            .patch
-            .as_ref()
-            .ok_or("canonical project patch is missing")?,
-    )?;
-    let expected_tree = (local_tree == material.base_tree).then_some(material.head_tree.as_str());
+    // Commitarium merged this very commit, so its head is the two sides
+    // reconciled; applying the older changes again would only conflict.
+    let take_head = bring_in_merged(handoff, brought_in, &local_base);
+    if take_head {
+        run_git_checked(
+            &local_clone,
+            &["read-tree", "--reset", "-u", &material.head_tree],
+            "take the merged project",
+        )?;
+    } else {
+        apply_patch(
+            &local_clone,
+            material
+                .patch
+                .as_ref()
+                .ok_or("canonical project patch is missing")?,
+        )?;
+    }
+    let expected_tree =
+        (take_head || local_tree == material.base_tree).then_some(material.head_tree.as_str());
     let local_commit = create_clean_commit(
         &local_clone,
         &local_base,
@@ -1318,7 +1598,7 @@ fn synchronize_project_repository(
         expected_tree,
     )?;
     import_clean_commit(source, &local_clone, &local_commit)?;
-    install_clean_commit(source, &target_branch, &local_base, &local_commit)?;
+    fast_forward_keeping_changes(source, &target_branch, &local_base, &local_commit)?;
     let receipt = new_project_receipt(
         handoff,
         "git",
@@ -1529,7 +1809,11 @@ fn verify_completed_project_receipt(
             .target_branch
             .as_deref()
             .ok_or("project sync receipt has no branch")?;
-        require_clean_target(source, branch)?;
+        if inspect_target(source)?.0 != *branch {
+            return Err(format!(
+                "check out the recorded local {branch} branch before continuing"
+            ));
+        }
         let local_commit = receipt
             .local_commit_id
             .as_deref()
@@ -1914,6 +2198,10 @@ fn load_project_receipts(path: &Path) -> Result<ProjectReceipts, String> {
     Ok(receipts)
 }
 
+fn load_bring_ins(path: &Path) -> Result<BringInReceipts, String> {
+    load_versioned(path, "Bring in receipts")
+}
+
 fn load_project_upstream_receipts(path: &Path) -> Result<ProjectUpstreamReceipts, String> {
     let receipts: ProjectUpstreamReceipts = load_versioned(path, "project upstream receipts")?;
     for receipt in &receipts.receipts {
@@ -2020,6 +2308,12 @@ fn validate_project_upstream_receipt(receipt: &ProjectUpstreamReceipt) -> Result
 
 trait VersionedReceipts: for<'de> Deserialize<'de> + Default {
     fn version(&self) -> u32;
+}
+
+impl VersionedReceipts for BringInReceipts {
+    fn version(&self) -> u32 {
+        self.version
+    }
 }
 
 impl VersionedReceipts for ProjectReceipts {
@@ -2130,6 +2424,14 @@ fn project_receipts_path(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(directory.join(PROJECT_RECEIPTS_FILE))
 }
 
+fn bring_in_receipts_path(app: &AppHandle) -> Result<PathBuf, String> {
+    let directory = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("resolve app data directory: {error}"))?;
+    Ok(directory.join(BRING_IN_RECEIPTS_FILE))
+}
+
 fn receipts_path_for_features(app: &AppHandle) -> Result<PathBuf, String> {
     super::receipts_path(app)
 }
@@ -2210,6 +2512,7 @@ mod tests {
         feature_receipts: PathBuf,
         folder_receipts: PathBuf,
         upstream_receipts: PathBuf,
+        bring_ins: PathBuf,
         initial: String,
         handoff: ProjectHandoff,
     }
@@ -2245,6 +2548,7 @@ mod tests {
         let feature_receipts = root.path().join("state/feature-handoff-receipts.json");
         let folder_receipts = root.path().join("state/folder-handoff-receipts.json");
         let upstream_receipts = root.path().join("state/project-upstream-receipts.json");
+        let bring_ins = root.path().join("state/project-bring-in-receipts.json");
         std::fs::create_dir(&source).expect("source dir");
         command(&source, &["init", "--initial-branch=main"]);
         command(&source, &["config", "user.name", "Local User"]);
@@ -2291,6 +2595,7 @@ mod tests {
             feature_receipts,
             folder_receipts,
             upstream_receipts,
+            bring_ins,
             initial,
             handoff,
         }
@@ -2442,6 +2747,7 @@ mod tests {
             &fixture.receipts,
             &fixture.feature_receipts,
             &fixture.folder_receipts,
+            &fixture.bring_ins,
             &fixture.handoff,
             "Sync project one",
             fixture.internal.to_str().unwrap(),
@@ -2465,6 +2771,7 @@ mod tests {
             &fixture.receipts,
             &fixture.feature_receipts,
             &fixture.folder_receipts,
+            &fixture.bring_ins,
             &fixture.handoff,
             "Sync project two",
             fixture.internal.to_str().unwrap(),
@@ -2513,16 +2820,14 @@ mod tests {
             &fixture.receipts,
             &fixture.feature_receipts,
             &fixture.folder_receipts,
+            &fixture.bring_ins,
             &fixture.handoff,
             "Sync conflicting project",
             fixture.internal.to_str().unwrap(),
             None,
         )
         .unwrap_err();
-        assert!(
-            error.contains("conflicts with the current local HEAD"),
-            "{error}"
-        );
+        assert!(error.contains("both changed the same files"), "{error}");
         assert_eq!(line(&fixture.source, &["rev-parse", "HEAD"]), before);
         assert_eq!(
             std::fs::read_to_string(fixture.source.join("README.md")).unwrap(),
@@ -2550,6 +2855,7 @@ mod tests {
             &fixture.receipts,
             &fixture.feature_receipts,
             &fixture.folder_receipts,
+            &fixture.bring_ins,
             &fixture.handoff,
             "Sync project",
             fixture.internal.to_str().unwrap(),
@@ -2637,6 +2943,7 @@ mod tests {
                 &fixture.receipts,
                 &fixture.feature_receipts,
                 &fixture.folder_receipts,
+                &fixture.bring_ins,
                 &fixture.handoff,
                 "unused for folder",
                 fixture.internal.to_str().unwrap(),
@@ -2652,6 +2959,7 @@ mod tests {
                 &fixture.receipts,
                 &fixture.feature_receipts,
                 &fixture.folder_receipts,
+                &fixture.bring_ins,
                 &fixture.handoff,
                 "unused for folder",
                 fixture.internal.to_str().unwrap(),
@@ -2673,5 +2981,133 @@ mod tests {
             "preserve\n"
         );
         assert!(!folder.join(".git").exists());
+    }
+
+    fn git_source(fixture: &ProjectFixture) -> ProjectSource {
+        ProjectSource {
+            path: fixture.source.to_string_lossy().into_owned(),
+            source_type: "git".into(),
+            import_commit_id: Some(fixture.initial.clone()),
+            created_by_commitarium: false,
+        }
+    }
+
+    fn pull(
+        fixture: &ProjectFixture,
+        source: &ProjectSource,
+    ) -> Result<ProjectSynchronizeResult, String> {
+        synchronize_project(
+            source,
+            &fixture.receipts,
+            &fixture.feature_receipts,
+            &fixture.folder_receipts,
+            &fixture.bring_ins,
+            &fixture.handoff,
+            "Sync from Commitarium",
+            fixture.internal.to_str().unwrap(),
+            None,
+        )
+    }
+
+    #[test]
+    fn pull_keeps_unrelated_uncommitted_work() {
+        let mut fixture = fixture();
+        let source = git_source(&fixture);
+        add_canonical_change(&mut fixture, "fea_one", "work.txt", "work\n");
+        std::fs::write(fixture.source.join("README.md"), "half done\n").unwrap();
+        std::fs::write(fixture.source.join("notes.txt"), "scratch\n").unwrap();
+
+        pull(&fixture, &source).unwrap();
+
+        assert!(fixture.source.join("work.txt").exists());
+        let read = |file: &str| std::fs::read_to_string(fixture.source.join(file)).unwrap();
+        assert_eq!(read("README.md"), "half done\n");
+        assert_eq!(read("notes.txt"), "scratch\n");
+    }
+
+    #[test]
+    fn pull_refuses_to_overwrite_uncommitted_work_and_names_it() {
+        let mut fixture = fixture();
+        let source = git_source(&fixture);
+        add_canonical_change(&mut fixture, "fea_one", "README.md", "canonical\n");
+        std::fs::write(fixture.source.join("README.md"), "half done\n").unwrap();
+        let before = line(&fixture.source, &["rev-parse", "HEAD"]);
+
+        let error = pull(&fixture, &source).unwrap_err();
+
+        assert!(error.contains("(1): README.md"), "{error}");
+        assert_eq!(line(&fixture.source, &["rev-parse", "HEAD"]), before);
+        assert_eq!(
+            std::fs::read_to_string(fixture.source.join("README.md")).unwrap(),
+            "half done\n"
+        );
+    }
+
+    #[test]
+    fn local_commits_are_counted_and_described_uncommitted_work_stays_out() {
+        let fixture = fixture();
+        let source = git_source(&fixture);
+        std::fs::write(fixture.source.join("local.txt"), "local\n").unwrap();
+        command(&fixture.source, &["add", "local.txt"]);
+        command(&fixture.source, &["commit", "-m", "Local work"]);
+        std::fs::write(fixture.source.join("README.md"), "half done\n").unwrap();
+        let none = BringInReceipts::default();
+
+        let changes = local_changes(&fixture.source, "prj_test", &source, None, &none).unwrap();
+
+        assert_eq!(changes.commits, 1);
+        assert_eq!(changes.files, vec!["local.txt"]);
+        assert_eq!(changes.uncommitted_files, 1);
+        assert!(changes.patch.contains("+local"));
+        assert!(!changes.patch.contains("half done"));
+
+        // Taken once, only what follows counts.
+        let taken = BringInReceipts {
+            version: 1,
+            receipts: vec![BringInReceipt {
+                project_id: "prj_test".into(),
+                source_path: source.path.clone(),
+                local_commit_id: changes.head_commit_id,
+            }],
+        };
+        let (_, commits) = unseen_local_commits(&fixture.source, "prj_test", &source, None, &taken)
+            .unwrap()
+            .unwrap();
+        assert_eq!(commits, 0);
+    }
+
+    #[test]
+    fn pull_takes_the_merged_project_once_a_bring_in_merged() {
+        let mut fixture = fixture();
+        let source = git_source(&fixture);
+        std::fs::write(fixture.source.join("README.md"), "local\n").unwrap();
+        command(&fixture.source, &["add", "README.md"]);
+        command(&fixture.source, &["commit", "-m", "Local work"]);
+        let head = line(&fixture.source, &["rev-parse", "HEAD"]);
+        record_bring_in(
+            &fixture.bring_ins,
+            &fixture.source,
+            "prj_test",
+            &source.path,
+            &head,
+        )
+        .unwrap();
+
+        // Merged by something else: the conflict stands, nothing is lost.
+        add_canonical_change(&mut fixture, "fea_one", "README.md", "canonical\n");
+        assert!(pull(&fixture, &source)
+            .unwrap_err()
+            .contains("both changed the same files"));
+
+        let title = format!("Bring in local changes {}", &head[..12]);
+        add_canonical_change(&mut fixture, "fea_two", "README.md", "both sides\n");
+        fixture.handoff.completed_features.last_mut().unwrap().title = title;
+        pull(&fixture, &source).unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(fixture.source.join("README.md")).unwrap(),
+            "both sides\n"
+        );
+        assert_eq!(line(&fixture.source, &["rev-parse", "HEAD^"]), head);
     }
 }
