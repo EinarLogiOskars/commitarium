@@ -305,6 +305,21 @@ export const listAutopilotGoals = (): Promise<{
 /** Launch a new app: once its vision is written, the coordinator sets up
  * its stack and builds the whole vision on autopilot. */
 /** A scope's open chats, the most recently used first. */
+export interface ChatMatch {
+  scope: string;
+  chat: string;
+  title: string;
+  snippet: string;
+  message_id?: string;
+  at: string;
+}
+
+/** The open chats, in every scope, that hold the query's words. */
+export const searchChats = (query: string): Promise<ChatMatch[]> =>
+  request<{ matches: ChatMatch[] }>(
+    `/api/v1/assistant/chat-search?q=${encodeURIComponent(query)}`,
+  ).then((r) => r.matches);
+
 export const listChats = (scope: string): Promise<ChatSummary[]> =>
   request<{ chats: ChatSummary[] }>(`${conversationPath(scope)}/chats`).then((r) => r.chats);
 

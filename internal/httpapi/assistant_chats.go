@@ -17,12 +17,14 @@ type chatManager interface {
 	CreateChat(ctx context.Context, scope, title string) (conversations.Conversation, error)
 	RenameChat(ctx context.Context, scope, chat, title string) (conversations.Chat, error)
 	ArchiveChat(ctx context.Context, scope, chat string) (conversations.Chat, error)
+	SearchChats(ctx context.Context, query string) ([]conversations.ChatMatch, error)
 }
 
 // registerChatRoutes adds the chat routes; the chat's own message, retry,
 // focus, action, and autopilot routes are the scope's, in the chat.
 func (api *API) registerChatRoutes(mux *http.ServeMux) {
 	const chat = "/api/v1/assistant/conversations/{scope}/chats/{chat}"
+	mux.HandleFunc("GET /api/v1/assistant/chat-search", api.searchChatsHandler)
 	mux.HandleFunc("GET /api/v1/assistant/conversations/{scope}/chats", api.listChatsHandler)
 	mux.HandleFunc("POST /api/v1/assistant/conversations/{scope}/chats", api.createChatHandler)
 	mux.HandleFunc("GET "+chat, inChat(api.getConversationHandler))
@@ -68,6 +70,21 @@ func (api *API) listChatsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"chats": listed}, "assistant chats")
+}
+
+// searchChatsHandler answers the open chats, across every scope, that hold
+// the words of ?q=, the latest first.
+func (api *API) searchChatsHandler(w http.ResponseWriter, r *http.Request) {
+	manager, ok := api.chats(w)
+	if !ok {
+		return
+	}
+	matches, err := manager.SearchChats(r.Context(), r.URL.Query().Get("q"))
+	if err != nil {
+		writeConversationError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"matches": matches}, "assistant chat search")
 }
 
 type chatRequest struct {

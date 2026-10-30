@@ -120,9 +120,18 @@ export function orderDot(feature: Feature, signals: WorkSignals): OrderDot {
   return "idle";
 }
 
-/** The work orders listed under a chat in the sidebar, in the order it
- * started them: every one still going, and the latest finished ones up to
- * `limit` in all; `more` is how many are left out. */
+// The order of a chat's work orders in the sidebar: what is working on top.
+const ORDER_RANK: Record<OrderDot, number> = {
+  running: 0,
+  waiting: 1,
+  idle: 2,
+  done: 3,
+  cancelled: 3,
+};
+
+/** The work orders listed under a chat in the sidebar: every one still going,
+ * working ones first, then the latest finished ones up to `limit` in all;
+ * `more` is how many are left out. Otherwise in the order it started them. */
 export function chatOrders(
   started: string[],
   features: Feature[],
@@ -139,7 +148,9 @@ export function chatOrders(
   const shownDone = new Set(
     (room ? all.filter(finished).slice(-room) : []).map((o) => o.feature.id),
   );
-  const orders = all.filter((o) => !finished(o) || shownDone.has(o.feature.id));
+  const orders = all
+    .filter((o) => !finished(o) || shownDone.has(o.feature.id))
+    .sort((a, b) => ORDER_RANK[a.dot] - ORDER_RANK[b.dot]);
   return { orders, more: all.length - orders.length };
 }
 
