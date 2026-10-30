@@ -3,6 +3,7 @@ import { getVersion } from "@tauri-apps/api/app";
 import {
   diskSpaceProbe,
   dockerProbe,
+  restartApp,
   stackStatus,
   type DiskSpaceProbe,
   type DockerProbe,
@@ -58,6 +59,7 @@ export function AppSettings({
   // A backup stops and restarts the services; closing the sheet mid-flight
   // would hide the only place its outcome is reported.
   const [backupBusy, setBackupBusy] = useState(false);
+  const [restartError, setRestartError] = useState<string | null>(null);
 
   useEffect(() => {
     // One read when the sheet opens; nothing here changes while it is open.
@@ -183,6 +185,21 @@ export function AppSettings({
               would interrupt {running.length === 1 ? "it" : "them"}.
             </div>
           )}
+        </section>
+
+        <section className="set__section">
+          <h3 className="set__heading">Restart</h3>
+          <p className="muted set__note">
+            Closes Commitarium and opens it again, then checks your services and agents. Work in
+            progress keeps running.
+          </p>
+          {restartError && <div className="banner banner--error">{restartError}</div>}
+          <button
+            className="ghost"
+            onClick={() => restartApp().catch((e) => setRestartError(String(e)))}
+          >
+            Restart Commitarium
+          </button>
         </section>
       </>
     ),

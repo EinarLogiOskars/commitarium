@@ -89,6 +89,7 @@ pub fn run() {
             desktop_services::restore_backup,
             updater::check_desktop_update,
             updater::install_desktop_update,
+            updater::restart_app,
             store::load_ui_state,
             store::save_ui_state,
             import::inspect_folder,

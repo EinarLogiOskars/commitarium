@@ -31,6 +31,7 @@ const COMMANDS: &[&str] = &[
     "restore_backup",
     "check_desktop_update",
     "install_desktop_update",
+    "restart_app",
     "load_ui_state",
     "save_ui_state",
     "inspect_folder",

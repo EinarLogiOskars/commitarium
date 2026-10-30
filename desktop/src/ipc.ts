@@ -166,6 +166,8 @@ export type DesktopUpdateProgress =
   | { status: "installing"; version: string }
   | { status: "restarting"; version: string };
 
+export const restartApp = (): Promise<void> => invoke("restart_app");
+
 export const installDesktopUpdate = (
   expectedVersion: string,
 ): Promise<InstallDesktopUpdateResult> => invoke("install_desktop_update", { expectedVersion });

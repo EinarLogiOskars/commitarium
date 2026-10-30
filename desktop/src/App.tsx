@@ -10,7 +10,7 @@ import { useNotifier } from "./attention/useNotifier";
 import { useDesktopSettings } from "./settings/useDesktopSettings";
 import { useBoot } from "./boot/useBoot";
 import { BootScreen } from "./views/BootScreen";
-import { onExitConfirmationRequested } from "./ipc";
+import { onExitConfirmationRequested, restartApp } from "./ipc";
 import { AppSettings } from "./views/AppSettings";
 import { ExitConfirm } from "./views/ExitConfirm";
 import { Inbox } from "./views/Inbox";
@@ -215,6 +215,9 @@ function App() {
   const startupNotice = boot.warning && boot.warning !== dismissedWarning && (
     <div className="banner banner--warn startup-notice" role="alert">
       <span>{boot.warning}</span>
+      <button className="ghost" onClick={() => void restartApp()}>
+        Restart
+      </button>
       <button className="ghost" onClick={() => setDismissedWarning(boot.warning)}>
         Dismiss
       </button>

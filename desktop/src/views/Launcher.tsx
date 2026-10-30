@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   dockerProbe,
+  restartApp,
   stackUp,
   stackDown,
   stackUpdate,
@@ -10,7 +11,7 @@ import {
   type ServiceStatus,
 } from "../ipc";
 
-type Busy = null | "up" | "down" | "update";
+type Busy = null | "up" | "down" | "update" | "restart";
 
 /** Host readiness + Commitarium stack lifecycle (Slice 1). */
 export function Launcher({ onStackChanged }: { onStackChanged?: () => void }) {
@@ -134,6 +135,9 @@ export function Launcher({ onStackChanged }: { onStackChanged?: () => void }) {
                 </button>
                 <button onClick={() => void refreshStatus()} disabled={busy !== null}>
                   Refresh
+                </button>
+                <button onClick={() => void act("restart", restartApp)} disabled={busy !== null}>
+                  {busy === "restart" ? "Restarting…" : "Restart app"}
                 </button>
               </div>
 
