@@ -2,7 +2,7 @@ import type { AttentionItem } from "../api/types";
 
 /** A page of a project: the vision, a work order or session, its settings. */
 export type PageMode =
-  "vision" | "repository" | "stack" | "new" | "order" | "settings" | "preview" | "sync" | "work";
+  "vision" | "repository" | "stack" | "new" | "order" | "settings" | "preview" | "sync" | "work" | "graph";
 
 /** Where a project's pages point; null is the project's home (the overview,
  * or in Developer mode the chat). */

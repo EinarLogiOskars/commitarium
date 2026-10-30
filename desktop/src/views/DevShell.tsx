@@ -924,7 +924,7 @@ function ProjectCentre({
   useEffect(() => () => onForeground(null), [onForeground]);
   if (!mode) return null;
 
-  const fill = mode === "order";
+  const fill = mode === "order" || mode === "graph";
   return (
     <div className={`dev-shell__page ${fill ? "dev-shell__page--fill" : ""}`}>
       <button className="ghost dev-shell__back" onClick={() => setPage(null)}>

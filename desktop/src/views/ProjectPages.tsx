@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { WorkGraph } from "./WorkGraph";
 import { getProject } from "../api/projects";
 import { createSession, listFeatures } from "../api/features";
 import { getProjectToolchain } from "../api/toolchains";
@@ -313,6 +314,10 @@ export function ProjectPageBody({
       return <ProjectSyncCard projectId={id} projectName={project!.name} />;
     case "work":
       return <AllWork pages={pages} />;
+    case "graph":
+      return (
+        <WorkGraph projectId={id} onOpen={(orderId) => pages.setPage({ mode: "order", orderId })} />
+      );
     default:
       return null;
   }

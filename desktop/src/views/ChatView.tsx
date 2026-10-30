@@ -758,6 +758,16 @@ export function ChatView({
     // A helper's result comes back as a card under its event line.
     chatEntries.push(...turnEntries(message.id));
   }
+  // Mayka has what she needs and the draft is still to write.
+  const latest = conversation?.messages[conversation.messages.length - 1];
+  const offerDraft =
+    planning.kind === "here" &&
+    !running &&
+    !sending &&
+    latest?.role === "assistant" &&
+    planned?.planning?.step === "review" &&
+    planned.planning.open_questions.length === 0 &&
+    planPhase(planned.planning) === "talking";
   const chatRows: ReactNode[] = [];
   let quietStack: ReactElement[] = [];
   const flushQuiet = () => {
@@ -897,6 +907,11 @@ export function ChatView({
           </p>
         )}
         {chatRows}
+        {offerDraft && (
+          <button className="assistant__suggest" onClick={() => void send(WRITE_THE_PLAN)}>
+            Write the plan
+          </button>
+        )}
         {guidance && (
           <div className="banner banner--info assistant__setup">
             <span>{GUIDANCE[guidance].text}</span>
@@ -1261,7 +1276,9 @@ function ActionCard({
           ? [`Start ${what} over? What it has done so far is set aside.`, "Start over"]
           : action.type === "start_planning"
             ? [`Plan this first? ${action.reason}`, APPLY_LABEL[action.type]]
-            : [`${APPLY_LABEL[action.type]} ${what}?`, APPLY_LABEL[action.type]];
+            : action.type === "build_plan"
+              ? [`The plan is ready: ${appliedWhat(action.title) || "build it"}`, "Build it"]
+              : [`${APPLY_LABEL[action.type]} ${what}?`, APPLY_LABEL[action.type]];
     return (
       <div
         className="assistant-action assistant-action--proposed"
