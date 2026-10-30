@@ -114,14 +114,18 @@ jobs:
         working-directory: desktop
         run: pnpm test
 
+      - name: Build the bundled host
+        working-directory: desktop
+        run: pnpm build:host
+
       - name: Check Rust formatting
         working-directory: desktop/src-tauri
         run: cargo fmt --all -- --check
 
       - name: Lint native application
         working-directory: desktop/src-tauri
-        run: cargo clippy --all-targets --locked -- -D warnings
+        run: cargo clippy --all-targets --workspace --locked -- -D warnings
 
       - name: Test native application
         working-directory: desktop/src-tauri
-        run: cargo test --locked
+        run: cargo test --locked --workspace

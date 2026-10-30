@@ -10,6 +10,7 @@ mod docker;
 mod environment;
 mod git_providers;
 mod handoff;
+mod host;
 mod import;
 mod preview;
 mod preview_check;
@@ -37,6 +38,7 @@ pub fn run() {
         .manage(updater::UpdateCoordinator::default())
         .manage(cli_updates::CliUpdater::default())
         .manage(coordinator_build::CoordinatorBuild::default())
+        .manage(host::Host::default())
         .plugin(tauri_plugin_opener::init())
         // HTTP client for the frontend to reach the local coordinator. The
         // capability scope (see capabilities/default.json) restricts it to the
@@ -48,6 +50,8 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             docker::prepare_runtime(app.handle()).map_err(std::io::Error::other)?;
+            // After the runtime, because the host inherits its environment.
+            host::launch(app.handle());
             // No preview runs yet in this process, so whatever is left is
             // from an earlier one.
             preview::sweep_leftovers();
@@ -73,7 +77,7 @@ pub fn run() {
             docker::stack_up,
             docker::stack_down,
             docker::stack_update,
-            docker::stack_status,
+            host::host_connection,
             bootstrap::get_forgejo_viewer_status,
             bootstrap::configure_forgejo_viewer,
             environment::provision_environment_request,
@@ -153,6 +157,7 @@ pub fn run() {
             tauri::RunEvent::Exit | tauri::RunEvent::ExitRequested { .. } => {
                 preview::stop_all(&shutdown_previews);
                 shutdown_profiles.shutdown();
+                app.state::<host::Host>().stop();
             }
             _ => {}
         });

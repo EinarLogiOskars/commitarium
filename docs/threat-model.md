@@ -90,6 +90,17 @@ provider transcripts. Forgejo listens only on loopback, so such a token is
 useful only on that machine; the exposed tokens were rotated on 2026-10-19,
 and the desktop rotating them for existing installs is in progress.
 
+The desktop bundles a trusted host (ADR-040) that serves a loopback HTTP API.
+Unlike Tauri commands, a port can be reached by any local process and any page
+the user opens. So each launch of the app makes a random token and gives it to
+the host over stdin, never on a command line. Every route needs that token, the
+exact `127.0.0.1` Host, which stops names rebound to loopback, and a known
+Origin, and the host sends no CORS headers. Only the main window can ask for
+the token. App windows and the apps they frame cannot, and app windows keep
+their narrow Tauri commands (ADR-029). Workers do not receive it and cannot
+reach the host's loopback port. The token dies with the launch, and the host
+exits when the app's pipe to it closes.
+
 Import, local synchronization, and upstream publication cross the boundary
 through narrow Tauri operations. These operations verify repository state and
 exact revisions, stop on dirty, diverged, conflicting, or ambiguous state, and
@@ -242,7 +253,8 @@ Review this document when a change:
 - mounts a new host path or the Docker socket into a service;
 - gives a container an upstream credential or the user's repository path;
 - adds a host command, filesystem, Git, synchronization, or publication
-  capability to Tauri;
+  capability to Tauri or to the host's API;
+- moves a Tauri command to the host, or changes who can get the host's token;
 - changes backup components, credential exclusions, archive handling, or
   restore compatibility;
 - changes Forgejo permissions, branch protection, or merge rules; or

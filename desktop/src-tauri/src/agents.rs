@@ -6,6 +6,7 @@
 //! agent's private provider volume, journal, bearer token, both Forgejo
 //! tokens, and both workspace trees. Nothing here reads provider credentials.
 
+use commitarium_host::docker::AGENTS_COMPOSE_ENV;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use std::fs;
@@ -16,7 +17,6 @@ use std::time::Duration;
 
 use crate::{bootstrap, docker, environment};
 
-const AGENTS_COMPOSE_ENV: &str = "COMMITARIUM_AGENTS_COMPOSE_FILE";
 const TEMPLATE_PROFILE: &str = "agent-template";
 const MAX_ID_LENGTH: usize = 30;
 const LIST_ATTEMPTS: usize = 120;

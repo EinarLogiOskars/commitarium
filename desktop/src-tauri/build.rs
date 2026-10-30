@@ -15,7 +15,7 @@ const COMMANDS: &[&str] = &[
     "stack_up",
     "stack_down",
     "stack_update",
-    "stack_status",
+    "host_connection",
     "get_forgejo_viewer_status",
     "configure_forgejo_viewer",
     "provision_environment_request",

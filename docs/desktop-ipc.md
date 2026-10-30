@@ -67,8 +67,16 @@ Docker / stack lifecycle:
   remain stopped. One agent's state does not prevent another from starting.
   Containers of removed agents and of the four pre-agent role workers are
   removed; their volumes are kept.
-- `stack_status() -> ServiceStatus[]` — one current row per Compose service,
-  ordered by service name. If Compose briefly exposes both sides of a
+- `host_connection() -> { url, token }` — how the main window reaches the
+  bundled host (ADR-040). Only the main window may call it. App windows never
+  get the token.
+
+The host's HTTP API, on a random loopback port. Every route needs the launch's
+bearer token, the exact Host, and a known Origin:
+
+- `GET /v1/version -> { version }`.
+- `GET /v1/stack/status -> ServiceStatus[]` — one current row per Compose
+  service, ordered by service name. If Compose briefly exposes both sides of a
   container replacement, the running/healthy row wins.
 
 Forgejo audit-viewer onboarding:

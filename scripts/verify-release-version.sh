@@ -15,8 +15,13 @@ fi
 package_version=$(sed -n 's/^[[:space:]]*"version":[[:space:]]*"\([^"]*\)".*/\1/p' desktop/package.json | head -n 1)
 tauri_version=$(sed -n 's/^[[:space:]]*"version":[[:space:]]*"\([^"]*\)".*/\1/p' desktop/src-tauri/tauri.conf.json | head -n 1)
 cargo_version=$(sed -n 's/^version = "\([^"]*\)"/\1/p' desktop/src-tauri/Cargo.toml | head -n 1)
+host_version=$(sed -n 's/^version = "\([^"]*\)"/\1/p' desktop/src-tauri/host/Cargo.toml | head -n 1)
 lock_version=$(awk '
     $0 == "name = \"commitarium\"" { found = 1; next }
+    found && /^version = / { gsub(/^version = \"|\"$/, ""); print; exit }
+' desktop/src-tauri/Cargo.lock)
+host_lock_version=$(awk '
+    $0 == "name = \"commitarium-host\"" { found = 1; next }
     found && /^version = / { gsub(/^version = \"|\"$/, ""); print; exit }
 ' desktop/src-tauri/Cargo.lock)
 worker_client_version=$(sed -n 's/.*Name: "commitarium".*Version: "\([^"]*\)".*/\1/p' internal/codexadapter/adapter.go | head -n 1)
@@ -26,6 +31,8 @@ for entry in \
     "desktop/src-tauri/tauri.conf.json:$tauri_version" \
     "desktop/src-tauri/Cargo.toml:$cargo_version" \
     "desktop/src-tauri/Cargo.lock:$lock_version" \
+    "desktop/src-tauri/host/Cargo.toml:$host_version" \
+    "desktop/src-tauri/host/Cargo.toml in Cargo.lock:$host_lock_version" \
     "internal/codexadapter/adapter.go:$worker_client_version"
 do
     file=${entry%%:*}

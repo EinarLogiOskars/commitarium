@@ -49,13 +49,15 @@ may be signed by the new key.
 
 ## Prepare a version
 
-Choose a semantic version such as `0.2.0` and update it in all six locations:
+Choose a semantic version such as `0.2.0` and update it in all eight locations:
 
 - `desktop/package.json`
 - `desktop/src-tauri/tauri.conf.json`
 - `desktop/src-tauri/Cargo.toml`
 - the `commitarium` package entry in `desktop/src-tauri/Cargo.lock`
 - the default `COMMITARIUM_IMAGE_TAG` in `compose.release.yml`
+- `desktop/src-tauri/host/Cargo.toml`, and its entry in `Cargo.lock`, because
+  the app refuses a bundled host of another version
 - the Commitarium client version in `internal/codexadapter/adapter.go`
 
 Let Cargo update its lockfile entry after changing `Cargo.toml`, then verify the

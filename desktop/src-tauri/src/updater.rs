@@ -185,11 +185,13 @@ pub async fn install_desktop_update(
 
     let _operation = UpdateOperation::begin(&coordinator)?;
     let shutdown_profiles = app.state::<profiles::ProfileManager>().inner().clone();
+    let shutdown_host = app.state::<crate::host::Host>().inner().clone();
     let before_exit_app = app.clone();
     let updater = app
         .updater_builder()
         .on_before_exit(move || {
             shutdown_profiles.shutdown();
+            shutdown_host.stop();
             before_exit_app.cleanup_before_exit();
         })
         .build()
