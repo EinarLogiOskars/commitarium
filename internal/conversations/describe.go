@@ -471,7 +471,33 @@ func (describer StateDescriber) runNote(ctx context.Context, item feature.Featur
 	if run.Status == execution.RunStatusWaitingForUser && run.WaitKind == execution.RunWaitKindBlocker {
 		note += describer.blockerNote(ctx, run.ID)
 	}
+	if run.Status == execution.RunStatusWaitingForUser && run.WaitKind == execution.RunWaitKindRoundCap {
+		note += describer.roundCapNote(ctx, runs, run.ID)
+	}
 	return note
+}
+
+// roundCapNote describes a run at its round limit for the assistant, who
+// handles it first: the agents' last messages, where the open point is, and
+// whether it already handled a round limit of the work order.
+func (describer StateDescriber) roundCapNote(ctx context.Context, runs []execution.Run, runID string) string {
+	if describer.Blockers == nil {
+		return ""
+	}
+	var builder strings.Builder
+	if messages, err := describer.Blockers.LatestAgentMessages(ctx, runID, 4); err == nil && len(messages) > 0 {
+		builder.WriteString("\n    The agents' last messages:")
+		for _, message := range messages {
+			builder.WriteString("\n    - " + message.Role + ": " + clip(message.Text, 1200))
+		}
+	}
+	for _, earlier := range runs {
+		if recoveries, err := describer.Blockers.RunRecoveries(ctx, earlier.ID); err == nil && execution.RoundCapHandled(recoveries) {
+			builder.WriteString("\n    You already handled a round limit of this work order: this one is the user's.")
+			break
+		}
+	}
+	return builder.String()
 }
 
 // BlockerReader reads what blocked a run and what was tried (ADR-032).

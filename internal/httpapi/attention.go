@@ -257,8 +257,8 @@ type runStateSince interface {
 	RunStateSince(ctx context.Context, runID string) (time.Time, error)
 }
 
-// autopilotAttention quiets a blocked or failed run that autopilot is still
-// on: the assistant is finding out why and continuing it. The item is not
+// autopilotAttention quiets a blocked or failed run, or one at its first
+// round limit, that autopilot is still on: the assistant is finding out why and continuing it. The item is not
 // actionable and has its own kind and ID, so the inbox asks the user, and the
 // desktop notifies, only once autopilot gives up. Should autopilot still be
 // on it autopilotStallAfter after the run blocked, the item becomes an
@@ -283,7 +283,17 @@ func (api *API) autopilotAttention(
 			return item, nil
 		}
 	}
-	if api.conversations == nil || (item.Kind != "blocker" && item.Kind != "run_failed") {
+	if item.Kind == string(execution.RunWaitKindRoundCap) && api.roundCapHandled(ctx, item.FeatureID) {
+		// Mayka handled its first round limit; this one is the user's
+		// (ADR-032).
+		item.ID = "round-cap-again:" + item.ID
+		item.Title = "This needs your decision"
+		item.Detail = item.FeatureTitle + ": its agents still can't agree, even after Mayka stepped in. " +
+			"Check in with Mayka to decide."
+		return item, nil
+	}
+	if api.conversations == nil || (item.Kind != "blocker" && item.Kind != "run_failed" &&
+		item.Kind != string(execution.RunWaitKindRoundCap)) {
 		return item, nil
 	}
 	// When the run blocked: its updated_at moves on while it waits.

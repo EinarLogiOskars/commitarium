@@ -508,6 +508,7 @@ func (service *Service) autopilotChat(ctx context.Context, scope, chat string, l
 			if title == "" {
 				title = target
 			}
+			action.LeftForUser = true
 			stored.addEvent(fmt.Sprintf("Autopilot left %s for you: “%s” is your work order, so it waits for you.",
 				actionName(action.AssistantAction), title), now)
 			noted = true
@@ -517,6 +518,7 @@ func (service *Service) autopilotChat(ctx context.Context, scope, chat string, l
 			// Back to Ready throws work away: the user's call, unless the
 			// assistant builds everything here, where it may start stuck work
 			// over as it may close and replace it.
+			action.LeftForUser = true
 			stored.addEvent(fmt.Sprintf("Autopilot left %s for you: sending work back to Ready needs your approval.",
 				actionName(action.AssistantAction)), now)
 			noted = true
@@ -524,6 +526,7 @@ func (service *Service) autopilotChat(ctx context.Context, scope, chat string, l
 		}
 		if action.Type == featureartifact.AssistantContinueWorkOrder || action.Type == featureartifact.AssistantRecoverWorkOrder {
 			if stored.AutoContinues[action.WorkOrderID] >= maxAutoContinues {
+				action.LeftForUser = true
 				stored.addEvent(fmt.Sprintf("Autopilot has continued %s %d times; the next try is yours to approve.",
 					action.WorkOrderID, maxAutoContinues), now)
 				noted = true
@@ -535,12 +538,14 @@ func (service *Service) autopilotChat(ctx context.Context, scope, chat string, l
 			stored.AutoContinues[action.WorkOrderID]++
 		}
 		if action.Type == featureartifact.AssistantCreateWorkOrder && action.VisionItemID != "" && claimed(action.VisionItemID) {
+			action.LeftForUser = true
 			stored.addEvent(fmt.Sprintf("Autopilot left %s for you: its vision item already has a work order.",
 				actionName(action.AssistantAction)), now)
 			noted = true
 			continue
 		}
 		if len(action.Premium) > 0 {
+			action.LeftForUser = true
 			stored.addEvent(fmt.Sprintf("Autopilot left %s for you: it uses %s, which needs your approval.",
 				actionName(action.AssistantAction), strings.Join(action.Premium, " and ")), now)
 			noted = true
@@ -1034,7 +1039,8 @@ func goalInstructions(goal *Goal) string {
 		"\"Needs: …\"), never on a sibling that only adds to the same page. Work that waits still plans early, " +
 		"once the work it follows is implementing. Where the " +
 		"plan gives an order, plan in waves and start each wave together. Restart a goal item that is back in Ready. When one is blocked or failed, recover it " +
-		"with recover_work_order the way its blocker calls for (see How you recover blocked work). When a work " +
+		"with recover_work_order the way its blocker calls for (see How you recover blocked work); one at its round " +
+		"limit, as How you handle round limits says. When a work " +
 		"order needs the user (a question about the product, a merge approval, a secret), tell the user exactly " +
 		"what it needs. When autopilot made a duplicate work order for an item, propose close_work_order for the one that " +
 		"does not deliver it; autopilot closes its own duplicates. When a goal item's work order has run out of " +

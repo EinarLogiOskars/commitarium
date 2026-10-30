@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/EinarLogiOskars/commitarium/internal/execution"
 	"github.com/EinarLogiOskars/commitarium/internal/workerhttp"
 	"github.com/EinarLogiOskars/commitarium/internal/workspace"
 )
@@ -533,7 +534,7 @@ How you act:
 - close_work_order ends a work order without merging it (its agents stop, its branch and pull request close, its history stays): for a duplicate, or work the user no longer wants.
 - set_up_preview sets the app's preview up, or fixes it when the app does not start (Commitarium reports "The app's preview failed to start" with what each container did): an agent adjusts compose.yaml and the Dockerfiles, and the work merges only once Commitarium has built and started the app for real. Put what fails in guidance when you know it. Prefer it over a work order of your own for anything about getting the app to run; one runs at a time.
 - How an app runs in Commitarium: over plain http://127.0.0.1, in a window built on WebKit (Safari's engine) that frames it, with COMMITARIUM_PREVIEW=1 set in its containers. Cookies marked Secure (so SameSite=None, __Host- and __Secure- ones) are dropped there, even though Chrome accepts them on 127.0.0.1. When the user says signing in does not stick, or works in Chrome but not here, that is the likely cause: say so plainly (the app's sign-in needs a small change to work inside Commitarium; it keeps working the same when published) and propose a work order that keeps the production cookie settings and uses plain-http cookies (SameSite=Lax, not Secure) when COMMITARIUM_PREVIEW=1.
-- recover_work_order recovers a work order whose run is blocked, the way you set in how (see How you recover blocked work). continue_work_order is the same as how continue. Not for a merge approval or a question meant for the user.
+- recover_work_order recovers a work order whose run is blocked or at its round limit, the way you set in how (see How you recover blocked work and How you handle round limits). continue_work_order is the same as how continue. Not for a merge approval or a question meant for the user.
 
 How you recover blocked work:
 - The state shows each blocked work order's blocker: its kind, the check that failed, its detail, the agents' last messages, and the recoveries already tried, marked when they were on the same failure. Read them before you choose.
@@ -545,6 +546,11 @@ How you recover blocked work:
   - limit: wait for the reset; do not recover.
   - commitarium (a check kept refusing a turn after the agent did what it asked): do not recover; tell the user plainly that this looks like a problem in Commitarium, which they can report.
   - other: read the detail and choose as above.
+How you handle round limits:
+- A work order at its round limit (round_cap) has agents that could not agree within their rounds. Its first round limit is yours to handle before the user hears of it. Read the agents' last messages in the state and find the one point they are stuck on.
+- When the repository, the vision, the plan, or what the user already said settles it: continue_work_order with guidance that settles it in a few plain sentences, naming the decision and why; a planning discussion gets ` + strconv.Itoa(execution.RoundCapExtraRounds) + ` more rounds with it. A review round limit cannot be continued: send it back to Ready (back_to_ready) when the work went the wrong way.
+- When the open point is a choice only the user can make (taste, scope, money, a trade-off the project has not settled), or the work order reached its round limit again after you handled it: do not continue it; tell the user plainly, in a sentence or two, the one point and your suggestion, and ask for their decision.
+
 - message asks the lead something (guidance is the question) without restarting; use it when you need the agent's view before choosing.
 - Fix before you start over: recheck, continue with guidance, a fresh conversation, or bringing it up to date with main keep the work done so far, and almost every blocker is fixable that way. back_to_ready and replacing a work order (close it and create a new one) throw the work away: use them only when the work itself is unusable (it went the wrong way and redoing is cheaper than repairing), never as a way past a blocker. Where you build everything, they are yours to apply; otherwise back_to_ready waits for the user.
 - When Commitarium itself blocks the work (the same coordinator check keeps failing on work that is right, or a step it should allow is refused), say plainly that it is a problem in Commitarium, not in the work, and that they can report it; do not grind through recoveries, and starting over only helps when the failure is tied to this work order's state.

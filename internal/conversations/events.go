@@ -38,6 +38,11 @@ type RetryWaitReader interface {
 	RetryWaitForRun(ctx context.Context, runID string) (execution.RetryWait, error)
 }
 
+// RecoveryReader reads the recoveries tried on a run (ADR-032).
+type RecoveryReader interface {
+	RunRecoveries(ctx context.Context, runID string) ([]execution.Recovery, error)
+}
+
 // Event is something that happened in a project. Wake asks for the
 // assistant's turn; otherwise it is only noted in the conversation, where
 // the drawer's dot shows it, and the assistant reads the project's current
@@ -71,6 +76,9 @@ type Watcher struct {
 	// from a blocker, so it neither wakes the assistant nor spends
 	// autopilot's continues.
 	RetryWaits RetryWaitReader
+	// Recoveries, when set, tells a work order's first round limit, which
+	// the assistant handles, from one after it did, which is the user's.
+	Recoveries RecoveryReader
 	// Toolchains and VisionSessions let the gap check see a project's stack
 	// and a vision being written; VisionSessions also lets each look store a
 	// vision the assistant has finished writing. AgentLimited, when set, tells it the
@@ -287,11 +295,13 @@ func (service *Service) autopilotOutcome(scope string, action Action, applyErr e
 		stored.UpdatedAt = now
 		return service.write(stored)
 	}
-	// A card the user approves later starts what it creates.
+	// A card the user approves later starts what it creates; until then it
+	// is left for them.
 	for index := range stored.Actions {
 		if stored.Actions[index].ID == action.ID {
 			stored.Actions[index].HoldStart = false
 			stored.Actions[index].PlansEarly = false
+			stored.Actions[index].LeftForUser = true
 		}
 	}
 	name := actionName(action.AssistantAction)
@@ -313,10 +323,13 @@ type work struct {
 	Session                   bool
 	AutoMerge                 bool
 	Retrying                  bool
-	State                     feature.State
-	RunID                     string
-	RunStatus                 execution.RunStatus
-	WaitKind                  execution.RunWaitKind
+	// RoundCapHandled says the assistant already handled a round limit of
+	// the work order.
+	RoundCapHandled bool
+	State           feature.State
+	RunID           string
+	RunStatus       execution.RunStatus
+	WaitKind        execution.RunWaitKind
 }
 
 func (item work) signature() string {
@@ -329,6 +342,9 @@ func (item work) signature() string {
 	// Only when retrying, so the signatures already stored stay the same.
 	if item.Retrying {
 		signature += "|retrying"
+	}
+	if item.RoundCapHandled {
+		signature += "|round-cap-handled"
 	}
 	return signature
 }
@@ -371,6 +387,15 @@ func (watcher Watcher) snapshot(ctx context.Context, projectID string) (view, er
 					run.WaitKind == execution.RunWaitKindBlocker {
 					if wait, err := watcher.LimitWaits.LimitWaitForRun(ctx, run.ID); err == nil {
 						current.LimitAgent = wait.AgentID
+					}
+				}
+				if watcher.Recoveries != nil && run.Status == execution.RunStatusWaitingForUser &&
+					run.WaitKind == execution.RunWaitKindRoundCap {
+					for _, earlier := range runs {
+						if recoveries, err := watcher.Recoveries.RunRecoveries(ctx, earlier.ID); err == nil &&
+							execution.RoundCapHandled(recoveries) {
+							current.RoundCapHandled = true
+						}
 					}
 				}
 				if watcher.RetryWaits != nil && run.Status == execution.RunStatusWaitingForUser &&
@@ -474,6 +499,16 @@ func (item work) event() (Event, bool) {
 		return Event{Text: name + " is ready to merge and waits for the user's approval.", Wake: true}, true
 	case execution.RunWaitKindBlocker:
 		return Event{Text: with(name + " is blocked"), Wake: true}, true
+	case execution.RunWaitKindRoundCap:
+		if item.RoundCapHandled {
+			return Event{Text: name + " reached its round limit again after you handled it once, so it is the " +
+				"user's now: do not continue it again. Tell them plainly, in a sentence or two, the one point its " +
+				"agents cannot settle, and ask for their decision.", Wake: true}, true
+		}
+		return Event{Text: name + " reached its round limit: its agents could not agree. Handle it before the " +
+			"user: read their last messages in the state, then continue it with guidance that settles the open " +
+			"point, or send it back to Ready (see How you handle round limits). Ask the user only for a choice " +
+			"that is truly theirs.", Wake: true}, true
 	case execution.RunWaitKindPhaseCheckpoint:
 		// Planned early, it implements on its own once nothing holds it
 		// (ADR-037).

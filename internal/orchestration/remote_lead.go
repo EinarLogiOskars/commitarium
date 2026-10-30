@@ -349,6 +349,9 @@ type RemoteLeadStarter struct {
 
 	activeMu sync.Mutex
 	active   map[string]struct{}
+	// roundCapGuidance is guidance for a planning run continued past its
+	// round limit, which the run's next planning turn hears (round_cap.go).
+	roundCapGuidance map[string]roundCapNote
 	// corrections are refused turns to hand back to their agents once their
 	// runs are released (self_correction.go).
 	corrections map[string]*pendingCorrection
@@ -4302,6 +4305,7 @@ func (starter *RemoteLeadStarter) launchAdmitted(request remoteLeadRequest) {
 		request.request.WorkspaceAccess = workerhttp.WorkspaceAccessReadWrite
 	}
 	starter.withAttachments(ctx, &request.request)
+	starter.withRoundCapGuidance(&request)
 	attempt, _, putErr := starter.worker.PutAttempt(ctx, request.identity, request.request)
 	if putErr != nil {
 		// The PUT response may have been lost after the worker durably admitted

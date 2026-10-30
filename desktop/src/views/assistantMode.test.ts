@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { AssistantAction } from "../api/assistant";
-import { appliesItself, assistantMode, assistantModeNote } from "./assistantMode";
+import {
+  appliesItself,
+  assistantMode,
+  assistantModeNote,
+  autoAppliedInBuilds,
+} from "./assistantMode";
+import type { AutopilotGoal } from "../api/assistant";
 
 const action = (overrides: Partial<AssistantAction>): AssistantAction =>
   ({
@@ -44,5 +50,49 @@ describe("assistant mode", () => {
     // The plan being written fills in by itself; building it is the user's card.
     expect(appliesItself(action({ type: "update_plan" }))).toBe(true);
     expect(appliesItself(action({ type: "build_plan" }))).toBe(false);
+  });
+
+  it("says which proposals Commitarium applies by itself where Mayka builds everything", () => {
+    const none = {};
+    const create = action({ type: "create_work_order", title: "Add the notification engine" });
+    expect(autoAppliedInBuilds(create, none)).toBe(true);
+    // Taken over and being applied: still a line, not a card that flashes.
+    expect(autoAppliedInBuilds({ ...create, auto_tried: true }, none)).toBe(true);
+    // Left for the user: a card again.
+    expect(autoAppliedInBuilds({ ...create, auto_tried: true, left_for_user: true }, none)).toBe(
+      false,
+    );
+    // Premium models, and what only the user starts, stay cards.
+    expect(autoAppliedInBuilds({ ...create, premium: ["claude-fable-5-1"] }, none)).toBe(false);
+    for (const type of ["plan_project", "create_app", "start_planning", "build_plan"] as const) {
+      expect(autoAppliedInBuilds(action({ type }), none)).toBe(false);
+    }
+    // Only what is still proposed.
+    expect(autoAppliedInBuilds({ ...create, status: "applied" }, none)).toBe(false);
+    expect(autoAppliedInBuilds({ ...create, status: "dismissed" }, none)).toBe(false);
+    // Building everything, starting over and closing are Mayka's, except a
+    // running goal's item, which closes only in recovery.
+    expect(
+      autoAppliedInBuilds(action({ type: "recover_work_order", how: "back_to_ready" }), none),
+    ).toBe(true);
+    const goal: AutopilotGoal = {
+      title: "Finish P0",
+      level: 0,
+      items: [{ id: "p0.1", label: "P0.1", title: "Sort", work_order_id: "wo_9", done: false }],
+      status: "active",
+      started_at: "2026-10-14T12:00:00Z",
+    };
+    expect(
+      autoAppliedInBuilds(action({ type: "close_work_order", work_order_id: "wo_2" }), {
+        goal,
+      }),
+    ).toBe(true);
+    expect(
+      autoAppliedInBuilds(action({ type: "close_work_order", work_order_id: "wo_9" }), {
+        goal,
+      }),
+    ).toBe(false);
+    expect(autoAppliedInBuilds(action({ type: "start_autopilot" }), { goal })).toBe(false);
+    expect(autoAppliedInBuilds(action({ type: "start_autopilot" }), none)).toBe(true);
   });
 });

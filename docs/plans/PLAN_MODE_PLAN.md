@@ -132,9 +132,13 @@ workspace page, so every slice ships on its own.
   page) needs a draft. The assistant attaches build_plan whenever it
   suggests building, so a Build it is always on screen when it says so.
 - A slice's work order (from the assistant or the vision page) ends its
-  description with the plan: the first slice in plan order gets the
-  document to commit at its path; later ones are told to read it there;
-  every slice ticks its own line (`- [x]`) in its commit.
+  description with where the plan is, never the plan itself (a rewritten
+  goal could drop it): Commitarium writes the plan's current text into each
+  slice's checkout at its path when the checkout is made ready, before the
+  lead's first turn, and never over a file already there (the branch has
+  it). The first slice in plan order commits it unchanged; later ones read
+  it there; every slice ticks its own line (`- [x]`) in its commit. Until a
+  commit tracks it, the copy does not count against a clean checkout.
 - Desktop: "Write the plan" (Plan card, composer + menu) sends the
   assistant a message asking for the draft; "Plan drafted · Open" in the
   chat, the composer's + menu, and the Plan card open the plan in an overlay
@@ -142,7 +146,8 @@ workspace page, so every slice ships on its own.
   slices added, changed, and taken out.
 - Tests: phase, Build it refused before a draft, the document stored and
   revised, slices as items or sub-items with built items kept, the first
-  slice's brief carrying the document and the others referencing it.
+  slice's brief naming the document and the others referencing it, the
+  plan in each slice's checkout, an existing file kept.
 
 ## Verification
 

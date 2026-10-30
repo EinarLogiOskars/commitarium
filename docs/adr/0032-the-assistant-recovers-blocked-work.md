@@ -55,6 +55,18 @@ than the work: the blocker's kind becomes `commitarium`, nothing more is
 handed back, and the assistant tells the user it looks like a problem in
 Commitarium instead of grinding on it.
 
+Round limits are the assistant's first too. A run that waits on its planning
+or review round limit (`round_cap`) wakes the assistant with the agents' last
+messages; while autopilot is on it, the inbox item is quiet
+(`autopilot_handling`). It continues a planning discussion with guidance that
+settles the open point (`continue_work_order`: three more rounds, and the
+next turn hears the guidance), or sends the work back to Ready; a review
+round limit cannot be continued. The recovery is recorded with fingerprint
+`round_cap`. When the same work order reaches a round limit again after
+that, or the open point is a choice only the user can make, it is the
+user's: autopilot refuses to continue it, the assistant asks for the one
+decision in plain words, and the inbox shows "This needs your decision".
+
 ## Consequences
 
 - Most blocked work recovers without the user, including coordinator-side

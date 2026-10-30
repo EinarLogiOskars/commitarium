@@ -187,7 +187,9 @@ export function appliedLine(
                 ? ["plan", "Building the plan"]
                 : action.type === "start_planning"
                   ? ["plan", "Turning plan mode on"]
-                  : ["work", "Picking the work back up"];
+                  : action.how === "back_to_ready"
+                    ? ["work", "Starting the work over"]
+                    : ["work", "Picking the work back up"];
       return done
         ? line("done", kind, action.result || fallback)
         : line(action.status === "failed" ? "failed" : "busy", kind, `${fallback}…`);
@@ -224,7 +226,13 @@ export function appliedLine(
       : workKind;
   if (action.status === "failed") return line("failed", kind, `Couldn't start: ${what}`);
   if (done) return line("done", kind, `${past}: ${what}`);
-  if (action.queued) return line("info", kind, `Queued: ${what}, after ${action.after}`);
+  if (action.queued) {
+    return line(
+      "info",
+      kind,
+      action.after ? `Queued: ${what}, after ${action.after}` : `Queued: ${what}`,
+    );
+  }
   return line("busy", kind, `${verb}: ${what}…`);
 }
 

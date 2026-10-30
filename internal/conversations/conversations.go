@@ -147,6 +147,10 @@ type Action struct {
 	StartFailed string `json:"start_failed,omitempty"`
 	// AutoTried marks an action autopilot took over, applied or not.
 	AutoTried bool `json:"auto_tried,omitempty"`
+	// LeftForUser marks an action autopilot left for the user to approve
+	// (their work order, Back to Ready, a premium model, a refusal, or too
+	// many continues); it clears once the action is applied.
+	LeftForUser bool `json:"left_for_user,omitempty"`
 	// Queued marks an action autopilot holds until the work it follows
 	// (After) has merged.
 	Queued bool `json:"queued,omitempty"`
@@ -720,6 +724,9 @@ func (service *Service) Resolve(ctx context.Context, scope, actionID string, sta
 		// The outcome shows on the action's card; the assistant reads the
 		// work it changed from the project's state on its next turn.
 		action.Status, action.Result, action.UpdatedAt = status, strings.TrimSpace(result), service.now()
+		if status == ActionApplied {
+			action.LeftForUser = false
+		}
 		if created.WorkOrderID != "" {
 			action.WorkOrderID = created.WorkOrderID
 		}

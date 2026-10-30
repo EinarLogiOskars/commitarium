@@ -2034,6 +2034,50 @@ func TestRemotePlanningLoopUsesRunLimitSnapshot(t *testing.T) {
 	); err != nil || admitted {
 		t.Fatalf("continued-round retry: admitted=%t err=%v", admitted, err)
 	}
+
+	// The assistant continues the run past its round limit with guidance:
+	// a few more rounds, and the next turn hears what it settled.
+	for turn := extraRound + 1; turn <= extraRound+RoundCapExtraRounds; turn++ {
+		addCompletedPlanningCorrectionAttempt(
+			stub, remoteLeadSessionID(runID), storedProject.ID, storedFeature.ID,
+			workerhttp.RoleLead, "codex-thread-test", turn,
+			workerhttp.EventMessage, fmt.Sprintf("Lead planning response %d", turn),
+		)
+		addCompletedPlanningCorrectionAttempt(
+			stub, remoteReviewerSessionID(runID), storedProject.ID, storedFeature.ID,
+			workerhttp.RoleReviewer, "codex-review-thread-test", turn,
+			workerhttp.EventMessage, fmt.Sprintf("Reviewer planning response %d", turn),
+		)
+	}
+	stub.mu.Lock()
+	requestCount = len(stub.putRequests)
+	stub.mu.Unlock()
+	if _, admitted, err := starter.ContinueRoundCap(
+		t.Context(), runID, "assistant-continue", "Keep the export as CSV, as the plan decides.", true,
+	); err != nil || !admitted {
+		t.Fatalf("continue past the round limit: admitted=%t err=%v", admitted, err)
+	}
+	waitForRemoteLeadStatus(t, executions, runID, execution.RunStatusWaitingForUser)
+	run, err = executions.GetRun(t.Context(), runID)
+	if err != nil || run.PlanningRoundLimit != extraRound+RoundCapExtraRounds || run.WaitKind != execution.RunWaitKindRoundCap {
+		t.Fatalf("continued run = %+v err=%v", run, err)
+	}
+	stub.mu.Lock()
+	continued := append([]workerhttp.PutAttemptRequest(nil), stub.putRequests[requestCount:]...)
+	stub.mu.Unlock()
+	if len(continued) != RoundCapExtraRounds*2 ||
+		!strings.Contains(continued[0].Instructions, "Commitarium's assistant read it and adds:\nKeep the export as CSV") ||
+		strings.Contains(continued[1].Instructions, "Keep the export as CSV") {
+		t.Fatalf("continued turns = %d, first = %q", len(continued), continued[0].Instructions)
+	}
+	if _, admitted, err := starter.ContinueRoundCap(
+		t.Context(), runID, "assistant-continue", "Keep the export as CSV.", true,
+	); err != nil || admitted {
+		t.Fatalf("a retried continuation: admitted=%t err=%v", admitted, err)
+	}
+	if again, _ := executions.GetRun(t.Context(), runID); again.PlanningRoundLimit != run.PlanningRoundLimit {
+		t.Fatalf("a retried continuation granted more rounds: %d", again.PlanningRoundLimit)
+	}
 }
 
 // A pause during the planning discussion stops the run after the lead's

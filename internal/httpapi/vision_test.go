@@ -85,9 +85,9 @@ func TestVisionGetAnswersNotFoundBeforeOneIsWritten(t *testing.T) {
 	}
 }
 
-// A slice of a written plan starts a work order whose brief carries the
-// plan: the first slice commits it, and a later one reads it at its path
-// (PLAN_MODE_PLAN.md PM6).
+// A slice of a written plan starts a work order whose brief names the plan
+// in its checkout, without carrying it: the first slice commits it, and a
+// later one reads it there (PLAN_MODE_PLAN.md PM6).
 func TestASliceWorkOrderCarriesTheWrittenPlan(t *testing.T) {
 	projects := &recordingProjectService{getByIDResult: project.Project{ID: "prj_test"}}
 	visions, err := vision.NewService(t.TempDir(), t.TempDir(), projects, noVisionWorkers)
@@ -116,11 +116,11 @@ func TestASliceWorkOrderCarriesTheWrittenPlan(t *testing.T) {
 		}
 		return features.receivedDescription
 	}
-	if first := start("lists"); !strings.Contains(first, "Commit the plan, as it is, at docs/plans/to-do-app.md") ||
-		!strings.Contains(first, "- [ ] 2. Sharing") {
+	if first := start("lists"); !strings.Contains(first, "The written plan is at docs/plans/to-do-app.md in your checkout") ||
+		!strings.Contains(first, "This is the first slice") || strings.Contains(first, "- [ ] 2. Sharing") {
 		t.Fatalf("the first slice's brief = %q", first)
 	}
-	if later := start("sharing"); !strings.Contains(later, "read the plan there") ||
+	if later := start("sharing"); !strings.Contains(later, "This is a later slice") ||
 		!strings.Contains(later, "docs/plans/to-do-app.md") || strings.Contains(later, "2. Sharing\n") {
 		t.Fatalf("a later slice's brief = %q", later)
 	}

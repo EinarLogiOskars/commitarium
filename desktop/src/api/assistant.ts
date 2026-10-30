@@ -123,6 +123,8 @@ export interface AssistantAction {
   start_failed?: string;
   /** Autopilot took it over. */
   auto_tried?: boolean;
+  /** Autopilot left it for the user instead of applying it. */
+  left_for_user?: boolean;
   /** Its work order already got where it leads, so it was not needed: it
    * counts as applied, and result says why ("Already started."). */
   settled?: boolean;

@@ -411,6 +411,7 @@ func TestTheAssistantIsToldHowToRecover(t *testing.T) {
 	for _, want := range []string{
 		"How you recover blocked work:", "recheck first", "quoting the detail's facts",
 		"Never repeat a way already tried on the same failure", "Never ask the user to approve a recovery they cannot judge",
+		"How you handle round limits:", "Its first round limit is yours to handle", "3 more rounds",
 	} {
 		if !strings.Contains(instructions, want) {
 			t.Errorf("instructions lack %q", want)

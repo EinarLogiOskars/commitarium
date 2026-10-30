@@ -614,7 +614,8 @@ func (api *API) staleResult(ctx context.Context, scope string, action conversati
 		}
 		if len(runs) > 0 {
 			latest := execution.NewestRun(runs)
-			blocked = latest.Status == execution.RunStatusWaitingForUser && latest.WaitKind == execution.RunWaitKindBlocker
+			blocked = latest.Status == execution.RunStatusWaitingForUser &&
+				(latest.WaitKind == execution.RunWaitKindBlocker || latest.WaitKind == execution.RunWaitKindRoundCap)
 		}
 	}
 	return conversations.StaleResult(action.AssistantAction, stored.State, blocked, canTell), nil

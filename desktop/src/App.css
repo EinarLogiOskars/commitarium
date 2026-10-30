@@ -5309,13 +5309,27 @@ select:focus {
 .apps__origin {
   font-size: var(--text-sm);
 }
+/* Show the work and Remove share one row, Remove a quiet text button at its
+   end; neither wraps on a narrow tile. */
 .apps__actions {
   display: flex;
-  gap: 14px;
+  align-items: baseline;
+  gap: 10px;
+  width: 100%;
   margin-top: auto;
+  font-size: var(--text-sm);
 }
-.apps__remove {
+.apps__actions .linkish {
+  margin: 0;
+  white-space: nowrap;
+}
+.apps__actions .apps__remove {
+  margin-left: auto;
   color: var(--muted);
+}
+.apps__actions .apps__remove:hover {
+  color: var(--bad);
+  text-decoration: none;
 }
 .apps__tile--confirm {
   cursor: default;

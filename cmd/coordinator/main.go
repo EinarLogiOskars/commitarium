@@ -271,13 +271,25 @@ func run(ctx context.Context, coordinatorConfig config) error {
 	if err != nil {
 		return fmt.Errorf("create project documents: %w", err)
 	}
+	// A work order that is a slice of a written plan finds the plan in its
+	// checkouts (PLAN_MODE_PLAN.md PM6); the visions come later, with the
+	// real agents.
+	var planFiles *vision.Service
+	copyDocuments := documentStore.ForCheckouts(projectService)
+	checkoutReady := func(ctx context.Context, spec workspace.CheckoutSpec, directory string) error {
+		err := copyDocuments(ctx, spec, directory)
+		if planFiles != nil {
+			err = errors.Join(err, planFiles.ForCheckouts(projectService)(ctx, spec, directory))
+		}
+		return err
+	}
 	checkoutManager, err := gitworkspace.NewManager(gitworkspace.Config{
 		Root:            coordinatorConfig.workspaceRoot,
 		InternalBaseURL: coordinatorConfig.forgejoURL,
 		HostBaseURL:     coordinatorConfig.forgejoHostURL,
 		TokenFile:       coordinatorConfig.forgejoTokenFile,
 		GitExecutable:   coordinatorConfig.gitExecutable,
-		Ready:           documentStore.ForCheckouts(projectService),
+		Ready:           checkoutReady,
 	})
 	if err != nil {
 		return fmt.Errorf("create managed-checkout service: %w", err)
@@ -288,7 +300,7 @@ func run(ctx context.Context, coordinatorConfig config) error {
 		HostBaseURL:     coordinatorConfig.forgejoHostURL,
 		TokenFile:       coordinatorConfig.forgejoTokenFile,
 		GitExecutable:   coordinatorConfig.gitExecutable,
-		Ready:           documentStore.ForCheckouts(projectService),
+		Ready:           checkoutReady,
 	})
 	if err != nil {
 		return fmt.Errorf("create reviewer managed-checkout service: %w", err)
@@ -382,6 +394,7 @@ func run(ctx context.Context, coordinatorConfig config) error {
 			return fmt.Errorf("create project visions: %w", err)
 		}
 		visions.SetSignIns(agentSignIns)
+		planFiles = visions
 		visionService = visions.WithRepository(checkoutManager, forgejoClient)
 		models := func(ctx context.Context) []conversations.ModelChoice {
 			choices := make([]conversations.ModelChoice, 0)
@@ -442,9 +455,11 @@ func run(ctx context.Context, coordinatorConfig config) error {
 			Visions: visions, Features: featureService,
 			Guide: modelGuide, Models: models, ChatUsage: executionStore,
 			SignIns: agentSignIns, Attachments: documentStore,
+			// A run at its round limit is the assistant's to recover too.
 			Blocked: func(ctx context.Context, workOrderID string) bool {
-				_, blocked := blockedRun(ctx, executionService, workOrderID)
-				return blocked
+				run, blocked := blockedRun(ctx, executionService, workOrderID)
+				return blocked || (run.Status == execution.RunStatusWaitingForUser &&
+					run.WaitKind == execution.RunWaitKindRoundCap)
 			},
 			RecoveryExhausted: func(ctx context.Context, workOrderID string) bool {
 				run, blocked := blockedRun(ctx, executionService, workOrderID)
@@ -474,7 +489,7 @@ func run(ctx context.Context, coordinatorConfig config) error {
 		// autopilot runs its actions; it starts once the API exists.
 		assistantWatcher = &conversations.Watcher{
 			Service: projectAssistant, Features: featureService, Runs: executionService, LimitWaits: executionService,
-			RetryWaits: executionService, Visions: visions,
+			RetryWaits: executionService, Recoveries: executionStore, Visions: visions,
 			Toolchains: toolchainService, VisionSessions: visions,
 			// The gap check does not wake an assistant whose agent is at its
 			// usage limit: a run waits on it, or its latest report says so.
