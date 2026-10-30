@@ -615,11 +615,40 @@ fn apply_patch(repository: &Path, patch_path: &Path) -> Result<(), String> {
     if output.status.success() {
         return Ok(());
     }
-    let detail = String::from_utf8_lossy(&output.stderr);
-    Err(format!(
-        "the completed work order conflicts with the current local HEAD; the local repository was not changed: {}",
-        detail.trim()
-    ))
+    Err(conflict_message(&String::from_utf8_lossy(&output.stderr)))
+}
+
+/// Say in plain words which files clash, from `git apply`'s report.
+fn conflict_message(report: &str) -> String {
+    const SHOWN: usize = 5;
+    let mut files: Vec<&str> = report
+        .lines()
+        .filter_map(|line| {
+            if line.ends_with("with conflicts.") {
+                line.split('\'').nth(1)
+            } else {
+                let (file, _) = line.strip_prefix("error: ")?.split_once(": ")?;
+                (file != "patch failed").then_some(file)
+            }
+        })
+        .collect();
+    files.sort_unstable();
+    files.dedup();
+    let mut message = String::from(
+        "Your computer and Commitarium both changed the same files, so nothing was pulled and your copy is unchanged.",
+    );
+    if !files.is_empty() {
+        message.push_str(&format!(
+            " Files in conflict ({}): {}",
+            files.len(),
+            files[..files.len().min(SHOWN)].join(", ")
+        ));
+        if files.len() > SHOWN {
+            message.push_str(&format!(" and {} more", files.len() - SHOWN));
+        }
+        message.push('.');
+    }
+    message
 }
 
 fn create_clean_commit(
@@ -1041,6 +1070,28 @@ fn require_success(output: Output, action: &str) -> Result<(), String> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn names_the_conflicting_files_plainly() {
+        let message = conflict_message(
+            "Applied patch to 'README.md' with conflicts.\n\
+             Applied patch to 'docs/pwa.md' cleanly.\n\
+             error: patch failed: server/app.ts:12\n\
+             error: scripts/check.mjs: does not exist in index\n\
+             Falling back to direct application...\n\
+             Applied patch to 'server/db.ts' with conflicts.",
+        );
+        assert!(message.contains("nothing was pulled"), "{message}");
+        assert!(
+            message.contains("(3): README.md, scripts/check.mjs, server/db.ts."),
+            "{message}"
+        );
+        let many = (0..7)
+            .map(|file| format!("Applied patch to 'f{file}' with conflicts."))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(conflict_message(&many).ends_with("and 2 more."));
+    }
+
     struct GitFixture {
         _root: tempfile::TempDir,
         source: PathBuf,
@@ -1439,10 +1490,7 @@ mod tests {
             None,
         )
         .expect_err("conflicting repository must fail");
-        assert!(
-            error.contains("conflicts with the current local HEAD"),
-            "{error}"
-        );
+        assert!(error.contains("both changed the same files"), "{error}");
         assert_eq!(line(&conflict.source, &["rev-parse", "HEAD"]), local_head);
         assert_eq!(
             git_line_allow_empty(

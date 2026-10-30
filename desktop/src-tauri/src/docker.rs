@@ -8,6 +8,7 @@
 
 use serde::Serialize;
 use std::collections::BTreeMap;
+use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -28,6 +29,7 @@ const DOCKER_INSTALL_URL: &str = "https://docs.docker.com/get-docker/";
 /// connected services it is allowed to run. The provider templates they are
 /// generated from sit in a profile that is never activated for running.
 pub(crate) const PROVIDER_PROFILES: &[&str] = &[];
+const TEMPLATE_PROFILE: &str = "agent-template";
 const TEMPLATE_SERVICES: &[&str] = &["codex-agent-template", "claude-agent-template"];
 
 /// Worker services from before agents (ADR-016); their containers are retired.
@@ -94,7 +96,8 @@ pub(crate) fn prepare_runtime(app: &AppHandle) -> Result<(), String> {
     // Best effort: a failed rewrite leaves the old overlay, whose role
     // services are then only created to be retired.
     let _ = environment::migrate_environment_overlay();
-    if std::env::var_os("COMMITARIUM_COMPOSE_FILE").is_some() || cfg!(debug_assertions) {
+    let compose_override = std::env::var_os("COMMITARIUM_COMPOSE_FILE");
+    if is_explicit_override(compose_override.as_deref(), &runtime_dir) || cfg!(debug_assertions) {
         return Ok(());
     }
 
@@ -105,6 +108,13 @@ pub(crate) fn prepare_runtime(app: &AppHandle) -> Result<(), String> {
     std::env::set_var("COMMITARIUM_IMAGE_TAG", env!("CARGO_PKG_VERSION"));
     std::env::set_var(RELEASE_MODE_ENV, "1");
     Ok(())
+}
+
+/// A restart after an update inherits this process's environment, so the
+/// runtime's own Compose file there is the previous version's setting, which
+/// must be replaced along with its image tag, not an override to respect.
+fn is_explicit_override(compose_file: Option<&OsStr>, runtime_dir: &Path) -> bool {
+    compose_file.is_some_and(|file| Path::new(file) != runtime_dir.join("compose.yml"))
 }
 
 fn materialize_release_compose(runtime_dir: &Path) -> Result<(PathBuf, PathBuf), String> {
@@ -229,11 +239,10 @@ pub(crate) fn compose(profiles: &[&str], args: &[&str]) -> Result<String, String
     compose_command(profiles, args, true, true)
 }
 
-/// Execute against the shipped/base definitions without the locally generated
-/// approved-environment overlay. Pulling base images and deriving a refreshed
-/// environment must not accidentally address the derivative image itself.
+/// Execute against the shipped definitions alone. Both generated overlays can
+/// name locally built environment images, which a pull could never fetch.
 pub(crate) fn compose_base(profiles: &[&str], args: &[&str]) -> Result<String, String> {
-    compose_command(profiles, args, false, true)
+    compose_command(profiles, args, false, false)
 }
 
 /// The resolved Compose model with the agent worker templates, including the
@@ -291,7 +300,7 @@ pub(crate) fn configured_service_image(service: &str) -> Result<String, String> 
         return Err("service is not an agent worker template".to_string());
     }
     let configured = compose_command(
-        &["agent-template"],
+        &[TEMPLATE_PROFILE],
         &["config", "--format", "json"],
         false,
         false,
@@ -661,6 +670,7 @@ pub(crate) fn reconcile_agent_workers(
 ) -> Result<(), String> {
     let agents = agents::fetch(true)?;
     let force_recreate = provision_agents(&agents, true)? || force_recreate;
+    pull_agent_base_images(&agents);
     let services: Vec<String> = agents
         .iter()
         .map(|agent| agents::worker_service(&agent.id))
@@ -708,6 +718,28 @@ pub(crate) fn reconcile_agent_workers(
     // The stack is up on its current images; the ones it replaced can go.
     cleanup::spawn();
     Ok(())
+}
+
+/// Bring the base worker images of the providers in use. With an approved
+/// environment the workers run derivatives, so nothing else fetches a new
+/// version's base for the background refresh to rebuild them from. Best
+/// effort: a worker that really lacks its image fails below, and says so.
+fn pull_agent_base_images(agents: &[agents::Agent]) {
+    if !release_mode() {
+        return;
+    }
+    let mut args = vec!["pull", "--policy", "missing"];
+    for provider in [agents::Provider::Codex, agents::Provider::Claude] {
+        if agents.iter().any(|agent| agent.provider == provider) {
+            args.push(provider.template_service());
+        }
+    }
+    if args.len() == 3 {
+        return;
+    }
+    if let Err(error) = compose_base(&[TEMPLATE_PROFILE], &args) {
+        eprintln!("[stack] could not pull the agent base images: {error}");
+    }
 }
 
 /// Make each agent's worker addressable: its bearer token, its Forgejo
@@ -873,6 +905,20 @@ fn service_status_rank(status: &ServiceStatus) -> (u8, u8) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_restart_after_an_update_replaces_the_old_runtime_settings() {
+        let runtime = Path::new("/data/runtime");
+        assert!(!is_explicit_override(None, runtime));
+        assert!(!is_explicit_override(
+            Some(OsStr::new("/data/runtime/compose.yml")),
+            runtime
+        ));
+        assert!(is_explicit_override(
+            Some(OsStr::new("/elsewhere/compose.yml")),
+            runtime
+        ));
+    }
 
     #[cfg(target_os = "macos")]
     #[test]

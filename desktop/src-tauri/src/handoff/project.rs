@@ -2519,10 +2519,7 @@ mod tests {
             None,
         )
         .unwrap_err();
-        assert!(
-            error.contains("conflicts with the current local HEAD"),
-            "{error}"
-        );
+        assert!(error.contains("both changed the same files"), "{error}");
         assert_eq!(line(&fixture.source, &["rev-parse", "HEAD"]), before);
         assert_eq!(
             std::fs::read_to_string(fixture.source.join("README.md")).unwrap(),
