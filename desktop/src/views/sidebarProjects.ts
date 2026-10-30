@@ -13,10 +13,14 @@ export function sidebarProjects(
   recent: Record<string, string>,
   keep: Set<string>,
   limit = RECENT_PROJECTS,
+  pinned: Set<string> = new Set(),
 ): { shown: Project[]; hidden: number } {
   const when = (p: Project) => recent[p.id] ?? p.created_at;
   const sorted = [...projects].sort((a, b) => when(b).localeCompare(when(a)));
-  const shown = sorted.filter((p, i) => i < limit || keep.has(p.id));
+  // Pinned projects come first and don't count against the recent ones.
+  const first = sorted.filter((p) => pinned.has(p.id));
+  const rest = sorted.filter((p) => !pinned.has(p.id));
+  const shown = [...first, ...rest.filter((p, i) => i < limit || keep.has(p.id))];
   return { shown, hidden: sorted.length - shown.length };
 }
 

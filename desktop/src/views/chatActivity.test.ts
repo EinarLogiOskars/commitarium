@@ -97,13 +97,13 @@ describe("chatOrders", () => {
   ];
   const started = ["fea_d1", "fea_d2", "fea_run", "fea_wait", "fea_d3", "fea_draft", "fea_gone"];
 
-  it("lists every order still going, then the latest finished up to the limit", () => {
+  it("lists what works first, then what else is going, then the latest finished", () => {
     const { orders, more } = chatOrders(started, features, signals, 4);
     expect(orders.map((o) => [o.feature.id, o.dot])).toEqual([
       ["fea_run", "running"],
       ["fea_wait", "waiting"],
-      ["fea_d3", "cancelled"],
       ["fea_draft", "idle"],
+      ["fea_d3", "cancelled"],
     ]);
     expect(more).toBe(2);
   });

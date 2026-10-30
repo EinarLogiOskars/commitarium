@@ -1008,6 +1008,60 @@ progress {
   border-top: 1px solid var(--border);
   margin: 8px 0;
 }
+.effort-limit {
+  margin-top: 24px;
+  padding-top: 20px;
+  border-top: 1px solid var(--border);
+}
+.effort-limit select {
+  max-width: 200px;
+}
+/* Who answers, and what runs, under the composer. */
+.composer__status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 22px;
+  padding: 8px 4px 2px;
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+.composer__who {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.composer__who:hover {
+  text-decoration: underline;
+}
+.composer__autopilot {
+  margin-left: auto;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--blue);
+}
+/* Mayka's answers are plain text, as wide as the composer. */
+.msg.msg--plain {
+  align-self: stretch;
+  max-width: none;
+  padding: 4px 0;
+  border: none;
+  background: none;
+}
+/* The message a search led to. */
+.msg--found {
+  animation: msg-found 2.4s ease-out;
+}
+@keyframes msg-found {
+  from {
+    background: var(--selected);
+  }
+}
 .msg--lead {
   align-self: flex-start;
   background: var(--panel);
@@ -5579,8 +5633,11 @@ select:focus {
   display: flex;
   min-height: 0;
   min-width: 0;
+  overflow: hidden;
 }
 .chat-side {
+  --text-sm: 13px;
+  --text-base: 14px;
   width: 264px;
   flex: none;
   display: flex;
@@ -5591,6 +5648,61 @@ select:focus {
   background: color-mix(in srgb, var(--panel) 40%, var(--bg));
   overflow: hidden;
   min-height: 0;
+}
+/* The rails slide out past the window's edges. */
+.chat-side,
+.dev-shell__cards {
+  transition:
+    margin 200ms ease,
+    visibility 0s;
+}
+.chat-side--folded {
+  margin-left: -264px;
+}
+.dev-shell__cards--folded {
+  margin-right: -330px;
+}
+.chat-side--folded,
+.dev-shell__cards--folded {
+  visibility: hidden;
+  transition:
+    margin 200ms ease,
+    visibility 0s 200ms;
+}
+@media (prefers-reduced-motion: reduce) {
+  .chat-side,
+  .dev-shell__cards {
+    transition: none;
+  }
+}
+/* A rail's handle, on the edge of the centre. */
+.rail-handle {
+  position: absolute;
+  top: 50%;
+  z-index: 5;
+  display: grid;
+  place-items: center;
+  width: 14px;
+  height: 44px;
+  padding: 0;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--muted);
+  transform: translateY(-50%);
+}
+.rail-handle:hover {
+  color: var(--text);
+  background: var(--hover);
+}
+.rail-handle--left {
+  left: 0;
+  border-left: none;
+  border-radius: 0 6px 6px 0;
+}
+.rail-handle--right {
+  right: 0;
+  border-right: none;
+  border-radius: 6px 0 0 6px;
 }
 .chat-side__brand {
   display: flex;
@@ -5661,6 +5773,47 @@ select:focus {
 .chat-side__fold:hover {
   color: var(--text);
   background: var(--selected);
+}
+/* Pins a project: shown on hover, and always once pinned. */
+.chat-side__pin {
+  display: none;
+  place-items: center;
+  flex: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  color: var(--muted);
+}
+.chat-side__item:hover .chat-side__pin,
+.chat-side__pin:focus-visible,
+.chat-side__pin--on {
+  display: grid;
+}
+.chat-side__pin--on {
+  color: var(--text);
+}
+.chat-side__pin:hover {
+  color: var(--text);
+  background: var(--selected);
+}
+/* A search's match in a chat's messages. */
+.chat-side__match {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+  text-align: left;
+}
+.chat-side__match-title {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.chat-side__match-text {
+  display: -webkit-box;
+  overflow: hidden;
+  font-size: var(--text-sm);
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 .chat-side__name--fit {
   flex: 0 1 auto;
@@ -5763,6 +5916,7 @@ select:focus {
   text-align: left;
 }
 .dev-shell__main {
+  position: relative;
   flex: 1;
   min-width: 0;
   display: flex;
@@ -5774,6 +5928,7 @@ select:focus {
   display: flex;
   flex-direction: column;
 }
+
 .dev-shell__chat[hidden] {
   display: none;
 }

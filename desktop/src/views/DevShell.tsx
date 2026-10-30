@@ -4,6 +4,8 @@ import {
   getConversation,
   listChats,
   makeChatProject,
+  searchChats,
+  type ChatMatch,
   type ChatSummary,
   type Conversation,
 } from "../api/assistant";
@@ -24,6 +26,7 @@ import {
 } from "./chatActivity";
 import { RECENT_PROJECTS, later, sidebarProjects } from "./sidebarProjects";
 import { ProjectCards } from "./ProjectCards";
+import { useRail } from "./useRail";
 import { Projects } from "./Projects";
 import { ProjectPageBody, useProjectPages } from "./ProjectPages";
 import type { PageTarget } from "./pageTarget";
@@ -58,6 +61,16 @@ function readSelection(): Selection {
   }
   return { scope: TOP };
 }
+
+const PINNED_KEY = "commitarium.projects.pinned";
+const SIDEBAR_HIDDEN_KEY = "commitarium.shell.sidebarHidden";
+const CARDS_HIDDEN_KEY = "commitarium.shell.cardsHidden";
+// The window widths below which the rails fold: the sidebar first, as the
+// cards hold the project's context while the user works in a chat.
+const SIDEBAR_FOLDS_BELOW = 1200;
+const CARDS_FOLD_BELOW = 900;
+const MIN_SEARCH = 2;
+const SEARCH_DELAY_MS = 250;
 
 function readExpanded(key = EXPANDED_KEY): Set<string> {
   try {
@@ -151,11 +164,33 @@ export function DevShell({
   });
   const [searching, setSearching] = useState(false);
   const [query, setQuery] = useState("");
+  const sidebar = useRail(SIDEBAR_HIDDEN_KEY, SIDEBAR_FOLDS_BELOW);
+  const cards = useRail(CARDS_HIDDEN_KEY, CARDS_FOLD_BELOW);
+  // What the search found in the chats' messages; null until it answers.
+  const [found, setFound] = useState<ChatMatch[] | null>(null);
+  const [reveal, setReveal] = useState<string | undefined>();
+  const [pinned, setPinned] = useState<Set<string>>(() => readExpanded(PINNED_KEY));
   const [error, setError] = useState<string | null>(null);
   const [making, setMaking] = useState(false);
   const [page, setPage] = useState<ShellPage | null>(null);
   // A project the assistant just created, until the project list has it.
   const created = useRef<string | null>(null);
+
+  const words = query.trim();
+  useEffect(() => {
+    setFound(null);
+    if (words.length < MIN_SEARCH) return;
+    let current = true;
+    const timer = setTimeout(() => {
+      searchChats(words)
+        .then((matches) => current && setFound(matches))
+        .catch(() => current && setFound([]));
+    }, SEARCH_DELAY_MS);
+    return () => {
+      current = false;
+      clearTimeout(timer);
+    };
+  }, [words]);
 
   const select = useCallback((next: Selection) => {
     setSelection(next);
@@ -551,8 +586,22 @@ export function DevShell({
     recent,
     keep,
     query.trim() || allProjects ? Infinity : RECENT_PROJECTS,
+    pinned,
   );
-  const folded = sidebarProjects(projects ?? [], recent, keep).hidden;
+  const folded = sidebarProjects(projects ?? [], recent, keep, RECENT_PROJECTS, pinned).hidden;
+  const togglePin = (id: string) =>
+    setPinned((current) => {
+      const next = flip(current, id);
+      remember(PINNED_KEY, [...next]);
+      return next;
+    });
+  const nameOf = (scope: string) =>
+    scope === TOP ? "Chats" : projects?.find((p) => p.id === scope)?.name;
+  const openMatch = (match: ChatMatch) => {
+    if (match.scope !== TOP) expand(match.scope);
+    select({ scope: match.scope, chat: match.chat });
+    setReveal(match.message_id);
+  };
   const visibleProjects = listed.shown.filter(
     (p) => match(p.name) || (chats[p.id] ?? []).some((c) => match(c.title || "New chat")),
   );
@@ -563,7 +612,7 @@ export function DevShell({
 
   return (
     <div className="dev-shell">
-      <nav className="chat-side" aria-label="Chats">
+      <nav className={`chat-side ${sidebar.hidden ? "chat-side--folded" : ""}`} aria-label="Chats">
         <div className="chat-side__brand">
           <span>Commitarium</span>
           <span className="pill chat-side__mode">Developer</span>
@@ -599,6 +648,29 @@ export function DevShell({
         {/* Projects and chats scroll; New chat above and the app's own
             controls below stay put. */}
         <div className="chat-side__scroll">
+          {words.length >= MIN_SEARCH && (
+            <>
+              <div className="chat-side__label">In messages</div>
+              {found === null && <p className="muted chat-side__note">Searching…</p>}
+              {found?.length === 0 && <p className="muted chat-side__note">Nothing found.</p>}
+              {found?.map((match) => (
+                <button
+                  key={`${match.scope}/${match.chat}`}
+                  className="chat-side__item chat-side__match"
+                  onClick={() => openMatch(match)}
+                  title={match.title || "New chat"}
+                >
+                  <span className="chat-side__match-title">
+                    {match.title || "New chat"}
+                    {nameOf(match.scope) && <span className="muted"> · {nameOf(match.scope)}</span>}
+                  </span>
+                  {match.snippet && (
+                    <span className="muted chat-side__match-text">{match.snippet}</span>
+                  )}
+                </button>
+              ))}
+            </>
+          )}
           <div className="chat-side__label">
             Projects
             <button
@@ -630,6 +702,26 @@ export function DevShell({
                 >
                   <Chevron open={open} />
                   <span className="chat-side__name">{p.name}</span>
+                  <span
+                    role="button"
+                    tabIndex={0}
+                    className={`chat-side__pin ${pinned.has(p.id) ? "chat-side__pin--on" : ""}`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      togglePin(p.id);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key !== "Enter" && e.key !== " ") return;
+                      e.preventDefault();
+                      e.stopPropagation();
+                      togglePin(p.id);
+                    }}
+                    aria-pressed={pinned.has(p.id)}
+                    aria-label={pinned.has(p.id) ? `Unpin ${p.name}` : `Pin ${p.name}`}
+                    title={pinned.has(p.id) ? "Unpin" : "Pin to the top"}
+                  >
+                    <PinIcon />
+                  </span>
                   <ActivityDot activity={activities[p.id]} />
                 </button>
                 {open && (
@@ -679,6 +771,13 @@ export function DevShell({
       </nav>
 
       <main className="dev-shell__main">
+        <RailHandle side="left" name="sidebar" hidden={sidebar.hidden} onToggle={sidebar.toggle} />
+        <RailHandle
+          side="right"
+          name="project cards"
+          hidden={cards.hidden}
+          onToggle={cards.toggle}
+        />
         {showProjects && (
           <div className="dev-shell__page">
             <button className="ghost" onClick={() => setShowProjects(false)}>
@@ -714,6 +813,8 @@ export function DevShell({
             title={chatTitle || "New chat"}
             work={signals}
             onConversation={onConversation}
+            reveal={reveal}
+            onRevealed={() => setReveal(undefined)}
             onMoved={(scope, chat) => {
               expand(scope);
               select({ scope, chat });
@@ -753,7 +854,10 @@ export function DevShell({
         </div>
       </main>
 
-      <aside className="dev-shell__cards" aria-label={loose ? "No project yet" : "Project"}>
+      <aside
+        className={`dev-shell__cards ${cards.hidden ? "dev-shell__cards--folded" : ""}`}
+        aria-label={loose ? "No project yet" : "Project"}
+      >
         {loose ? (
           <section className="shell-card">
             <h2 className="shell-card__head">No project yet</h2>
@@ -849,6 +953,58 @@ function PlusIcon() {
   return (
     <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden>
       <path d="M8 3v10M3 8h10" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+/** Folds a rail away: a small handle on its edge, there open or closed. */
+function RailHandle({
+  side,
+  name,
+  hidden,
+  onToggle,
+}: {
+  side: "left" | "right";
+  name: string;
+  hidden: boolean;
+  onToggle: () => void;
+}) {
+  const label = `${hidden ? "Show" : "Hide"} the ${name}`;
+  // The chevron points the way the rail will move.
+  const towardsLeft = side === "left" ? !hidden : hidden;
+  return (
+    <button
+      className={`rail-handle rail-handle--${side}`}
+      onClick={onToggle}
+      aria-expanded={!hidden}
+      aria-label={label}
+      title={label}
+    >
+      <svg width="8" height="12" viewBox="0 0 8 12" aria-hidden>
+        <path
+          d={towardsLeft ? "M6 2 2 6l4 4" : "M2 2l4 4-4 4"}
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.4"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
+    </button>
+  );
+}
+
+function PinIcon() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 16 16" aria-hidden>
+      <path
+        d="M6 2h4v5l2 2v1H4V9l2-2V2Zm2 8v4"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
     </svg>
   );
 }

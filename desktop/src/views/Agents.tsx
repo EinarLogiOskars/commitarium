@@ -27,6 +27,7 @@ import {
 } from "../api/agents";
 import { resetLabel } from "./UsageLimitBanner";
 import { AssistantSettingsSection } from "./AssistantSettings";
+import { EffortLimit } from "./EffortLimit";
 import { ModelTiersSection } from "./ModelTiers";
 import { trapFocus } from "./AppSettings";
 
@@ -319,7 +320,12 @@ export function Agents({ onClose, focus }: { onClose: () => void; focus?: "assis
       </>
     ),
     assistant: hasAgents ? <AssistantSettingsSection /> : null,
-    models: hasAgents ? <ModelTiersSection /> : null,
+    models: hasAgents ? (
+      <>
+        <ModelTiersSection />
+        <EffortLimit />
+      </>
+    ) : null,
   };
 
   return (

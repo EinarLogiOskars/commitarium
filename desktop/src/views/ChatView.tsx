@@ -130,10 +130,15 @@ export function ChatView({
   chips,
   actions,
   work,
+  reveal,
+  onRevealed,
 }: {
   scope: string;
   /** The chat to show; without one, the scope's most recently used chat. */
   chat?: string;
+  /** A message to scroll to, as one a search found. */
+  reveal?: string;
+  onRevealed?: () => void;
   /** The drawer's title; a page shows the chat's own title. */
   title: string;
   /** In the window's drawer, or the main view of the chat shell. */
@@ -431,6 +436,18 @@ export function ChatView({
     el.scrollTop = el.scrollHeight;
   }, [count, running, open, notesOpen]);
   const loaded = conversation !== null;
+  const goal = conversation?.goal;
+  const modelName = useModelName();
+  useEffect(() => {
+    const message = reveal
+      ? chatRef.current?.querySelector(`[data-message="${CSS.escape(reveal)}"]`)
+      : null;
+    if (!message) return;
+    pinned.current = false;
+    message.scrollIntoView({ block: "center" });
+    message.classList.add("msg--found");
+    onRevealed?.();
+  }, [reveal, conversation, onRevealed]);
   useEffect(() => {
     const el = chatRef.current;
     if (!el || !loaded) return;
@@ -712,9 +729,10 @@ export function ChatView({
         block: (
           <div
             key={message.id}
-            className={`msg ${message.role === "user" ? "msg--user" : "msg--lead"}`}
+            data-message={message.id}
+            className={`msg ${message.role === "user" ? "msg--user" : "msg--lead msg--plain"}`}
           >
-            <span className="msg__who">{message.role === "user" ? "You" : "Mayka"}</span>
+            {message.role === "user" && <span className="msg__who">You</span>}
             <div className="msg__text">
               <Markdown text={message.text} />
               <SentAttachments owner={scope} names={message.attachments} />
@@ -1025,6 +1043,24 @@ export function ChatView({
           submitDisabled={sending || plan.busy || !!guidance || !canSend}
           submitLabel={sending ? "Sending…" : "Send"}
         />
+        {page && conversation && (
+          <div className="composer__status">
+            <button
+              className="composer__who"
+              onClick={() => setSetUp("assistant")}
+              title="Mayka's settings"
+            >
+              Mayka
+            </button>
+            {conversation.model && <span>{modelName(conversation.model)}</span>}
+            {goal?.status === "active" && (
+              <span className="pill composer__autopilot">
+                Autopilot · {goal.title} · {goal.items.filter((item) => item.done).length}/
+                {goal.items.length}
+              </span>
+            )}
+          </div>
+        )}
       </div>
     </>
   );

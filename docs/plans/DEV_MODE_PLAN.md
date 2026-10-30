@@ -120,5 +120,4 @@ every slice ships on its own.
 
 - The pulse hand-over animation from one work order to the next (UI
   overhaul).
-- Search across chats.
-- Pinning or reordering projects in the sidebar.
+- Reordering projects in the sidebar.

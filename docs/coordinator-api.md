@@ -2646,6 +2646,10 @@ optional `chat_title`.
   `focus`, provider session, `failure`, and `sign_in`. A conversation answer
   is a chat with its project's state, and names the chat in `chat` and
   `title`.
+- `GET /api/v1/assistant/chat-search?q=` answers `{"matches": [{"scope",
+  "chat", "title", "snippet", "message_id", "at"}]}`: up to 30 open chats,
+  across every scope, whose user or assistant messages hold all the words, or
+  whose title does, the latest first.
 - `GET .../{scope}/chats` answers `{"chats": [{"id", "scope", "title",
   "status", "archived", "used_at", "created_at", "updated_at"}]}`, the most
   recently used first (`used_at` is when the user last wrote in it); open
