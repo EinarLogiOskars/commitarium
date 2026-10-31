@@ -23,6 +23,12 @@ export const PREVIEW_STATE: Record<
 
 export type PreviewHandle = ReturnType<typeof usePreview>;
 
+/** Whether a preview is at rest because it was stopped. Starting one reports
+ * "stopped" too, on the way (the window's first start, or the old preview
+ * going down), and a start that threw has its own failure to show. */
+export const isStopped = (s: PreviewStatus | null, starting: boolean, error: string | null) =>
+  s?.state === "stopped" && !starting && !error;
+
 /** The URL a preview opens in the browser: the `open` process, else the first. */
 export const primaryUrl = (s: PreviewStatus | null) =>
   s?.urls.find((u) => u.open)?.url ?? s?.urls[0]?.url ?? null;
