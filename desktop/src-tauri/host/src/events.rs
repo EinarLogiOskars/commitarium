@@ -1,10 +1,33 @@
 //! Live updates from the host. One stream replaces Tauri's events, so a client
 //! on another machine receives what a local one does. Each update is a
-//! Server-Sent Events frame with a fixed name and a line of JSON.
+//! Server-Sent Events frame with a fixed name and a line of JSON. Code that
+//! reports updates holds an `Events`, which does not care where they go: to a
+//! `Bus` here, or to Tauri events while the work still runs inside the app.
 
 use serde::Serialize;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
+
+/// Where updates go: `data` is the payload as a line of JSON.
+pub trait Sink: Send + Sync + 'static {
+    fn send(&self, name: &'static str, data: String);
+}
+
+/// A handle to report updates through. Cloning shares the same sink.
+#[derive(Clone)]
+pub struct Events(Arc<dyn Sink>);
+
+impl Events {
+    pub fn new(sink: impl Sink) -> Self {
+        Self(Arc::new(sink))
+    }
+
+    pub fn publish(&self, name: &'static str, payload: &impl Serialize) {
+        if let Ok(data) = serde_json::to_string(payload) {
+            self.0.send(name, data);
+        }
+    }
+}
 
 /// Everyone listening to the host right now.
 #[derive(Clone, Default)]
@@ -23,9 +46,14 @@ impl Bus {
 
     /// Sends to every listener and forgets the ones that have gone.
     pub fn publish(&self, name: &'static str, payload: &impl Serialize) {
-        let Ok(data) = serde_json::to_string(payload) else {
-            return;
-        };
+        if let Ok(data) = serde_json::to_string(payload) {
+            self.send(name, data);
+        }
+    }
+}
+
+impl Sink for Bus {
+    fn send(&self, name: &'static str, data: String) {
         let frame = format!("event: {name}\ndata: {data}\n\n");
         if let Ok(mut listeners) = self.listeners.lock() {
             listeners.retain(|listener| listener.send(frame.clone()).is_ok());
@@ -71,6 +99,18 @@ mod tests {
         bus.publish("status", &vec!["ok"]);
         assert_eq!(first.recv().unwrap(), "event: status\ndata: [\"ok\"]\n\n");
         assert_eq!(bus.listeners.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn events_reach_their_sink_as_one_line_of_json() {
+        let bus = Bus::default();
+        let listener = bus.subscribe();
+        let events = Events::new(bus);
+        events.clone().publish("status", &vec!["ok"]);
+        assert_eq!(
+            listener.recv().unwrap(),
+            "event: status\ndata: [\"ok\"]\n\n"
+        );
     }
 
     #[test]
