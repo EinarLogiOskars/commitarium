@@ -16,7 +16,7 @@ permissions = [
   "allow-stack-up",
   "allow-stack-down",
   "allow-stack-update",
-  "allow-stack-status",
+  "allow-host-connection",
   "allow-get-forgejo-viewer-status",
   "allow-configure-forgejo-viewer",
   "allow-provision-environment-request",

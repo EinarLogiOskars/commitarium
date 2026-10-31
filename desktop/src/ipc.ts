@@ -1,9 +1,11 @@
-// Typed wrappers around the explicit Rust command set. This is the only
-// surface the UI uses to reach privileged host operations; it mirrors the
-// commands registered in src-tauri/src/lib.rs.
+// Typed wrappers around the explicit Rust command set and the host's HTTP API.
+// This is the only surface the UI uses to reach privileged host operations; it
+// mirrors the commands registered in src-tauri/src/lib.rs and the routes in
+// src-tauri/host/src/server.rs.
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { fetch } from "@tauri-apps/plugin-http";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { open } from "@tauri-apps/plugin-dialog";
 import type {
@@ -44,7 +46,19 @@ export const launchDockerDesktop = (): Promise<void> => invoke("launch_docker_de
 export const stackUp = (): Promise<string | null> => invoke("stack_up");
 export const stackDown = (): Promise<void> => invoke("stack_down");
 export const stackUpdate = (): Promise<string | null> => invoke("stack_update");
-export const stackStatus = (): Promise<ServiceStatus[]> => invoke("stack_status");
+/** Calls the host (ADR-040). Each call asks for the connection, because a host
+ * that went away comes back on another port. */
+const hostGet = async <T>(path: string): Promise<T> => {
+  const { url, token } = await invoke<{ url: string; token: string }>("host_connection");
+  const response = await fetch(url + path, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const body = await response.json();
+  if (!response.ok) throw new Error(body.error ?? `host error ${response.status}`);
+  return body as T;
+};
+
+export const stackStatus = (): Promise<ServiceStatus[]> => hostGet("/v1/stack/status");
 
 // A fixed restricted, non-admin Forgejo account the user sets a password for, to
 // browse the internal audit trail (repos, PRs, reviews) in a browser read-only.

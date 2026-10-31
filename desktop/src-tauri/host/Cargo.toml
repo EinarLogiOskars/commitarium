@@ -1,0 +1,18 @@
+[package]
+name = "commitarium-host"
+version = "0.9.3"
+description = "Commitarium's trusted host, beside the Docker stack (ADR-040)"
+authors = ["Einar Logi Óskarsson"]
+edition = "2021"
+
+[lib]
+name = "commitarium_host"
+
+[[bin]]
+name = "commitarium-host"
+path = "src/main.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tiny_http = "0.12"

@@ -524,6 +524,7 @@ name = "commitarium"
 version = "0.9.3"
 dependencies = [
  "block2",
+ "commitarium-host",
  "fs2",
  "getrandom 0.3.4",
  "objc2-app-kit",
@@ -545,6 +546,15 @@ dependencies = [
  "tiny_http",
  "tokio",
  "zeroize",
+]
+
+[[package]]
+name = "commitarium-host"
+version = "0.9.3"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tiny_http",
 ]
 
 [[package]]
