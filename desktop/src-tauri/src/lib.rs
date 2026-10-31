@@ -20,6 +20,28 @@ mod updater;
 
 use tauri::{Emitter, Manager};
 
+const QUIT_MENU_ITEM: &str = "quit";
+
+/// The default menu, with a Quit of our own: the macOS one ends the app without
+/// an exit request, which would skip the stop-services confirmation.
+#[cfg(target_os = "macos")]
+fn app_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
+    use tauri::menu::{Menu, MenuItem, MenuItemKind};
+
+    let menu = Menu::default(app)?;
+    if let Some(MenuItemKind::Submenu(app_submenu)) = menu.items()?.into_iter().next() {
+        app_submenu.remove_at(app_submenu.items()?.len() - 1)?;
+        app_submenu.append(&MenuItem::with_id(
+            app,
+            QUIT_MENU_ITEM,
+            format!("Quit {}", app.package_info().name),
+            true,
+            Some("CmdOrCtrl+Q"),
+        )?)?;
+    }
+    Ok(menu)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -39,6 +61,8 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
+            #[cfg(target_os = "macos")]
+            app.set_menu(app_menu(app.handle())?)?;
             docker::prepare_runtime(app.handle()).map_err(std::io::Error::other)?;
             // After the runtime, because the host inherits its environment.
             host::launch(app.handle());
@@ -46,6 +70,11 @@ pub fn run() {
             // App windows' pages, served same-site with the apps (ADR-029).
             app_pages::start(app.handle());
             Ok(())
+        })
+        .on_menu_event(|app, event| {
+            if event.id() == QUIT_MENU_ITEM {
+                app.exit(0);
+            }
         })
         // The renderer can invoke ONLY the commands listed here. This explicit
         // set is the trust boundary: no arbitrary shell, Docker, or filesystem
