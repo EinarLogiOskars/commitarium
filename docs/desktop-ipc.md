@@ -50,6 +50,8 @@ Docker / stack lifecycle:
   discovered in a trusted platform location; it accepts no executable or
   arguments from the frontend. The UI polls the host's Docker probe until the daemon is
   ready before continuing startup.
+- `stack_start()` — `stack_up`, then waits until the core services are ready.
+  Startup uses it. Steps arrive as `stack_progress` events with a `step`.
 - `stack_up()` / `stack_down()` / `stack_update()` — lifecycle. Start and
   update always bring up Forgejo, the coordinator, and the simulated worker.
   Start and update resolve to a warning for the user, or null. In a release
@@ -103,7 +105,7 @@ Routes behind the forwarders:
 
 | Commands | Routes |
 | --- | --- |
-| `stack_up`, `stack_down`, `stack_update` | `POST /v1/stack/up`, `/down`, `/update` |
+| `stack_start`, `stack_up`, `stack_down`, `stack_update` | `POST /v1/stack/start`, `/up`, `/down`, `/update` |
 | `list_profiles` | `GET /v1/profiles` |
 | `begin_login`, `submit_login_code`, `submit_api_key`, `cancel_login` | `POST /v1/profiles/login/begin`, `/code`, `/key`, `/cancel` |
 | `verify_profile`, `disconnect_profile` | `POST /v1/profiles/verify`, `/disconnect` |

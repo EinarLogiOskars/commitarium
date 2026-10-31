@@ -1,6 +1,6 @@
 # Remote Host: Implementation Plan
 
-**Status:** agreed direction, RH0 and RH1 done, RH2 in progress (its five moves done, progress streaming and the host starting the stack left), [ADR-040](../adr/0040-split-the-host-from-the-app.md).
+**Status:** agreed direction, RH0 and RH1 done, RH2 done in code, with a live test owed before a release, [ADR-040](../adr/0040-split-the-host-from-the-app.md).
 Earlier plans are parked while this is explored. A release still needs the
 [RH1](#rh1-a-bundled-host-that-does-almost-nothing) update check.
 
@@ -107,9 +107,15 @@ details as each module moves.
      the stack. reqwest in the host uses rustls.
   5. Jobs move out of the React hooks. **Done 2026-10-31.** The host polls the
      coordinator for them, from startup until it exits.
-- Add progress streaming where RH0 marked it.
+- Add progress streaming where RH0 marked it. **Done 2026-10-31.** Stack starts
+  and updates report their steps as `stack_progress` events. Validation,
+  preview checks and environment provisioning are already jobs the coordinator
+  tracks.
 - The host starts the stack and runs validation jobs, acceptance runs and
-  preview checks itself, in place of the React hooks.
+  preview checks itself, in place of the React hooks. **Done 2026-10-31.**
+  `POST /v1/stack/start` starts the stack and waits until it is ready, and
+  `docker::stack_start` is what a headless host calls in RH3. Finding and
+  opening Docker stays in the app.
 - Done when the desktop side holds only client and local-mode-only work.
 
 ## RH3: Headless on Linux
