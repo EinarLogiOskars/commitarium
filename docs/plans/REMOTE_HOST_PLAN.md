@@ -1,6 +1,6 @@
 # Remote Host: Implementation Plan
 
-**Status:** agreed direction, RH0 and RH1 done, RH2 in progress, [ADR-040](../adr/0040-split-the-host-from-the-app.md).
+**Status:** agreed direction, RH0 and RH1 done, RH2 in progress (its five moves done, progress streaming and the host starting the stack left), [ADR-040](../adr/0040-split-the-host-from-the-app.md).
 Earlier plans are parked while this is explored. A release still needs the
 [RH1](#rh1-a-bundled-host-that-does-almost-nothing) update check.
 
@@ -96,8 +96,8 @@ details as each module moves.
   3. Those modules move into the host library, still running in the app.
   4. They flip to run in the host process, in one change, tested against a
      real stack. The host then needs its own TLS for reqwest, because
-     `cli_updates` calls the npm registry. **Code done 2026-10-31, the live
-     test against a real stack is still to do.** The host owns login, preview
+     `cli_updates` calls the npm registry. **Done 2026-10-31.** Timeout, restart, crash
+     and backup paths still need a live test before a release. The host owns login, preview
      and CLI-updater state, runs the startup sweep and the updater, and has
      POST routes. Tauri commands kept their names and forward to it, so app
      windows are unchanged. Exit and update tell it what to do through routes.
@@ -105,7 +105,8 @@ details as each module moves.
      Backups and the development-only coordinator rebuild stay in the app with
      plain Docker calls and hold no host state; backups ask the host to start
      the stack. reqwest in the host uses rustls.
-  5. Jobs move out of the React hooks. **Still to do.**
+  5. Jobs move out of the React hooks. **Done 2026-10-31.** The host polls the
+     coordinator for them, from startup until it exits.
 - Add progress streaming where RH0 marked it.
 - The host starts the stack and runs validation jobs, acceptance runs and
   preview checks itself, in place of the React hooks.
@@ -141,6 +142,8 @@ Ships with RH4.
 - Remove the hardcoded `127.0.0.1:8080` from `client.ts` and from Tauri's HTTP
   permissions, without widening them for app windows.
 - API version check between app and host.
+- First launch asks "Run on this computer" or "Connect to a host". Connect skips
+  Docker, and the choice can change later. There is no separate install.
 - Features not yet working remotely say so in plain words.
 - Docs for Tailscale first, then a VPS. On a VPS, the firewall leaves
   coordinator and Forgejo closed.
