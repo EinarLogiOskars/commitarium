@@ -31,8 +31,9 @@ fn run() -> Result<(), String> {
         .to_ip()
         .ok_or("the server has no IP address")?
         .port();
+    let data_dir = launch.data_dir.clone();
     let access = Access::new(launch, port);
-    thread::spawn(move || server::serve(http, access));
+    thread::spawn(move || server::serve(http, access, data_dir));
 
     let ready = Ready {
         port,

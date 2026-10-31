@@ -6,7 +6,6 @@
 //! Compose or shell runner — the renderer cannot pass an arbitrary file,
 //! project, or command through to Docker.
 
-use serde::Serialize;
 use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -16,15 +15,11 @@ use tauri::{AppHandle, Manager, State};
 use crate::{agents, bootstrap, cleanup, cli_updates, environment, profiles};
 use commitarium_host::docker::{
     compose_command as host_compose_command, compose_files as host_compose_files,
-    docker_desktop_path, docker_executable, COMPOSE_OVERRIDE_ENV, ENVIRONMENT_COMPOSE_ENV,
+    docker_desktop_path, COMPOSE_OVERRIDE_ENV, ENVIRONMENT_COMPOSE_ENV,
 };
 pub(crate) use commitarium_host::docker::{
     compose_file, docker_command, PROJECT_NAME, PROVIDER_PROFILES,
 };
-
-/// Official Docker installation page, surfaced to the user when Docker is
-/// missing. A fixed, trusted URL — never sourced from runtime data.
-const DOCKER_INSTALL_URL: &str = "https://docs.docker.com/get-docker/";
 
 const ENVIRONMENT_WARNING: &str = "Your agents may still be on the previous version, because Commitarium couldn't update their tools. It will keep trying in the background. Until then, work may fail to start.";
 const TEMPLATE_PROFILE: &str = "agent-template";
@@ -48,18 +43,6 @@ const EMBEDDED_RELEASE_COMPOSE: &str = include_str!("../../../compose.release.ym
 /// Referenced by the Codex agent worker template relative to the Compose file.
 const EMBEDDED_CODEX_SECCOMP: &str = include_str!("../../../docker/codex-seccomp.json");
 const CODEX_SECCOMP_PATH: &str = "docker/codex-seccomp.json";
-
-/// Result of probing the host for Docker and Compose readiness.
-#[derive(Serialize)]
-pub struct DockerProbe {
-    docker_installed: bool,
-    docker_running: bool,
-    compose_available: bool,
-    docker_launchable: bool,
-    docker_version: Option<String>,
-    compose_version: Option<String>,
-    install_url: &'static str,
-}
 
 /// Install the release Compose definitions into the per-user data directory.
 /// Development builds keep resolving the repository Compose file, and an
@@ -214,50 +197,6 @@ fn configured_service_image_from_json(configured: &str, service: &str) -> Result
         ));
     }
     Ok(image)
-}
-
-/// Run a plain command and return its trimmed stdout when it exits zero.
-fn probe(program: &str, args: &[&str]) -> Option<String> {
-    let output = crate::process::command(program).args(args).output().ok()?;
-    if output.status.success() {
-        Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
-    } else {
-        None
-    }
-}
-
-fn probe_docker(args: &[&str]) -> Option<String> {
-    let executable = docker_executable()?;
-    probe(executable.to_string_lossy().as_ref(), args)
-}
-
-fn docker_probe_blocking() -> DockerProbe {
-    let executable_found = docker_executable().is_some();
-    let docker_version = probe_docker(&["--version"]);
-    // `docker info --format {{.ServerVersion}}` only succeeds when the daemon
-    // is actually reachable, so it doubles as the "is the daemon running" check.
-    let server_version = probe_docker(&["info", "--format", "{{.ServerVersion}}"]);
-    let compose_version = probe_docker(&["compose", "version", "--short"]);
-    let desktop_path = docker_desktop_path();
-
-    DockerProbe {
-        docker_installed: executable_found || desktop_path.is_some(),
-        docker_running: server_version.is_some(),
-        compose_available: compose_version.is_some(),
-        docker_launchable: desktop_path.is_some(),
-        docker_version,
-        compose_version,
-        install_url: DOCKER_INSTALL_URL,
-    }
-}
-
-/// Probe the host for Docker and Compose readiness without blocking the app's
-/// event loop while Docker Desktop is still starting.
-#[tauri::command]
-pub async fn docker_probe() -> Result<DockerProbe, String> {
-    tauri::async_runtime::spawn_blocking(docker_probe_blocking)
-        .await
-        .map_err(|_| "could not inspect Docker Desktop".to_string())
 }
 
 /// Launch only a detected Docker Desktop installation. The renderer cannot

@@ -1,8 +1,8 @@
 # Remote Host: Implementation Plan
 
-**Status:** agreed direction, RH0 done, RH1 in progress, [ADR-040](../adr/0040-split-the-host-from-the-app.md).
-Earlier plans are parked while this is explored. The next step is
-[RH1](#rh1-a-bundled-host-that-does-almost-nothing).
+**Status:** agreed direction, RH0 and RH1 done, RH2 in progress, [ADR-040](../adr/0040-split-the-host-from-the-app.md).
+Earlier plans are parked while this is explored. A release still needs the
+[RH1](#rh1-a-bundled-host-that-does-almost-nothing) update check.
 
 This plan splits the host out of the desktop app, so Commitarium can run on a
 homelab or VPS and be controlled from a paired app anywhere. RH0 to RH2 change
@@ -90,6 +90,9 @@ details as each module moves.
 - Move commands to the host a module at a time, one PR each. Local behaviour
   stays the same. Order: read-only status, the event stream, stack, sign-in,
   jobs, previews.
+- The read-only slice moves `docker_probe` and `disk_space_probe`.
+  `agent_cli_status` moves with the event stream, and
+  `get_forgejo_viewer_status` with the stack, because each depends on that work.
 - Add progress streaming where RH0 marked it.
 - The host starts the stack and runs validation jobs, acceptance runs and
   preview checks itself, in place of the React hooks.

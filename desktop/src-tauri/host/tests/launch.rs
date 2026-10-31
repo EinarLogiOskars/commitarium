@@ -17,6 +17,7 @@ fn start() -> (Child, ChildStdin, Ready) {
     let launch = Launch {
         token: "launch-token".into(),
         origins: vec!["tauri://localhost".into()],
+        data_dir: std::env::temp_dir(),
     };
     writeln!(stdin, "{}", serde_json::to_string(&launch).unwrap()).unwrap();
     let mut line = String::new();

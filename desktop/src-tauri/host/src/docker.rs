@@ -6,6 +6,22 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::process::Command;
 
+/// Where to send the user when Docker is missing. A fixed, trusted URL, never
+/// sourced from runtime data.
+const DOCKER_INSTALL_URL: &str = "https://docs.docker.com/get-docker/";
+
+/// Result of probing the host for Docker and Compose readiness.
+#[derive(Serialize)]
+pub struct DockerProbe {
+    docker_installed: bool,
+    docker_running: bool,
+    compose_available: bool,
+    docker_launchable: bool,
+    docker_version: Option<String>,
+    compose_version: Option<String>,
+    install_url: &'static str,
+}
+
 /// Fixed Compose project name. Scoping every command to this project keeps the
 /// launcher from touching any other Compose stack on the host.
 pub const PROJECT_NAME: &str = "commitarium";
@@ -379,6 +395,42 @@ fn service_status_rank(status: &ServiceStatus) -> (u8, u8) {
         _ => 0,
     };
     (state, health)
+}
+
+/// Run a plain command and return its trimmed stdout when it exits zero.
+fn probe(program: &str, args: &[&str]) -> Option<String> {
+    let output = crate::process::command(program).args(args).output().ok()?;
+    if output.status.success() {
+        Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    } else {
+        None
+    }
+}
+
+fn probe_docker(args: &[&str]) -> Option<String> {
+    let executable = docker_executable()?;
+    probe(executable.to_string_lossy().as_ref(), args)
+}
+
+/// Probes for Docker and Compose. Can be slow while Docker Desktop starts.
+pub fn docker_probe() -> DockerProbe {
+    let executable_found = docker_executable().is_some();
+    let docker_version = probe_docker(&["--version"]);
+    // `docker info --format {{.ServerVersion}}` only succeeds when the daemon
+    // is actually reachable, so it doubles as the "is the daemon running" check.
+    let server_version = probe_docker(&["info", "--format", "{{.ServerVersion}}"]);
+    let compose_version = probe_docker(&["compose", "version", "--short"]);
+    let desktop_path = docker_desktop_path();
+
+    DockerProbe {
+        docker_installed: executable_found || desktop_path.is_some(),
+        docker_running: server_version.is_some(),
+        compose_available: compose_version.is_some(),
+        docker_launchable: desktop_path.is_some(),
+        docker_version,
+        compose_version,
+        install_url: DOCKER_INSTALL_URL,
+    }
 }
 
 #[cfg(test)]
