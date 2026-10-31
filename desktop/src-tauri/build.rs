@@ -11,6 +11,7 @@ const COMMANDS: &[&str] = &[
     "rebuild_coordinator",
     "prune_session_previews",
     "launch_docker_desktop",
+    "stack_start",
     "stack_up",
     "stack_down",
     "stack_update",
