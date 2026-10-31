@@ -260,6 +260,30 @@ impl ProfileManager {
         }
     }
 
+    /// Marks a login as cancelling, or returns nothing if it has ended or is
+    /// already cancelling. The status changes under the lock, before anything
+    /// can see the flag, so the login's own final status always comes after it.
+    fn begin_cancel(&self, events: &Events, spec: &ProfileSpec) -> Option<ActiveLogin> {
+        let mut state = self.inner.state.lock().expect("profile state poisoned");
+        let active = state.active.get(&spec.id).cloned()?;
+        if active.cancelled.swap(true, Ordering::AcqRel) {
+            return None;
+        }
+        let detail = Some(detail("Cancelling login and checking the profile."));
+        state
+            .statuses
+            .insert(spec.id.clone(), (ProfileStatus::Verifying, detail.clone()));
+        events.publish(
+            PROGRESS_EVENT,
+            &LoginProgress {
+                profile_id: spec.id.clone(),
+                status: ProfileStatus::Verifying,
+                detail,
+            },
+        );
+        Some(active)
+    }
+
     fn transition(
         &self,
         events: &Events,
@@ -492,26 +516,13 @@ pub fn cancel_login(
     profile_id: String,
 ) -> Result<(), String> {
     let spec = profile_spec(&profile_id)?;
-    let active = manager
-        .active(&spec)
-        .ok_or_else(|| "no login is in progress for this profile".to_string())?;
-    active.cancelled.store(true, Ordering::Release);
+    let Some(active) = manager.begin_cancel(&events, &spec) else {
+        return Ok(());
+    };
     if let Some(child) = active.child {
         let _ = child.lock().expect("login process poisoned").kill();
         remove_login_container(&spec);
-        manager.transition(
-            &events,
-            &spec,
-            ProfileStatus::Verifying,
-            Some(detail("Cancelling login and checking the profile.")),
-        );
     } else if !active.submitted {
-        manager.transition(
-            &events,
-            &spec,
-            ProfileStatus::Verifying,
-            Some(detail("Cancelling login and checking the profile.")),
-        );
         let manager = manager.clone();
         thread::spawn(move || {
             let current = probe_profile(&spec);
@@ -528,13 +539,6 @@ pub fn cancel_login(
             );
             manager.finish(&spec, active.generation);
         });
-    } else {
-        manager.transition(
-            &events,
-            &spec,
-            ProfileStatus::Verifying,
-            Some(detail("Cancelling login and checking the profile.")),
-        );
     }
     Ok(())
 }
@@ -1331,6 +1335,37 @@ mod tests {
         assert_eq!(claude.login_container, "commitarium-login-claude-max");
         assert_eq!(claude.executable(), "claude");
         assert_eq!(spec("codex", Provider::Codex).executable(), "codex");
+    }
+
+    #[derive(Clone, Default)]
+    struct Sent(Arc<Mutex<Vec<String>>>);
+
+    impl crate::events::Sink for Sent {
+        fn send(&self, _name: &'static str, data: String) {
+            self.0.lock().unwrap().push(data);
+        }
+    }
+
+    #[test]
+    fn a_login_is_only_cancelled_once() {
+        let sent = Sent::default();
+        let events = Events::new(sent.clone());
+        let manager = ProfileManager::new();
+        let spec = spec("codex", Provider::Codex);
+        let generation = manager
+            .reserve(&spec, LoginMethod::Subscription, ProfileStatus::Starting)
+            .unwrap();
+
+        assert!(manager.begin_cancel(&events, &spec).is_some());
+        assert!(manager.begin_cancel(&events, &spec).is_none());
+        assert_eq!(sent.0.lock().unwrap().len(), 1);
+
+        manager.transition(&events, &spec, ProfileStatus::Connected, None);
+        assert!(manager.begin_cancel(&events, &spec).is_none());
+        assert_eq!(manager.snapshot(&spec).status, ProfileStatus::Connected);
+
+        manager.finish(&spec, generation);
+        assert!(manager.begin_cancel(&events, &spec).is_none());
     }
 
     #[test]
