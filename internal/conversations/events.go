@@ -117,6 +117,9 @@ func (watcher Watcher) Run(ctx context.Context) {
 func (watcher Watcher) Tick(ctx context.Context) {
 	watcher.Service.RetryDueSignIns(ctx)
 	for _, scope := range watcher.Service.projectScopes() {
+		if watcher.Service.forgetIfDeleted(ctx, scope) {
+			continue
+		}
 		watcher.settleVision(ctx, scope)
 		watcher.followHelpers(ctx, scope)
 		if err := watcher.Service.observe(ctx, scope, watcher.snapshot); err != nil {
@@ -547,6 +550,19 @@ func (service *Service) projectScopes() []string {
 		}
 	}
 	return scopes
+}
+
+// forgetIfDeleted removes the chats of a project that no longer exists and
+// says so. A write in flight while the project was deleted can bring its
+// folder back after DeleteProject, and nothing else would remove it.
+func (service *Service) forgetIfDeleted(ctx context.Context, scope string) bool {
+	if err := service.checkScope(ctx, scope); !errors.Is(err, project.ErrNotFound) {
+		return false
+	}
+	if err := service.DeleteProject(ctx, scope); err != nil {
+		log.Printf("forget the chats of deleted project %s: %v", scope, err)
+	}
+	return true
 }
 
 // observe records a project's work, notes what changed in the chat each

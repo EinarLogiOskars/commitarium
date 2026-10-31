@@ -2,6 +2,9 @@ package conversations
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -56,6 +59,52 @@ func TestChangesWakeTheAssistantOnlyForWhatMatters(t *testing.T) {
 	unchanged := map[string]work{"fea_1": {Title: "Log", State: feature.StateCompleted}}
 	if events := changes(map[string]string{"fea_1": "completed"}, unchanged); len(events) != 0 {
 		t.Fatalf("an unchanged work order reported events: %+v", events)
+	}
+}
+
+type deletedProjectStub struct {
+	projectsStub
+	missing map[string]error
+}
+
+func (stub deletedProjectStub) GetByID(ctx context.Context, id string) (project.Project, error) {
+	if err, ok := stub.missing[id]; ok {
+		return project.Project{}, err
+	}
+	return stub.projectsStub.GetByID(ctx, id)
+}
+
+type featuresFunc func(context.Context, string) ([]feature.Feature, error)
+
+func (list featuresFunc) List(ctx context.Context, projectID string) ([]feature.Feature, error) {
+	return list(ctx, projectID)
+}
+
+// A folder left behind by a deleted project is removed at the next look, and
+// the watcher does not ask about its work. A failed lookup removes nothing.
+func TestTheWatcherForgetsChatsOfDeletedProjects(t *testing.T) {
+	service, worker := newTestService(t)
+	for _, scope := range []string{"prj_gone", "prj_kept", "prj_down"} {
+		if err := service.Wake(t.Context(), scope, "Note", "Text"); err != nil {
+			t.Fatal(err)
+		}
+		worker.finish(workerhttp.TerminalResult{Outcome: workerhttp.OutcomeCompleted, Disposition: workerhttp.DispositionSucceeded, Summary: "Done."})
+	}
+	service.config.Projects = deletedProjectStub{missing: map[string]error{
+		"prj_gone": fmt.Errorf("get project: %w", project.ErrNotFound),
+		"prj_down": errors.New("database is locked"),
+	}}
+	looked := []string{}
+	watcher := Watcher{Service: service, Features: featuresFunc(func(_ context.Context, id string) ([]feature.Feature, error) {
+		looked = append(looked, id)
+		return nil, nil
+	})}
+	watcher.Tick(t.Context())
+	if scopes := service.projectScopes(); !slices.Equal(scopes, []string{"prj_down", "prj_kept"}) {
+		t.Fatalf("scopes = %v", scopes)
+	}
+	if slices.Contains(looked, "prj_gone") {
+		t.Fatalf("the watcher looked at a deleted project: %v", looked)
 	}
 }
 
