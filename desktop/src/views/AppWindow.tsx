@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { getProject } from "../api/projects";
 import { listFeatures, setUpPreview, tellAssistantPreviewFailed } from "../api/features";
 import { getPreviewStatus, onPreviewStatusChanged, startPreview, type PreviewStatus } from "../ipc";
-import { primaryUrl } from "./usePreview";
+import { isStopped, primaryUrl } from "./usePreview";
 import { AssistantDrawer, SignInNotice } from "./AssistantDrawer";
 import { agentName, useAgents } from "./useAgents";
 import { getConversation, type Conversation } from "../api/assistant";
@@ -27,14 +27,18 @@ export function AppWindow({ projectId }: { projectId: string }) {
   const [project, setProject] = useState<Project | null>(null);
   const [status, setStatus] = useState<PreviewStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [starting, setStarting] = useState(false);
   const [assistantOpen, setAssistantOpen] = useState(false);
 
   const start = useCallback(async () => {
     setError(null);
+    setStarting(true);
     try {
       setStatus(await startPreview(projectId));
     } catch (e) {
       setError(String(e));
+    } finally {
+      setStarting(false);
     }
   }, [projectId]);
 
@@ -67,8 +71,10 @@ export function AppWindow({ projectId }: { projectId: string }) {
   }, [projectId, start]);
 
   // Work that merges reaches the app: rebuild it from the new head. Its data
-  // volumes are kept. The work fixing the app's setup is followed too.
+  // volumes are kept. The work fixing the app's setup is followed too. An app
+  // stopped by the user stays stopped; its next run builds the new head.
   const app = !!project?.app;
+  const stopped = isStopped(status, starting, error);
   const merged = useRef<Set<string> | null>(null);
   const [fixingWork, setFixingWork] = useState<Feature | null>(null);
   useEffect(() => {
@@ -83,7 +89,7 @@ export function AppWindow({ projectId }: { projectId: string }) {
         const done = new Set(features.filter((f) => f.state === "completed").map((f) => f.id));
         const seen = merged.current;
         merged.current = done;
-        if (app && seen && [...done].some((id) => !seen.has(id))) void start();
+        if (app && !stopped && seen && [...done].some((id) => !seen.has(id))) void start();
       } catch {
         // The next look tries again.
       }
@@ -91,7 +97,7 @@ export function AppWindow({ projectId }: { projectId: string }) {
     void look();
     const timer = setInterval(() => void look(), MERGE_POLL_MS);
     return () => clearInterval(timer);
-  }, [projectId, start, app]);
+  }, [projectId, start, app, stopped]);
 
   // While the app is still being built, the window says how far along it is
   // instead of showing a preview that has nothing to run yet.
@@ -211,10 +217,11 @@ export function AppWindow({ projectId }: { projectId: string }) {
               )}
               {fixError && <p className="muted">{fixError}</p>}
             </>
-          ) : project && !app && status?.state === "stopped" ? (
-            // A project's preview stopped from its Preview card stays stopped.
+          ) : stopped ? (
+            // Stopped from the main window while this one is open: it stays
+            // stopped until asked to run again.
             <>
-              <p className="muted">The preview isn&apos;t running.</p>
+              <p className="muted">The {app ? "app" : "preview"} isn&apos;t running.</p>
               <div className="row">
                 <button className="primary" onClick={() => void start()}>
                   Run
