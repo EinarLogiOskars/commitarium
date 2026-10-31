@@ -46,13 +46,9 @@ approve/reject/run and displays progress. See ADR-010.
 
 Docker / stack lifecycle:
 
-- `docker_probe() -> DockerProbe` — installed / daemon-running /
-  compose-available, plus whether a detected Docker Desktop installation can
-  be launched. Native probing resolves standard platform installation paths as
-  well as `PATH`, because packaged desktop apps do not inherit a login shell.
 - `launch_docker_desktop()` — launches only a Docker Desktop installation
   discovered in a trusted platform location; it accepts no executable or
-  arguments from the frontend. The UI polls `docker_probe` until the daemon is
+  arguments from the frontend. The UI polls the host's Docker probe until the daemon is
   ready before continuing startup.
 - `stack_up()` / `stack_down()` / `stack_update()` — lifecycle. Start and
   update always bring up Forgejo, the coordinator, and the simulated worker.
@@ -75,6 +71,12 @@ The host's HTTP API, on a random loopback port. Every route needs the launch's
 bearer token, the exact Host, and a known Origin:
 
 - `GET /v1/version -> { version }`.
+- `GET /v1/docker/probe -> DockerProbe` — installed / daemon-running /
+  compose-available, plus whether a detected Docker Desktop installation can
+  be launched. Native probing resolves standard platform installation paths as
+  well as `PATH`, because packaged desktop apps do not inherit a login shell.
+- `GET /v1/disk/space -> DiskSpaceProbe` — free space at the app-data
+  filesystem.
 - `GET /v1/stack/status -> ServiceStatus[]` — one current row per Compose
   service, ordered by service name. If Compose briefly exposes both sides of a
   container replacement, the running/healthy row wins.
@@ -500,7 +502,6 @@ These commands are implemented and safe for renderer integration:
 - `confirm_exit() -> boolean`
 - `cancel_exit() -> boolean`
 - `notify_attention(notification) -> NotificationDelivery`
-- `disk_space_probe() -> DiskSpaceProbe`
 - `create_backup(destination) -> BackupResult`
 - `inspect_backup(source) -> BackupInspection`
 - `restore_backup(source) -> BackupResult`
@@ -589,7 +590,7 @@ The bounded native ledger makes repeated polling and app restarts idempotent.
 The UI should use the stable attention-item ID from `GET /api/v1/attention` as
 `event_id`; it should not persist its own delivery ledger.
 
-`disk_space_probe` reports free space at the app-data filesystem and a 5 GiB
+`GET /v1/disk/space` reports free space at the app-data filesystem and a 5 GiB
 readiness recommendation. This is a preflight hint, not an exact backup-size
 estimate.
 

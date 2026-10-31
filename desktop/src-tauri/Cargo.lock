@@ -525,7 +525,6 @@ version = "0.9.3"
 dependencies = [
  "block2",
  "commitarium-host",
- "fs2",
  "getrandom 0.3.4",
  "objc2-app-kit",
  "objc2-foundation",
@@ -552,6 +551,7 @@ dependencies = [
 name = "commitarium-host"
 version = "0.9.3"
 dependencies = [
+ "fs2",
  "serde",
  "serde_json",
  "tiny_http",

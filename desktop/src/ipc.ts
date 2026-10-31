@@ -39,7 +39,6 @@ export interface ServiceStatus {
   status: string;
 }
 
-export const dockerProbe = (): Promise<DockerProbe> => invoke("docker_probe");
 export const launchDockerDesktop = (): Promise<void> => invoke("launch_docker_desktop");
 
 /** Resolves to a warning for the user when the stack is up but needs attention. */
@@ -59,6 +58,8 @@ const hostGet = async <T>(path: string): Promise<T> => {
 };
 
 export const stackStatus = (): Promise<ServiceStatus[]> => hostGet("/v1/stack/status");
+export const dockerProbe = (): Promise<DockerProbe> => hostGet("/v1/docker/probe");
+export const diskSpaceProbe = (): Promise<DiskSpaceProbe> => hostGet("/v1/disk/space");
 
 // A fixed restricted, non-admin Forgejo account the user sets a password for, to
 // browse the internal audit trail (repos, PRs, reviews) in a browser read-only.
@@ -135,7 +136,6 @@ export const onExitConfirmationRequested = (
   );
 export const notifyAttention = (notification: NativeNotification): Promise<NotificationDelivery> =>
   invoke("notify_attention", { notification });
-export const diskSpaceProbe = (): Promise<DiskSpaceProbe> => invoke("disk_space_probe");
 export const createBackup = (destination: string): Promise<BackupResult> =>
   invoke("create_backup", { destination });
 export const inspectBackup = (source: string): Promise<BackupInspection> =>

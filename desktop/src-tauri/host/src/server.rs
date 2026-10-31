@@ -4,11 +4,12 @@
 //! token. No route answers without it, and no CORS header is ever sent.
 
 use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::thread;
 use tiny_http::{Header, Request, Response, Server};
 
-use crate::docker;
+use crate::{disk, docker};
 
 /// What the host is told at launch, over stdin, so it never shows in a
 /// process listing.
@@ -16,6 +17,7 @@ use crate::docker;
 pub struct Launch {
     pub token: String,
     pub origins: Vec<String>,
+    pub data_dir: PathBuf,
 }
 
 /// The host's first and only line on stdout: where it listens and what it is.
@@ -86,27 +88,33 @@ fn failure(status: u16, message: &str) -> Response<std::io::Cursor<Vec<u8>>> {
     json(status, serde_json::json!({ "error": message }).to_string())
 }
 
-fn respond(path: &str) -> Response<std::io::Cursor<Vec<u8>>> {
+fn respond_with<T: Serialize>(result: Result<T, String>) -> Response<std::io::Cursor<Vec<u8>>> {
+    match result.and_then(|value| serde_json::to_string(&value).map_err(|e| e.to_string())) {
+        Ok(body) => json(200, body),
+        Err(error) => failure(500, &error),
+    }
+}
+
+fn respond(path: &str, data_dir: &Path) -> Response<std::io::Cursor<Vec<u8>>> {
     match path {
         "/v1/version" => json(
             200,
             serde_json::json!({ "version": env!("CARGO_PKG_VERSION") }).to_string(),
         ),
-        "/v1/stack/status" => match docker::stack_status()
-            .and_then(|statuses| serde_json::to_string(&statuses).map_err(|e| e.to_string()))
-        {
-            Ok(body) => json(200, body),
-            Err(error) => failure(500, &error),
-        },
+        "/v1/stack/status" => respond_with(docker::stack_status()),
+        "/v1/docker/probe" => respond_with(Ok(docker::docker_probe())),
+        "/v1/disk/space" => respond_with(disk::disk_space_probe(data_dir)),
         _ => failure(404, "not found"),
     }
 }
 
 /// Serves requests, each on its own thread, because Docker can be slow.
-pub fn serve(server: Server, access: Access) {
+pub fn serve(server: Server, access: Access, data_dir: PathBuf) {
     let access = Arc::new(access);
+    let data_dir = Arc::new(data_dir);
     for request in server.incoming_requests() {
         let access = access.clone();
+        let data_dir = data_dir.clone();
         thread::spawn(move || {
             let allowed = access.allows(
                 header(&request, "Host"),
@@ -118,7 +126,7 @@ pub fn serve(server: Server, access: Access) {
             } else if *request.method() != tiny_http::Method::Get {
                 failure(405, "method not allowed")
             } else {
-                respond(request.url())
+                respond(request.url(), &data_dir)
             };
             let _ = request.respond(response);
         });
@@ -134,6 +142,7 @@ mod tests {
             Launch {
                 token: "secret".into(),
                 origins: vec!["tauri://localhost".into()],
+                data_dir: PathBuf::new(),
             },
             4000,
         )
@@ -173,6 +182,7 @@ mod tests {
             Launch {
                 token: String::new(),
                 origins: vec![],
+                data_dir: PathBuf::new(),
             },
             4000,
         );

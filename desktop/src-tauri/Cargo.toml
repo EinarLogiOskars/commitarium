@@ -36,7 +36,6 @@ tempfile = "3"
 getrandom = "0.3"
 zeroize = "1"
 sha2 = "0.10"
-fs2 = "0.4"
 tiny_http = "0.12"
 commitarium-host = { path = "host" }
 

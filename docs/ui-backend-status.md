@@ -116,7 +116,7 @@ with the implementation and public API documentation they describe.
 
 ### Backup and restore
 
-- `disk_space_probe` supplies a host-filesystem free-space preflight.
+- The host's `GET /v1/disk/space` supplies a host-filesystem free-space preflight.
 - `create_backup`, `inspect_backup`, and `restore_backup` implement the
   version-1 directory contract in ADR-011. The renderer supplies only a native
   picker path; component lists, containers, mounts, commands, identities, and

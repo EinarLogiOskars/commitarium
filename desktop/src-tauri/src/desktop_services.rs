@@ -6,7 +6,6 @@
 //! It cannot choose Docker images, containers, volume paths, archive members,
 //! or commands.
 
-use fs2::available_space;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -193,14 +192,6 @@ pub struct NotificationDelivery {
     reason: &'static str,
 }
 
-#[derive(Clone, Debug, Serialize)]
-pub struct DiskSpaceProbe {
-    path: String,
-    available_bytes: u64,
-    recommended_free_bytes: u64,
-    backup_ready: bool,
-}
-
 #[derive(Clone, Debug, Deserialize, Serialize)]
 struct BackupManifest {
     format: String,
@@ -348,7 +339,7 @@ pub struct BackupCoordinator {
     operation: Arc<Mutex<()>>,
 }
 
-fn app_data_dir(app: &AppHandle) -> Result<PathBuf, String> {
+pub(crate) fn app_data_dir(app: &AppHandle) -> Result<PathBuf, String> {
     let path = app
         .path()
         .app_data_dir()
@@ -452,19 +443,6 @@ pub fn notify_attention(
     Ok(NotificationDelivery {
         delivered: true,
         reason: "delivered",
-    })
-}
-
-#[tauri::command]
-pub fn disk_space_probe(app: AppHandle) -> Result<DiskSpaceProbe, String> {
-    let path = app_data_dir(&app)?;
-    let available = available_space(&path).map_err(|e| format!("inspect free disk space: {e}"))?;
-    let recommended = 5 * 1024 * 1024 * 1024;
-    Ok(DiskSpaceProbe {
-        path: path.to_string_lossy().into_owned(),
-        available_bytes: available,
-        recommended_free_bytes: recommended,
-        backup_ready: available >= recommended,
     })
 }
 

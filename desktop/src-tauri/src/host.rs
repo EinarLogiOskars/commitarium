@@ -46,7 +46,10 @@ impl Host {
             }
         }
         *running = None;
-        let host = start(allowed_origins(app))?;
+        let host = start(
+            allowed_origins(app),
+            crate::desktop_services::app_data_dir(app)?,
+        )?;
         grant_main_window(app, &host.connection.url)?;
         let connection = host.connection.clone();
         *running = Some(host);
@@ -86,10 +89,11 @@ fn token() -> Result<String, String> {
     Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
 }
 
-fn start(origins: Vec<String>) -> Result<Running, String> {
+fn start(origins: Vec<String>, data_dir: PathBuf) -> Result<Running, String> {
     let launch = Launch {
         token: token()?,
         origins,
+        data_dir,
     };
     let mut child = crate::process::command(binary()?)
         .stdin(Stdio::piped())
