@@ -67,8 +67,23 @@ Docker / stack lifecycle:
   bundled host (ADR-040). Only the main window may call it. App windows never
   get the token.
 
+Most commands in this document for the stack, sign-in, previews, jobs, CLI
+status and the Forgejo viewer are forwarders: same name, arguments and JSON as
+ever, but the work runs in the host process, which alone holds login, preview
+and CLI-updater state (ADR-040). `src/host.rs` passes the JSON through with a
+Rust call to the routes below, restarting the host first if it has gone. So app
+windows keep their narrow commands and never need the token. A call that dies
+with the host fails instead of being repeated. Local handoff, import, git
+providers, backups and client commands stay in the app; backups use Docker
+directly and ask the host to bring the stack back up.
+
 The host's HTTP API, on a random loopback port. Every route needs the launch's
-bearer token, the exact Host, and a known Origin:
+bearer token, the exact Host, and a known Origin, checked before any body is
+read. A POST takes a JSON body of at most 1 MiB, in `snake_case`, and bodies
+are never logged. A failure answers `{ "error": message }` with a non-2xx
+status, and the forwarders return that message unchanged: 401 refused, 400
+unreadable body, 404 no such route, 413 too large, 500 the work's own error.
+Long work is one long request, with no progress stream yet.
 
 - `GET /v1/version -> { version }`.
 - `GET /v1/docker/probe -> DockerProbe` — installed / daemon-running /
@@ -83,6 +98,31 @@ bearer token, the exact Host, and a known Origin:
 - `GET /v1/stack/status -> ServiceStatus[]` — one current row per Compose
   service, ordered by service name. If Compose briefly exposes both sides of a
   container replacement, the running/healthy row wins.
+
+Routes behind the forwarders:
+
+| Commands | Routes |
+| --- | --- |
+| `stack_up`, `stack_down`, `stack_update` | `POST /v1/stack/up`, `/down`, `/update` |
+| `list_profiles` | `GET /v1/profiles` |
+| `begin_login`, `submit_login_code`, `submit_api_key`, `cancel_login` | `POST /v1/profiles/login/begin`, `/code`, `/key`, `/cancel` |
+| `verify_profile`, `disconnect_profile` | `POST /v1/profiles/verify`, `/disconnect` |
+| `start_preview`, `stop_preview`, `reset_preview_data`, `prune_session_previews` | `POST /v1/previews/start`, `/stop`, `/reset`, `/prune` |
+| `get_preview_status`, `get_preview_logs` | `POST /v1/previews/status`, `/logs` |
+| `delete_project`, once the coordinator has deleted it | `POST /v1/previews/delete-project` |
+| `provision_environment_request` | `POST /v1/environment/provision` |
+| `run_validation_job`, `run_preview_check` | `POST /v1/validation/run`, `/v1/preview-check/run` |
+| `agent_cli_status` | `GET /v1/agents/cli-status` (an empty list when the host cannot be reached) |
+| `get_forgejo_viewer_status`, `configure_forgejo_viewer` | `GET`, `POST /v1/forgejo/viewer` |
+| Quitting and updating, no command | `POST /v1/previews/stop-all`, `/v1/profiles/shutdown` |
+
+The app's exit path stops previews, then logins, then the host, and with
+`stop_stack` first logins and the stack. If stdin closes without that, the app
+crashed: the host stops previews and logins and leaves, and the stack stays up.
+A host that dies loses its previews and logins, which are in memory. On the
+next start it sweeps what the old one left, and the app tells any window still
+waiting by repeating `preview-status-changed` as `failed` and `login_progress`
+with the profile's real status and a message to start again.
 
 Forgejo audit-viewer onboarding:
 

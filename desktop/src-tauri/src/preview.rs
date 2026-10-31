@@ -1,37 +1,34 @@
-//! The preview commands. The work is in `commitarium_host::preview`.
+//! The preview commands. They run in the host (ADR-040).
 
-use commitarium_host::preview::{self, PreviewManager, PreviewStatus, PreviewTarget};
-use tauri::{AppHandle, State};
+use serde_json::{json, Value};
+use tauri::AppHandle;
 
-use crate::host::events;
+use crate::host;
 
 #[tauri::command]
 pub async fn start_preview(
     app: AppHandle,
-    manager: State<'_, PreviewManager>,
     project_id: String,
-    target: PreviewTarget,
-) -> Result<PreviewStatus, String> {
-    preview::start_preview(events(&app), &manager, project_id, target).await
+    target: Value,
+) -> Result<Value, String> {
+    let body = json!({ "project_id": project_id, "target": target });
+    host::post(&app, "/v1/previews/start", body).await
 }
 
 #[tauri::command]
 pub async fn stop_preview(
     app: AppHandle,
-    manager: State<'_, PreviewManager>,
     project_id: String,
     feature_id: Option<String>,
-) -> Result<(), String> {
-    preview::stop_preview(events(&app), &manager, project_id, feature_id).await
+) -> Result<Value, String> {
+    let body = json!({ "project_id": project_id, "feature_id": feature_id });
+    host::post(&app, "/v1/previews/stop", body).await
 }
 
 #[tauri::command]
-pub async fn reset_preview_data(
-    app: AppHandle,
-    manager: State<'_, PreviewManager>,
-    project_id: String,
-) -> Result<(), String> {
-    preview::reset_preview_data(events(&app), &manager, project_id).await
+pub async fn reset_preview_data(app: AppHandle, project_id: String) -> Result<Value, String> {
+    let body = json!({ "project_id": project_id });
+    host::post(&app, "/v1/previews/reset", body).await
 }
 
 /// Removes the previews of the project's sessions that are no longer open:
@@ -39,27 +36,29 @@ pub async fn reset_preview_data(
 #[tauri::command]
 pub async fn prune_session_previews(
     app: AppHandle,
-    manager: State<'_, PreviewManager>,
     project_id: String,
     open_sessions: Vec<String>,
-) -> Result<(), String> {
-    preview::prune_session_previews(events(&app), &manager, project_id, open_sessions).await
+) -> Result<Value, String> {
+    let body = json!({ "project_id": project_id, "open_sessions": open_sessions });
+    host::post(&app, "/v1/previews/prune", body).await
 }
 
 #[tauri::command]
-pub fn get_preview_status(
-    manager: State<'_, PreviewManager>,
+pub async fn get_preview_status(
+    app: AppHandle,
     project_id: String,
     feature_id: Option<String>,
-) -> Result<Option<PreviewStatus>, String> {
-    preview::get_preview_status(&manager, project_id, feature_id)
+) -> Result<Value, String> {
+    let body = json!({ "project_id": project_id, "feature_id": feature_id });
+    host::post(&app, "/v1/previews/status", body).await
 }
 
 #[tauri::command]
 pub async fn get_preview_logs(
-    manager: State<'_, PreviewManager>,
+    app: AppHandle,
     project_id: String,
     feature_id: Option<String>,
-) -> Result<Vec<String>, String> {
-    preview::get_preview_logs(&manager, project_id, feature_id).await
+) -> Result<Value, String> {
+    let body = json!({ "project_id": project_id, "feature_id": feature_id });
+    host::post(&app, "/v1/previews/logs", body).await
 }

@@ -1,8 +1,9 @@
 //! Live updates from the host. One stream replaces Tauri's events, so a client
 //! on another machine receives what a local one does. Each update is a
 //! Server-Sent Events frame with a fixed name and a line of JSON. Code that
-//! reports updates holds an `Events`, which does not care where they go: to a
-//! `Bus` here, or to Tauri events while the work still runs inside the app.
+//! reports updates holds an `Events`, which does not care where they go. In
+//! the host they go to a `Bus`, and the desktop app repeats them as Tauri
+//! events, under the same names and with the same payloads.
 
 use serde::Serialize;
 use std::sync::mpsc::{channel, Receiver, Sender};

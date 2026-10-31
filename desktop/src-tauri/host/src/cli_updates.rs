@@ -743,6 +743,16 @@ fn newer(candidate: &str, current: &str) -> bool {
 mod tests {
     use super::*;
 
+    /// The host runs alone, without the desktop crate's features, and npm is
+    /// on HTTPS. This does not compile if the host loses its TLS.
+    #[test]
+    fn the_host_has_its_own_tls() {
+        reqwest::Client::builder()
+            .use_rustls_tls()
+            .build()
+            .expect("a client with TLS");
+    }
+
     #[test]
     fn versions_are_read_and_compared() {
         assert_eq!(

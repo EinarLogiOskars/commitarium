@@ -12,7 +12,7 @@
 use serde::{Deserialize, Serialize};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Manager};
 
 const COORDINATOR_BASE: &str = "http://127.0.0.1:8080";
 const IMPORT_AUTHOR: &str = "Commitarium Import";
@@ -480,7 +480,6 @@ pub fn get_project_source(app: AppHandle, project_id: String) -> Result<Option<S
 #[tauri::command]
 pub async fn delete_project(
     app: AppHandle,
-    previews: State<'_, commitarium_host::preview::PreviewManager>,
     project_id: String,
     idempotency_key: String,
     force: Option<bool>,
@@ -522,10 +521,10 @@ pub async fn delete_project(
         ));
     }
     let result = serde_json::from_str(&body).map_err(|e| format!("parse project deletion: {e}"))?;
-    commitarium_host::preview::delete_project_data(
-        &crate::host::events(&app),
-        previews.inner().clone(),
-        project_id.trim(),
+    crate::host::post(
+        &app,
+        "/v1/previews/delete-project",
+        serde_json::json!({ "project_id": project_id.trim() }),
     )
     .await?;
     remove_source(&app, project_id.trim())?;

@@ -21,7 +21,7 @@ use crate::agents::{self, Provider};
 use crate::docker;
 use crate::events::Events;
 
-const PROGRESS_EVENT: &str = "login_progress";
+pub const PROGRESS_EVENT: &str = "login_progress";
 const OUTPUT_LIMIT: usize = 64 * 1024;
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
 

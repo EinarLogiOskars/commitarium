@@ -18,7 +18,7 @@ use std::process::{Command, Stdio};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
-const STATUS_EVENT: &str = "preview-status-changed";
+pub const STATUS_EVENT: &str = "preview-status-changed";
 pub(crate) const PREVIEW_TEMP_PREFIX: &str = "commitarium-preview-";
 const COMPOSE_PROJECT_LABEL: &str = "com.docker.compose.project";
 const READY_TIMEOUT: Duration = Duration::from_secs(10 * 60);

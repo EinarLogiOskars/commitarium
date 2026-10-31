@@ -2,6 +2,7 @@
 
 use std::io::{Read, Write};
 use std::net::TcpStream;
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
@@ -17,10 +18,8 @@ fn serve(events: Bus) -> u16 {
         data_dir: std::env::temp_dir(),
     };
     let access = Access::new(launch, port);
-    let shared = Shared {
-        data_dir: std::env::temp_dir(),
-        events,
-    };
+    // This never begins the host's background work, so no Docker is touched.
+    let shared = Arc::new(Shared::new(std::env::temp_dir(), events));
     thread::spawn(move || server::serve(http, access, shared));
     port
 }

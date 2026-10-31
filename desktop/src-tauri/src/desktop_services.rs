@@ -18,7 +18,7 @@ use std::time::Duration;
 use tauri::{AppHandle, Manager, State};
 use tauri_plugin_notification::NotificationExt;
 
-use commitarium_host::{agents, bootstrap, docker, profiles};
+use commitarium_host::{agents, bootstrap, docker};
 use std::borrow::Cow;
 
 const SETTINGS_FILE: &str = "desktop-settings.json";
@@ -449,19 +449,17 @@ pub fn notify_attention(
 #[tauri::command]
 pub async fn create_backup(
     app: AppHandle,
-    manager: State<'_, profiles::ProfileManager>,
     backup: State<'_, BackupCoordinator>,
     destination: String,
 ) -> Result<BackupResult, String> {
     let app = app.clone();
-    let manager = manager.inner().clone();
     let backup = backup.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let _guard = backup
             .operation
             .lock()
             .map_err(|_| "backup coordinator is unavailable".to_string())?;
-        create_backup_blocking(&app, &manager, Path::new(&destination))
+        create_backup_blocking(&app, Path::new(&destination))
     })
     .await
     .map_err(|_| "backup worker stopped unexpectedly".to_string())?
@@ -470,19 +468,17 @@ pub async fn create_backup(
 #[tauri::command]
 pub async fn restore_backup(
     app: AppHandle,
-    manager: State<'_, profiles::ProfileManager>,
     backup: State<'_, BackupCoordinator>,
     source: String,
 ) -> Result<BackupResult, String> {
     let app = app.clone();
-    let manager = manager.inner().clone();
     let backup = backup.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let _guard = backup
             .operation
             .lock()
             .map_err(|_| "backup coordinator is unavailable".to_string())?;
-        restore_backup_blocking(&app, &manager, Path::new(&source))
+        restore_backup_blocking(&app, Path::new(&source))
     })
     .await
     .map_err(|_| "restore worker stopped unexpectedly".to_string())?
@@ -506,11 +502,7 @@ pub async fn inspect_backup(source: String) -> Result<BackupInspection, String> 
     .map_err(|_| "backup inspection worker stopped unexpectedly".to_string())?
 }
 
-fn create_backup_blocking(
-    app: &AppHandle,
-    manager: &profiles::ProfileManager,
-    destination: &Path,
-) -> Result<BackupResult, String> {
+fn create_backup_blocking(app: &AppHandle, destination: &Path) -> Result<BackupResult, String> {
     validate_destination(destination)?;
     if destination.exists() {
         return Err("backup destination already exists".to_string());
@@ -528,7 +520,7 @@ fn create_backup_blocking(
     docker::compose(docker::PROVIDER_PROFILES, &["stop"])?;
     let result = export_backup(app, staging.path());
     let restart = if was_running {
-        docker::stack_up_with_manager(manager)
+        start_stack(app)
     } else {
         Ok(())
     };
@@ -556,6 +548,13 @@ fn create_backup_blocking(
         components,
         credentials_included: false,
     })
+}
+
+/// Only the host may bring the stack up, because that reads its logins.
+/// Backups keep the rest of their work here: it needs the app's own data and
+/// plain Docker calls, and none of the host's state.
+fn start_stack(app: &AppHandle) -> Result<(), String> {
+    crate::host::post_blocking(app, "/v1/stack/up", serde_json::Value::Null).map(|_| ())
 }
 
 fn export_backup(app: &AppHandle, destination: &Path) -> Result<BackupManifest, String> {
@@ -620,11 +619,7 @@ fn export_backup(app: &AppHandle, destination: &Path) -> Result<BackupManifest, 
     Ok(manifest)
 }
 
-fn restore_backup_blocking(
-    app: &AppHandle,
-    manager: &profiles::ProfileManager,
-    source: &Path,
-) -> Result<BackupResult, String> {
+fn restore_backup_blocking(app: &AppHandle, source: &Path) -> Result<BackupResult, String> {
     let manifest = read_backup_manifest(source)?;
     let compose_file = docker::compose_file()?;
     let agents = agents::current().unwrap_or_default();
@@ -652,7 +647,7 @@ fn restore_backup_blocking(
 
     if let Err(restore_error) = apply_backup(app, source, &manifest, &helper_image) {
         let rollback = apply_backup(app, recovery.path(), &recovery_manifest, &helper_image);
-        let restart = docker::stack_up_with_manager(manager);
+        let restart = start_stack(app);
         return match (rollback, restart) {
             (Ok(()), Ok(())) => Err(format!(
                 "restore failed and the previous installation was restored: {restore_error}"
@@ -664,7 +659,7 @@ fn restore_backup_blocking(
             )),
         };
     }
-    docker::stack_up_with_manager(manager)?;
+    start_stack(app)?;
     Ok(BackupResult {
         path: source.to_string_lossy().into_owned(),
         format_version: manifest.format_version,
@@ -947,15 +942,11 @@ pub fn begin_exit_stop(coordinator: &ExitCoordinator) -> ExitRequestAction {
 }
 
 #[tauri::command]
-pub fn confirm_exit(
-    app: AppHandle,
-    coordinator: State<'_, ExitCoordinator>,
-    profiles: State<'_, profiles::ProfileManager>,
-) -> bool {
+pub fn confirm_exit(app: AppHandle, coordinator: State<'_, ExitCoordinator>) -> bool {
     if !coordinator.confirm() {
         return false;
     }
-    launch_exit_shutdown(app, profiles.inner().clone());
+    launch_exit_shutdown(app);
     true
 }
 
@@ -964,19 +955,18 @@ pub fn cancel_exit(coordinator: State<'_, ExitCoordinator>) -> bool {
     coordinator.cancel()
 }
 
-pub fn schedule_exit_timeout(app: AppHandle, profiles: profiles::ProfileManager, request_id: u64) {
+pub fn schedule_exit_timeout(app: AppHandle, request_id: u64) {
     std::thread::spawn(move || {
         std::thread::sleep(EXIT_CONFIRMATION_TIMEOUT);
         if app.state::<ExitCoordinator>().inner().timeout(request_id) {
-            launch_exit_shutdown(app, profiles);
+            launch_exit_shutdown(app);
         }
     });
 }
 
-fn launch_exit_shutdown(app: AppHandle, profiles: profiles::ProfileManager) {
-    profiles.shutdown();
+fn launch_exit_shutdown(app: AppHandle) {
     std::thread::spawn(move || {
-        let _ = docker::stack_down_blocking();
+        crate::host::stop_logins_and_stack(&app);
         app.state::<ExitCoordinator>().inner().finish();
         app.exit(0);
     });

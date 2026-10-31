@@ -11,8 +11,6 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_updater::{Update, UpdaterExt};
 
-use commitarium_host::profiles;
-
 pub const UPDATE_PROGRESS_EVENT: &str = "desktop-update-progress";
 
 /// Serializes installation attempts and marks updater-driven restarts so the
@@ -184,14 +182,11 @@ pub async fn install_desktop_update(
     }
 
     let _operation = UpdateOperation::begin(&coordinator)?;
-    let shutdown_profiles = app.state::<profiles::ProfileManager>().inner().clone();
-    let shutdown_host = app.state::<crate::host::Host>().inner().clone();
     let before_exit_app = app.clone();
     let updater = app
         .updater_builder()
         .on_before_exit(move || {
-            shutdown_profiles.shutdown();
-            shutdown_host.stop();
+            crate::host::stop_for_update(&before_exit_app);
             before_exit_app.cleanup_before_exit();
         })
         .build()
@@ -244,6 +239,7 @@ pub async fn install_desktop_update(
     coordinator.restarting.store(true, Ordering::Release);
     if let Err(error) = update.install(bytes) {
         coordinator.restarting.store(false, Ordering::Release);
+        app.state::<crate::host::Host>().reopen();
         return Err(format!("could not install the signed update: {error}"));
     }
 
