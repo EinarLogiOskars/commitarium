@@ -4,12 +4,19 @@
 //! token. No route answers without it, and no CORS header is ever sent.
 
 use serde::{Deserialize, Serialize};
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::RecvTimeoutError;
 use std::sync::Arc;
 use std::thread;
+use std::time::Duration;
 use tiny_http::{Header, Request, Response, Server};
 
+use crate::events::Bus;
 use crate::{disk, docker};
+
+/// How often a quiet stream proves it is alive, and notices a client has gone.
+const KEEP_ALIVE: Duration = Duration::from_secs(15);
 
 /// What the host is told at launch, over stdin, so it never shows in a
 /// process listing.
@@ -25,6 +32,12 @@ pub struct Launch {
 pub struct Ready {
     pub port: u16,
     pub version: String,
+}
+
+/// What every request can reach.
+pub struct Shared {
+    pub data_dir: PathBuf,
+    pub events: Bus,
 }
 
 pub struct Access {
@@ -108,25 +121,52 @@ fn respond(path: &str, data_dir: &Path) -> Response<std::io::Cursor<Vec<u8>>> {
     }
 }
 
+/// Writes straight to the socket, because a response body is buffered and an
+/// update must leave at once. Ends when the client goes.
+fn stream_events(request: Request, events: &Bus) {
+    let updates = events.subscribe();
+    let mut client = request.into_writer();
+    let start = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\
+                 Cache-Control: no-store\r\nConnection: close\r\n\r\n: connected\n\n";
+    let mut sent = client
+        .write_all(start.as_bytes())
+        .and_then(|()| client.flush());
+    while sent.is_ok() {
+        let frame = match updates.recv_timeout(KEEP_ALIVE) {
+            Ok(frame) => frame,
+            Err(RecvTimeoutError::Timeout) => ": keep-alive\n\n".to_string(),
+            Err(RecvTimeoutError::Disconnected) => return,
+        };
+        sent = client
+            .write_all(frame.as_bytes())
+            .and_then(|()| client.flush());
+    }
+}
+
 /// Serves requests, each on its own thread, because Docker can be slow.
-pub fn serve(server: Server, access: Access, data_dir: PathBuf) {
+pub fn serve(server: Server, access: Access, shared: Shared) {
     let access = Arc::new(access);
-    let data_dir = Arc::new(data_dir);
+    let shared = Arc::new(shared);
     for request in server.incoming_requests() {
         let access = access.clone();
-        let data_dir = data_dir.clone();
+        let shared = shared.clone();
         thread::spawn(move || {
             let allowed = access.allows(
                 header(&request, "Host"),
                 header(&request, "Origin"),
                 header(&request, "Authorization"),
             );
+            let get = *request.method() == tiny_http::Method::Get;
+            if allowed && get && request.url() == "/v1/events" {
+                stream_events(request, &shared.events);
+                return;
+            }
             let response = if !allowed {
                 failure(401, "unauthorized")
-            } else if *request.method() != tiny_http::Method::Get {
+            } else if !get {
                 failure(405, "method not allowed")
             } else {
-                respond(request.url(), &data_dir)
+                respond(request.url(), &shared.data_dir)
             };
             let _ = request.respond(response);
         });

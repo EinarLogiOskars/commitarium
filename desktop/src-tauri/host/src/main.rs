@@ -5,7 +5,8 @@
 use std::io::{self, BufRead, Write};
 use std::thread;
 
-use commitarium_host::server::{self, Access, Launch, Ready};
+use commitarium_host::events::Bus;
+use commitarium_host::server::{self, Access, Launch, Ready, Shared};
 
 fn main() {
     if let Err(error) = run() {
@@ -31,9 +32,12 @@ fn run() -> Result<(), String> {
         .to_ip()
         .ok_or("the server has no IP address")?
         .port();
-    let data_dir = launch.data_dir.clone();
+    let shared = Shared {
+        data_dir: launch.data_dir.clone(),
+        events: Bus::default(),
+    };
     let access = Access::new(launch, port);
-    thread::spawn(move || server::serve(http, access, data_dir));
+    thread::spawn(move || server::serve(http, access, shared));
 
     let ready = Ready {
         port,

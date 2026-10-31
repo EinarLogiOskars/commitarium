@@ -52,6 +52,7 @@ pub fn run() {
             docker::prepare_runtime(app.handle()).map_err(std::io::Error::other)?;
             // After the runtime, because the host inherits its environment.
             host::launch(app.handle());
+            host::relay_events(app.handle().clone());
             // No preview runs yet in this process, so whatever is left is
             // from an earlier one.
             preview::sweep_leftovers();
