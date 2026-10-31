@@ -87,12 +87,17 @@ details as each module moves.
 
 ## RH2: Move the host work
 
-- Move commands to the host a module at a time, one PR each. Local behaviour
-  stays the same. Order: read-only status, the event stream, stack, sign-in,
-  jobs, previews.
-- The read-only slice moves `docker_probe` and `disk_space_probe`.
-  `agent_cli_status` moves with the event stream, and
-  `get_forgejo_viewer_status` with the stack, because each depends on that work.
+- Local behaviour stays the same. The work moves in this order, because the
+  stack, sign-in, CLI updater, environment and preview modules depend on each
+  other and share state, so they cannot run in separate processes one at a
+  time:
+  1. Read-only status: `docker_probe` and `disk_space_probe`.
+  2. The event stream, which the app repeats as Tauri events.
+  3. Those modules move into the host library, still running in the app.
+  4. They flip to run in the host process, in one change, tested against a
+     real stack. The host then needs its own TLS for reqwest, because
+     `cli_updates` calls the npm registry.
+  5. Jobs move out of the React hooks.
 - Add progress streaming where RH0 marked it.
 - The host starts the stack and runs validation jobs, acceptance runs and
   preview checks itself, in place of the React hooks.
