@@ -1,13 +1,12 @@
-//! The Docker commands the renderer can reach. The work is in
-//! `commitarium_host::docker`, except starting Docker Desktop, which only
-//! makes sense on the user's own machine.
+//! The Docker commands the renderer can reach. The stack runs in the host
+//! (ADR-040). Starting Docker Desktop stays here, because it only makes sense
+//! on the user's own machine.
 
-use std::sync::Arc;
-
-use commitarium_host::cli_updates::CliUpdater;
 use commitarium_host::docker::{self, docker_desktop_path};
-use commitarium_host::profiles::ProfileManager;
-use tauri::{AppHandle, Manager, State};
+use serde_json::Value;
+use tauri::{AppHandle, Manager};
+
+use crate::host;
 
 /// Install the release Compose definitions into the app's data directory.
 pub(crate) fn prepare_runtime(app: &AppHandle) -> Result<(), String> {
@@ -47,24 +46,18 @@ pub fn launch_docker_desktop() -> Result<(), String> {
 /// Bring core services up and reconcile every real role worker against its
 /// exact provider profile.
 #[tauri::command]
-pub async fn stack_up(
-    manager: State<'_, ProfileManager>,
-    updater: State<'_, Arc<CliUpdater>>,
-) -> Result<Option<String>, String> {
-    docker::stack_up(&manager, &updater).await
+pub async fn stack_up(app: AppHandle) -> Result<Value, String> {
+    host::post(&app, "/v1/stack/up", Value::Null).await
 }
 
 /// Tear the whole Commitarium stack down (project-wide, all profiles).
 #[tauri::command]
-pub async fn stack_down() -> Result<(), String> {
-    docker::stack_down().await
+pub async fn stack_down(app: AppHandle) -> Result<Value, String> {
+    host::post(&app, "/v1/stack/down", Value::Null).await
 }
 
 /// Update the stack: pull the latest images, then recreate in the background.
 #[tauri::command]
-pub async fn stack_update(
-    manager: State<'_, ProfileManager>,
-    updater: State<'_, Arc<CliUpdater>>,
-) -> Result<Option<String>, String> {
-    docker::stack_update(&manager, &updater).await
+pub async fn stack_update(app: AppHandle) -> Result<Value, String> {
+    host::post(&app, "/v1/stack/update", Value::Null).await
 }

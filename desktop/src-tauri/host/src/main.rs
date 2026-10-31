@@ -1,8 +1,12 @@
 //! `commitarium-host`: started by the desktop app, which gives it a token over
 //! stdin and keeps that pipe open. When the pipe closes, the app is gone, so
 //! the host leaves too and no old host outlives an app or blocks an update.
+//! An app leaving normally has already stopped everything through the API and
+//! kills the host; a pipe that just closes means it crashed, so the host stops
+//! the previews and logins nobody could reach again. The stack stays up.
 
 use std::io::{self, BufRead, Write};
+use std::sync::Arc;
 use std::thread;
 
 use commitarium_host::events::Bus;
@@ -32,12 +36,11 @@ fn run() -> Result<(), String> {
         .to_ip()
         .ok_or("the server has no IP address")?
         .port();
-    let shared = Shared {
-        data_dir: launch.data_dir.clone(),
-        events: Bus::default(),
-    };
+    let shared = Arc::new(Shared::new(launch.data_dir.clone(), Bus::default()));
+    shared.begin_background_work();
     let access = Access::new(launch, port);
-    thread::spawn(move || server::serve(http, access, shared));
+    let serving = shared.clone();
+    thread::spawn(move || server::serve(http, access, serving));
 
     let ready = Ready {
         port,
@@ -57,5 +60,6 @@ fn run() -> Result<(), String> {
     {
         rest.clear();
     }
+    shared.stop_previews_and_logins();
     Ok(())
 }

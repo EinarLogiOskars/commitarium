@@ -1,19 +1,21 @@
-//! The environment and validation commands. The work is in
-//! `commitarium_host::environment`.
+//! The environment and validation commands. They run in the host (ADR-040).
 
-use commitarium_host::environment::{self, EnvironmentProvisionResult, ValidationRunResult};
-use commitarium_host::profiles::ProfileManager;
-use tauri::State;
+use serde_json::{json, Value};
+use tauri::AppHandle;
+
+use crate::host;
 
 #[tauri::command]
 pub async fn provision_environment_request(
+    app: AppHandle,
     request_id: String,
-    manager: State<'_, ProfileManager>,
-) -> Result<EnvironmentProvisionResult, String> {
-    environment::provision_environment_request(request_id, &manager).await
+) -> Result<Value, String> {
+    let body = json!({ "request_id": request_id });
+    host::post(&app, "/v1/environment/provision", body).await
 }
 
 #[tauri::command]
-pub async fn run_validation_job(job_id: String) -> Result<ValidationRunResult, String> {
-    environment::run_validation_job(job_id).await
+pub async fn run_validation_job(app: AppHandle, job_id: String) -> Result<Value, String> {
+    let body = json!({ "job_id": job_id });
+    host::post(&app, "/v1/validation/run", body).await
 }

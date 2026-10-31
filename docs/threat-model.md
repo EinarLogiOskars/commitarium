@@ -1,7 +1,7 @@
 # Threat model
 
 - Status: Initial baseline
-- Last reviewed: 2026-09-23
+- Last reviewed: 2026-10-31
 - Scope: Local desktop use with the bundled Docker Compose stack
 
 ## Scope and intent
@@ -56,6 +56,8 @@ The boundary protects three things:
                     trusted host
 
  user repository <--- Tauri backend ---> upstream repository
+                          | loopback API, token (ADR-040)
+                    commitarium-host
                           |
                    explicit operations
                           |
@@ -101,8 +103,32 @@ their narrow Tauri commands (ADR-029). Workers do not receive it and cannot
 reach the host's loopback port. The token dies with the launch, and the host
 exits when the app's pipe to it closes.
 
+Since RH2 step 4 that API is the way to the host's real work, not just to
+status. Its routes start and stop the stack, run previews, validation and
+image builds, delete preview data, drive agent logins, and carry login codes,
+API keys and the Forgejo viewer password in POST bodies. So the token now gives
+everything those Tauri commands gave, and a leak of it during a launch would
+let a local process act on the stack, though it would still have no route to
+the user's repositories, upstream credentials or arbitrary commands: routes are
+fixed, and they take identifiers, never programs, paths or Docker arguments.
+The event stream behind the same check carries login links and device codes.
+
+A POST gets the same one check before its body is read, so a page that cannot
+set the token cannot reach work with a form or a no-CORS request. Bodies are
+limited to 1 MiB, are cleared after use, and are never logged, and a body that
+cannot be parsed is refused without repeating it. App windows still reach this
+work only through Rust forwarders of the commands their capability allows, so
+their limits have not changed. The forwarders use the loopback connection with
+no proxy.
+
+The host process now holds this work alone, with the app's environment, and it
+reaches the npm registry itself over TLS. It runs as the same user, so this
+adds no privilege. If the app crashes, the host stops previews and logins and
+exits, and it never outlives the pipe. Host and app are both trusted; the
+boundary around workers has not moved.
+
 Import, local synchronization, and upstream publication cross the boundary
-through narrow Tauri operations. These operations verify repository state and
+through narrow Tauri operations, which stay in the app. These operations verify repository state and
 exact revisions, stop on dirty, diverged, conflicting, or ambiguous state, and
 do not automatically reset, clean, delete, or force-push the user's repository.
 Upstream publication is a separate user-controlled action that uses host-side

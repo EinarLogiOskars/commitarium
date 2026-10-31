@@ -1,65 +1,60 @@
-//! The agent login commands. The work is in `commitarium_host::profiles`.
+//! The agent login commands. They run in the host (ADR-040). Login codes and
+//! API keys pass through here on their way to it, and are never logged.
 
-use commitarium_host::profiles::{self, Profile, ProfileManager};
-use tauri::{AppHandle, State};
+use serde_json::{json, Value};
+use tauri::AppHandle;
 
-use crate::host::events;
+use crate::host;
 
 #[tauri::command]
-pub async fn list_profiles(manager: State<'_, ProfileManager>) -> Result<Vec<Profile>, String> {
-    profiles::list_profiles(&manager).await
+pub async fn list_profiles(app: AppHandle) -> Result<Value, String> {
+    host::get(&app, "/v1/profiles").await
 }
 
 #[tauri::command]
-pub fn begin_login(
+pub async fn begin_login(
     app: AppHandle,
-    manager: State<'_, ProfileManager>,
     profile_id: String,
     method: String,
-) -> Result<(), String> {
-    profiles::begin_login(events(&app), &manager, profile_id, method)
+) -> Result<Value, String> {
+    let body = json!({ "profile_id": profile_id, "method": method });
+    host::post(&app, "/v1/profiles/login/begin", body).await
 }
 
 #[tauri::command]
-pub fn submit_login_code(
-    manager: State<'_, ProfileManager>,
+pub async fn submit_login_code(
+    app: AppHandle,
     profile_id: String,
     code: String,
-) -> Result<(), String> {
-    profiles::submit_login_code(&manager, profile_id, code)
+) -> Result<Value, String> {
+    let body = json!({ "profile_id": profile_id, "code": code });
+    host::post(&app, "/v1/profiles/login/code", body).await
 }
 
 #[tauri::command]
-pub fn submit_api_key(
+pub async fn submit_api_key(
     app: AppHandle,
-    manager: State<'_, ProfileManager>,
     profile_id: String,
     key: String,
-) -> Result<(), String> {
-    profiles::submit_api_key(events(&app), &manager, profile_id, key)
+) -> Result<Value, String> {
+    let body = json!({ "profile_id": profile_id, "key": key });
+    host::post(&app, "/v1/profiles/login/key", body).await
 }
 
 #[tauri::command]
-pub fn cancel_login(
-    app: AppHandle,
-    manager: State<'_, ProfileManager>,
-    profile_id: String,
-) -> Result<(), String> {
-    profiles::cancel_login(events(&app), &manager, profile_id)
+pub async fn cancel_login(app: AppHandle, profile_id: String) -> Result<Value, String> {
+    let body = json!({ "profile_id": profile_id });
+    host::post(&app, "/v1/profiles/login/cancel", body).await
 }
 
 #[tauri::command]
-pub async fn verify_profile(
-    manager: State<'_, ProfileManager>,
-    profile_id: String,
-) -> Result<Profile, String> {
-    profiles::verify_profile(&manager, profile_id).await
+pub async fn verify_profile(app: AppHandle, profile_id: String) -> Result<Value, String> {
+    let body = json!({ "profile_id": profile_id });
+    host::post(&app, "/v1/profiles/verify", body).await
 }
 
 #[tauri::command]
-pub async fn disconnect_profile(
-    manager: State<'_, ProfileManager>,
-    profile_id: String,
-) -> Result<Profile, String> {
-    profiles::disconnect_profile(&manager, profile_id).await
+pub async fn disconnect_profile(app: AppHandle, profile_id: String) -> Result<Value, String> {
+    let body = json!({ "profile_id": profile_id });
+    host::post(&app, "/v1/profiles/disconnect", body).await
 }

@@ -18,26 +18,37 @@ mod snapshot;
 mod store;
 mod updater;
 
-use std::sync::Arc;
-
 use tauri::{Emitter, Manager};
+
+const QUIT_MENU_ITEM: &str = "quit";
+
+/// The default menu, with a Quit of our own: the macOS one ends the app without
+/// an exit request, which would skip the stop-services confirmation.
+#[cfg(target_os = "macos")]
+fn app_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
+    use tauri::menu::{Menu, MenuItem, MenuItemKind};
+
+    let menu = Menu::default(app)?;
+    if let Some(MenuItemKind::Submenu(app_submenu)) = menu.items()?.into_iter().next() {
+        app_submenu.remove_at(app_submenu.items()?.len() - 1)?;
+        app_submenu.append(&MenuItem::with_id(
+            app,
+            QUIT_MENU_ITEM,
+            format!("Quit {}", app.package_info().name),
+            true,
+            Some("CmdOrCtrl+Q"),
+        )?)?;
+    }
+    Ok(menu)
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let profiles = commitarium_host::profiles::ProfileManager::new();
-    let shutdown_profiles = profiles.clone();
-    let previews = commitarium_host::preview::PreviewManager::default();
-    let shutdown_previews = previews.clone();
     tauri::Builder::default()
-        .manage(profiles)
-        .manage(previews)
         .manage(desktop_services::ExitCoordinator::default())
         .manage(desktop_services::NotificationCoordinator::default())
         .manage(desktop_services::BackupCoordinator::default())
         .manage(updater::UpdateCoordinator::default())
-        .manage(Arc::new(
-            commitarium_host::cli_updates::CliUpdater::default(),
-        ))
         .manage(coordinator_build::CoordinatorBuild::default())
         .manage(host::Host::default())
         .plugin(tauri_plugin_opener::init())
@@ -50,18 +61,20 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
+            #[cfg(target_os = "macos")]
+            app.set_menu(app_menu(app.handle())?)?;
             docker::prepare_runtime(app.handle()).map_err(std::io::Error::other)?;
             // After the runtime, because the host inherits its environment.
             host::launch(app.handle());
             host::relay_events(app.handle().clone());
-            // No preview runs yet in this process, so whatever is left is
-            // from an earlier one.
-            commitarium_host::preview::sweep_leftovers();
-            // The agents' CLIs stay current in the background, from launch on.
-            cli_updates::spawn(app.handle().clone());
             // App windows' pages, served same-site with the apps (ADR-029).
             app_pages::start(app.handle());
             Ok(())
+        })
+        .on_menu_event(|app, event| {
+            if event.id() == QUIT_MENU_ITEM {
+                app.exit(0);
+            }
         })
         // The renderer can invoke ONLY the commands listed here. This explicit
         // set is the trust boundary: no arbitrary shell, Docker, or filesystem
@@ -144,20 +157,14 @@ pub fn run() {
                             desktop_services::EXIT_CONFIRMATION_EVENT,
                             desktop_services::ExitConfirmationRequested::new(),
                         );
-                        desktop_services::schedule_exit_timeout(
-                            app.clone(),
-                            shutdown_profiles.clone(),
-                            request_id,
-                        );
+                        desktop_services::schedule_exit_timeout(app.clone(), request_id);
                     }
                     desktop_services::ExitRequestAction::Wait => api.prevent_exit(),
                     desktop_services::ExitRequestAction::Allow => {}
                 }
             }
             tauri::RunEvent::Exit | tauri::RunEvent::ExitRequested { .. } => {
-                commitarium_host::preview::stop_all(&shutdown_previews);
-                shutdown_profiles.shutdown();
-                app.state::<host::Host>().stop();
+                host::wind_down(app);
             }
             _ => {}
         });

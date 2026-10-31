@@ -635,10 +635,6 @@ pub async fn stack_up(
     Ok(warning)
 }
 
-pub fn stack_up_with_manager(manager: &profiles::ProfileManager) -> Result<(), String> {
-    start_stack(manager).map(|_| ())
-}
-
 fn start_stack(manager: &profiles::ProfileManager) -> Result<Option<String>, String> {
     let file = compose_file()?;
     let transport_changed = bootstrap::prepare_transport_secrets(&file)?;
@@ -648,7 +644,7 @@ fn start_stack(manager: &profiles::ProfileManager) -> Result<Option<String>, Str
     // Forgejo must exist before its own admin CLI can create the internal
     // identities and tokens required by the other services.
     start_forgejo()?;
-    // Preview leftovers are swept once, as the app starts (lib.rs): this
+    // Preview leftovers are swept once, as the host starts (server.rs): this
     // runs again on every window reload and agent sign-in, while previews
     // run, and sweeping here removed their folders and containers.
     let forgejo_changed = bootstrap::provision_forgejo(&file, PROJECT_NAME)?;
@@ -1029,7 +1025,7 @@ mod tests {
     fn live_start_matches_each_provider_connection() {
         let manager = profiles::ProfileManager::new();
 
-        stack_up_with_manager(&manager).unwrap();
+        start_stack(&manager).unwrap();
         let expected = profiles::worker_connections(&manager, &agents::fetch(false).unwrap());
         let statuses = stack_status().unwrap();
 
