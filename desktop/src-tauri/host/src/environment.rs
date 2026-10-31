@@ -9,7 +9,6 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant};
-use tauri::State;
 
 use crate::agents::Provider;
 use crate::{docker, profiles};
@@ -186,7 +185,7 @@ struct ValidationCompletion<'a> {
     error: &'a str,
 }
 
-pub(crate) fn coordinator_url(path: &str) -> String {
+pub fn coordinator_url(path: &str) -> String {
     let port = std::env::var("COMMITARIUM_COORDINATOR_PORT").unwrap_or_else(|_| "8080".into());
     format!("http://127.0.0.1:{port}{path}")
 }
@@ -222,10 +221,9 @@ async fn response_json<T: for<'de> Deserialize<'de>>(
         .map_err(|e| format!("decode coordinator response: {e}"))
 }
 
-#[tauri::command]
 pub async fn provision_environment_request(
     request_id: String,
-    manager: State<'_, profiles::ProfileManager>,
+    manager: &profiles::ProfileManager,
 ) -> Result<EnvironmentProvisionResult, String> {
     if !safe_id(&request_id) {
         return Err("environment request ID is invalid".into());
@@ -253,10 +251,10 @@ pub async fn provision_environment_request(
         return Err("coordinator returned an unsafe environment specification".into());
     }
 
-    let profile_manager = manager.inner().clone();
+    let profile_manager = manager.clone();
     let packages = spec.approved_packages.clone();
     let provisioned =
-        tauri::async_runtime::spawn_blocking(move || provision_images(&profile_manager, &packages))
+        crate::runtime::spawn_blocking(move || provision_images(&profile_manager, &packages))
             .await
             .map_err(|_| "environment image provisioning task stopped unexpectedly".to_string())?;
 
@@ -678,7 +676,7 @@ pub(crate) fn refresh_stale_images() -> Result<(), String> {
     if environment_plan(images.as_deref()) != EnvironmentPlan::Rebuild {
         return Ok(());
     }
-    let packages = tauri::async_runtime::block_on(approved_packages())?;
+    let packages = crate::runtime::block_on(approved_packages())?;
     rebuild_environment_images(&packages)
 }
 
@@ -740,7 +738,6 @@ fn container_image(container: &str) -> Result<Option<String>, String> {
     Ok((output.status.success() && !image.is_empty()).then_some(image))
 }
 
-#[tauri::command]
 pub async fn run_validation_job(job_id: String) -> Result<ValidationRunResult, String> {
     if !safe_id(&job_id) {
         return Err("validation job ID is invalid".into());
@@ -768,7 +765,7 @@ pub async fn run_validation_job(job_id: String) -> Result<ValidationRunResult, S
     }
     let (results, error) = if job.status == "running" {
         let run_job = job.clone();
-        let outcome = tauri::async_runtime::spawn_blocking(move || execute_validation(&run_job))
+        let outcome = crate::runtime::spawn_blocking(move || execute_validation(&run_job))
             .await
             .map_err(|_| "validation task stopped unexpectedly".to_string())?;
         match outcome {

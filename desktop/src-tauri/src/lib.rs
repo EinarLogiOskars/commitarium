@@ -1,8 +1,6 @@
-mod agents;
 mod app_pages;
 mod apps;
 mod bootstrap;
-mod cleanup;
 mod cli_updates;
 mod coordinator_build;
 mod desktop_services;
@@ -14,20 +12,21 @@ mod host;
 mod import;
 mod preview;
 mod preview_check;
-mod preview_compose;
 mod process;
 mod profiles;
 mod snapshot;
 mod store;
 mod updater;
 
+use std::sync::Arc;
+
 use tauri::{Emitter, Manager};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let profiles = profiles::ProfileManager::new();
+    let profiles = commitarium_host::profiles::ProfileManager::new();
     let shutdown_profiles = profiles.clone();
-    let previews = preview::PreviewManager::default();
+    let previews = commitarium_host::preview::PreviewManager::default();
     let shutdown_previews = previews.clone();
     tauri::Builder::default()
         .manage(profiles)
@@ -36,7 +35,9 @@ pub fn run() {
         .manage(desktop_services::NotificationCoordinator::default())
         .manage(desktop_services::BackupCoordinator::default())
         .manage(updater::UpdateCoordinator::default())
-        .manage(cli_updates::CliUpdater::default())
+        .manage(Arc::new(
+            commitarium_host::cli_updates::CliUpdater::default(),
+        ))
         .manage(coordinator_build::CoordinatorBuild::default())
         .manage(host::Host::default())
         .plugin(tauri_plugin_opener::init())
@@ -55,7 +56,7 @@ pub fn run() {
             host::relay_events(app.handle().clone());
             // No preview runs yet in this process, so whatever is left is
             // from an earlier one.
-            preview::sweep_leftovers();
+            commitarium_host::preview::sweep_leftovers();
             // The agents' CLIs stay current in the background, from launch on.
             cli_updates::spawn(app.handle().clone());
             // App windows' pages, served same-site with the apps (ADR-029).
@@ -154,7 +155,7 @@ pub fn run() {
                 }
             }
             tauri::RunEvent::Exit | tauri::RunEvent::ExitRequested { .. } => {
-                preview::stop_all(&shutdown_previews);
+                commitarium_host::preview::stop_all(&shutdown_previews);
                 shutdown_profiles.shutdown();
                 app.state::<host::Host>().stop();
             }

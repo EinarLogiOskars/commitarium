@@ -5,6 +5,7 @@
 //! `preview_compose` to normalize and rewrite the repository Compose file, and
 //! only launches that rewritten file.
 
+use crate::events::Events;
 use crate::{docker, preview_compose};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -16,7 +17,6 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
-use tauri::{AppHandle, Emitter, State};
 
 const STATUS_EVENT: &str = "preview-status-changed";
 pub(crate) const PREVIEW_TEMP_PREFIX: &str = "commitarium-preview-";
@@ -394,10 +394,9 @@ impl PreviewManager {
     }
 }
 
-#[tauri::command]
 pub async fn start_preview(
-    app: AppHandle,
-    manager: State<'_, PreviewManager>,
+    events: Events,
+    manager: &PreviewManager,
     project_id: String,
     target: PreviewTarget,
 ) -> Result<PreviewStatus, String> {
@@ -476,8 +475,8 @@ pub async fn start_preview(
         }
     };
 
-    let owned = manager.inner().clone();
-    stop_project(&app, owned.clone(), &key).await?;
+    let owned = manager.clone();
+    stop_project(&events, owned.clone(), &key).await?;
     let status = PreviewStatus {
         project_id: project_id.clone(),
         target,
@@ -488,15 +487,15 @@ pub async fn start_preview(
         services: Vec::new(),
     };
     let generation = owned.begin(&key, status.clone())?;
-    let _ = app.emit(STATUS_EVENT, status.clone());
-    let task_app = app.clone();
-    tauri::async_runtime::spawn(async move {
-        let launch_app = task_app.clone();
+    events.publish(STATUS_EVENT, &status);
+    let task_events = events.clone();
+    crate::runtime::spawn(async move {
+        let launch_events = task_events.clone();
         let launch_manager = owned.clone();
         let launch_key = key.clone();
-        let result = tauri::async_runtime::spawn_blocking(move || {
+        let result = crate::runtime::spawn_blocking(move || {
             launch_preview(
-                launch_app,
+                launch_events,
                 launch_manager,
                 launch_key,
                 generation,
@@ -513,7 +512,7 @@ pub async fn start_preview(
         }
         if result.is_err() {
             fail_preview(
-                &task_app,
+                &task_events,
                 &owned,
                 &key,
                 generation,
@@ -525,49 +524,46 @@ pub async fn start_preview(
     Ok(status)
 }
 
-#[tauri::command]
 pub async fn stop_preview(
-    app: AppHandle,
-    manager: State<'_, PreviewManager>,
+    events: Events,
+    manager: &PreviewManager,
     project_id: String,
     feature_id: Option<String>,
 ) -> Result<(), String> {
     let key = preview_key(&project_id, feature_id.as_deref())?;
-    stop_project(&app, manager.inner().clone(), &key).await
+    stop_project(&events, manager.clone(), &key).await
 }
 
-#[tauri::command]
 pub async fn reset_preview_data(
-    app: AppHandle,
-    manager: State<'_, PreviewManager>,
+    events: Events,
+    manager: &PreviewManager,
     project_id: String,
 ) -> Result<(), String> {
-    cleanup_preview_data(&app, manager.inner().clone(), &project_id, false).await
+    cleanup_preview_data(&events, manager.clone(), &project_id, false).await
 }
 
-pub(crate) async fn delete_project_data(
-    app: &AppHandle,
+pub async fn delete_project_data(
+    events: &Events,
     manager: PreviewManager,
     project_id: &str,
 ) -> Result<(), String> {
-    prune_sessions(app, manager.clone(), project_id, &[]).await?;
+    prune_sessions(events, manager.clone(), project_id, &[]).await?;
     let check = preview_compose::project_name(&crate::preview_check::check_compose_id(project_id))?;
-    tauri::async_runtime::spawn_blocking(move || {
+    crate::runtime::spawn_blocking(move || {
         for kind in ["container", "network", "volume", "image"] {
             remove_labeled_resources(kind, &check);
         }
     })
     .await
     .map_err(|_| "preview check cleanup stopped unexpectedly".to_string())?;
-    cleanup_preview_data(app, manager, project_id, true).await
+    cleanup_preview_data(events, manager, project_id, true).await
 }
 
 /// Removes the previews of the project's sessions that are no longer open:
 /// their containers, networks, data, and images (ADR-019).
-#[tauri::command]
 pub async fn prune_session_previews(
-    app: AppHandle,
-    manager: State<'_, PreviewManager>,
+    events: Events,
+    manager: &PreviewManager,
     project_id: String,
     open_sessions: Vec<String>,
 ) -> Result<(), String> {
@@ -575,11 +571,11 @@ pub async fn prune_session_previews(
     for feature_id in &open_sessions {
         validate_record_id("work order ID", feature_id)?;
     }
-    prune_sessions(&app, manager.inner().clone(), &project_id, &open_sessions).await
+    prune_sessions(&events, manager.clone(), &project_id, &open_sessions).await
 }
 
 async fn prune_sessions(
-    app: &AppHandle,
+    events: &Events,
     manager: PreviewManager,
     project_id: &str,
     open_sessions: &[String],
@@ -612,10 +608,10 @@ async fn prune_sessions(
         .cloned()
         .collect::<Vec<_>>();
     for key in closed_keys {
-        stop_project(app, manager.clone(), &key).await?;
+        stop_project(events, manager.clone(), &key).await?;
     }
     let session_prefix = format!("{PREVIEW_TEMP_PREFIX}{project_id}-");
-    tauri::async_runtime::spawn_blocking(move || {
+    crate::runtime::spawn_blocking(move || {
         for project in compose_projects() {
             if !project.starts_with(&session_prefix) || keep.contains(&project) {
                 continue;
@@ -659,9 +655,8 @@ fn compose_projects() -> HashSet<String> {
     projects
 }
 
-#[tauri::command]
 pub fn get_preview_status(
-    manager: State<'_, PreviewManager>,
+    manager: &PreviewManager,
     project_id: String,
     feature_id: Option<String>,
 ) -> Result<Option<PreviewStatus>, String> {
@@ -669,9 +664,8 @@ pub fn get_preview_status(
     manager.status(&key)
 }
 
-#[tauri::command]
 pub async fn get_preview_logs(
-    manager: State<'_, PreviewManager>,
+    manager: &PreviewManager,
     project_id: String,
     feature_id: Option<String>,
 ) -> Result<Vec<String>, String> {
@@ -682,7 +676,7 @@ pub async fn get_preview_logs(
     let Some(runtime) = source.runtime else {
         return Ok(source.cached);
     };
-    let logs = tauri::async_runtime::spawn_blocking(move || compose_logs(&runtime))
+    let logs = crate::runtime::spawn_blocking(move || compose_logs(&runtime))
         .await
         .map_err(|_| "preview log task stopped unexpectedly".to_string())?;
     let mut combined = source.cached;
@@ -696,15 +690,15 @@ pub async fn get_preview_logs(
 }
 
 async fn stop_project(
-    app: &AppHandle,
+    events: &Events,
     manager: PreviewManager,
     project_id: &str,
 ) -> Result<(), String> {
     let Some(stopped) = manager.stop(project_id)? else {
         return Ok(());
     };
-    let _ = app.emit(STATUS_EVENT, stopped.status);
-    tauri::async_runtime::spawn_blocking(move || {
+    events.publish(STATUS_EVENT, &stopped.status);
+    crate::runtime::spawn_blocking(move || {
         if let Some(runtime) = stopped.runtime {
             let _ = compose_down(&runtime, false, false);
             remove_source(&runtime.source_root);
@@ -716,7 +710,7 @@ async fn stop_project(
 }
 
 async fn cleanup_preview_data(
-    app: &AppHandle,
+    events: &Events,
     manager: PreviewManager,
     project_id: &str,
     images: bool,
@@ -724,10 +718,10 @@ async fn cleanup_preview_data(
     validate_identifier("project ID", project_id)?;
     let stopped = manager.stop(project_id)?;
     if let Some(stopped) = &stopped {
-        let _ = app.emit(STATUS_EVENT, stopped.status.clone());
+        events.publish(STATUS_EVENT, &stopped.status);
     }
     let compose_project = preview_compose::project_name(project_id)?;
-    tauri::async_runtime::spawn_blocking(move || {
+    crate::runtime::spawn_blocking(move || {
         let mut down_error = None;
         if let Some(runtime) = stopped.and_then(|stopped| stopped.runtime) {
             if let Err(error) = compose_down(&runtime, true, images) {
@@ -752,7 +746,7 @@ async fn cleanup_preview_data(
 }
 
 fn launch_preview(
-    app: AppHandle,
+    events: Events,
     manager: PreviewManager,
     project_id: String,
     generation: u64,
@@ -777,7 +771,7 @@ fn launch_preview(
     let (root, source) = match prepared_root {
         Ok(paths) => paths,
         Err(error) => {
-            fail_preview(&app, &manager, &project_id, generation, &error, None);
+            fail_preview(&events, &manager, &project_id, generation, &error, None);
             return None;
         }
     };
@@ -789,21 +783,21 @@ fn launch_preview(
         match preview_compose::normalize_and_rewrite(&source, &compose_id, configured.as_ref()) {
             Ok(prepared) => prepared,
             Err(error) => {
-                fail_preview(&app, &manager, &project_id, generation, &error, None);
+                fail_preview(&events, &manager, &project_id, generation, &error, None);
                 remove_source(&root);
                 return None;
             }
         };
     let compose_file = root.join("preview.compose.json");
     if let Err(error) = preview_compose::write_rewritten(&prepared, &compose_file) {
-        fail_preview(&app, &manager, &project_id, generation, &error, None);
+        fail_preview(&events, &manager, &project_id, generation, &error, None);
         remove_source(&root);
         return None;
     }
     let environment_file = root.join("preview.env");
     if let Err(error) = fs::write(&environment_file, []) {
         fail_preview(
-            &app,
+            &events,
             &manager,
             &project_id,
             generation,
@@ -833,7 +827,7 @@ fn launch_preview(
         Ok(()) => crate::cleanup::spawn(),
         Err(error) => {
             manager.append_log(&project_id, generation, format!("[preview] {error}"));
-            fail_preview(&app, &manager, &project_id, generation, &error, None);
+            fail_preview(&events, &manager, &project_id, generation, &error, None);
             return None;
         }
     }
@@ -850,13 +844,13 @@ fn launch_preview(
     let urls = match resolve_urls(&runtime, &prepared.published_ports, &open) {
         Ok(urls) => urls,
         Err(error) => {
-            fail_preview(&app, &manager, &project_id, generation, &error, None);
+            fail_preview(&events, &manager, &project_id, generation, &error, None);
             return None;
         }
     };
     let Some(open_url) = urls.iter().find(|url| url.open) else {
         fail_preview(
-            &app,
+            &events,
             &manager,
             &project_id,
             generation,
@@ -873,13 +867,13 @@ fn launch_preview(
         &open.service,
         &open_url.url,
     ) {
-        fail_preview(&app, &manager, &project_id, generation, &error, None);
+        fail_preview(&events, &manager, &project_id, generation, &error, None);
         return None;
     }
     if let Some(status) = manager.running(&project_id, generation, urls) {
-        let _ = app.emit(STATUS_EVENT, status);
+        events.publish(STATUS_EVENT, &status);
         watch_stack(
-            app,
+            events,
             manager,
             project_id,
             generation,
@@ -1178,7 +1172,7 @@ pub(crate) fn http_responds(port: u16) -> bool {
 }
 
 fn watch_stack(
-    app: AppHandle,
+    events: Events,
     manager: PreviewManager,
     project_id: String,
     generation: u64,
@@ -1193,11 +1187,11 @@ fn watch_stack(
         match stack_failure(&runtime, &open_service) {
             Ok(None) => continue,
             Ok(Some(error)) => {
-                fail_preview(&app, &manager, &project_id, generation, &error, None);
+                fail_preview(&events, &manager, &project_id, generation, &error, None);
                 return;
             }
             Err(error) => {
-                fail_preview(&app, &manager, &project_id, generation, &error, None);
+                fail_preview(&events, &manager, &project_id, generation, &error, None);
                 return;
             }
         }
@@ -1354,7 +1348,7 @@ pub(crate) fn parse_compose_ps(output: &str) -> Result<Vec<ComposeServiceState>,
 }
 
 fn fail_preview(
-    app: &AppHandle,
+    events: &Events,
     manager: &PreviewManager,
     project_id: &str,
     generation: u64,
@@ -1368,7 +1362,7 @@ fn fail_preview(
         .unwrap_or_default();
     if let Some((status, runtime)) = manager.fail(project_id, generation, &bounded(error), services)
     {
-        let _ = app.emit(STATUS_EVENT, status);
+        events.publish(STATUS_EVENT, &status);
         if let Some(runtime) = runtime.or(fallback_runtime) {
             let _ = compose_down(&runtime, false, false);
             remove_source(&runtime.source_root);
@@ -1393,7 +1387,7 @@ pub(crate) fn remove_source(path: &Path) {
     let _ = fs::remove_dir_all(path);
 }
 
-pub(crate) fn sweep_leftovers() {
+pub fn sweep_leftovers() {
     sweep_source_directories();
     let Ok(output) = docker::docker_command()
         .args([
@@ -1480,7 +1474,7 @@ fn sweep_source_directories() {
     }
 }
 
-pub(crate) fn stop_all(manager: &PreviewManager) {
+pub fn stop_all(manager: &PreviewManager) {
     let projects = manager
         .inner
         .lock()

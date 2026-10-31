@@ -9,16 +9,16 @@
 //! built from the current base worker images, so the workers do not keep
 //! running old worker code after the bases are rebuilt or updated.
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::Notify;
 
 use crate::agents::{self, Provider, CLI_DIRECTORY};
 use crate::environment::{self, EnvironmentPlan};
+use crate::events::Events;
 use crate::{docker, profiles};
 
 const REGISTRY_TIMEOUT: Duration = Duration::from_secs(10);
@@ -67,7 +67,7 @@ pub struct CliStatus {
 /// The updater's shared state. A single background task does every update,
 /// so two never overlap.
 #[derive(Default)]
-pub(crate) struct CliUpdater {
+pub struct CliUpdater {
     statuses: Mutex<Vec<CliStatus>>,
     /// Versions installed whose workers still wait for a restart. Only
     /// workers that do not report the CLI version they started with need it.
@@ -81,9 +81,15 @@ pub(crate) struct CliUpdater {
     wake: Notify,
 }
 
+/// What the background updater works with.
+struct Task {
+    updater: Arc<CliUpdater>,
+    manager: profiles::ProfileManager,
+    events: Events,
+}
+
 /// The agents' CLI versions and any update in progress.
-#[tauri::command]
-pub fn agent_cli_status(updater: tauri::State<'_, CliUpdater>) -> Vec<CliStatus> {
+pub fn agent_cli_status(updater: &CliUpdater) -> Vec<CliStatus> {
     updater
         .statuses
         .lock()
@@ -94,8 +100,7 @@ pub fn agent_cli_status(updater: tauri::State<'_, CliUpdater>) -> Vec<CliStatus>
 /// Check now, for example because the stack (and so the workers) just came up.
 /// New base images may also have arrived, so a failed environment rebuild is
 /// tried again at once.
-pub(crate) fn wake(app: &AppHandle) {
-    let updater = app.state::<CliUpdater>();
+pub fn wake(updater: &CliUpdater) {
     if let Ok(mut rebuild_after) = updater.rebuild_after.lock() {
         *rebuild_after = None;
     }
@@ -104,10 +109,15 @@ pub(crate) fn wake(app: &AppHandle) {
 
 /// Start the background updater. It never blocks startup; a failed pass is
 /// logged and retried.
-pub(crate) fn spawn(app: AppHandle) {
-    tauri::async_runtime::spawn(async move {
+pub fn spawn(updater: Arc<CliUpdater>, manager: profiles::ProfileManager, events: Events) {
+    let task = Task {
+        updater,
+        manager,
+        events,
+    };
+    crate::runtime::spawn(async move {
         loop {
-            let delay = match update_pass(&app).await {
+            let delay = match update_pass(&task).await {
                 Ok(true) => CHECK_INTERVAL,
                 Ok(false) => RETRY_INTERVAL,
                 Err(error) => {
@@ -115,8 +125,7 @@ pub(crate) fn spawn(app: AppHandle) {
                     RETRY_INTERVAL
                 }
             };
-            let updater = app.state::<CliUpdater>();
-            let _ = tokio::time::timeout(delay, updater.wake.notified()).await;
+            let _ = tokio::time::timeout(delay, task.updater.wake.notified()).await;
         }
     });
 }
@@ -124,21 +133,21 @@ pub(crate) fn spawn(app: AppHandle) {
 /// One pass: the approved environment first, so a recreate it needs comes
 /// before any CLI restart, then the CLIs. Returns whether everything is
 /// settled.
-async fn update_pass(app: &AppHandle) -> Result<bool, String> {
-    let environment = match environment_pass(app).await {
+async fn update_pass(task: &Task) -> Result<bool, String> {
+    let environment = match environment_pass(task).await {
         Ok(settled) => settled,
         Err(error) => {
             eprintln!("[environment-images] {error}");
             false
         }
     };
-    Ok(cli_pass(app).await? && environment)
+    Ok(cli_pass(task).await? && environment)
 }
 
 /// Keep the approved environment on the current base worker images: rebuild
 /// stale derivatives with the approved package union, then recreate the
 /// workers once none is running a turn. Returns whether it is settled.
-async fn environment_pass(app: &AppHandle) -> Result<bool, String> {
+async fn environment_pass(task: &Task) -> Result<bool, String> {
     let workers = blocking(|| {
         PROVIDERS
             .into_iter()
@@ -152,8 +161,8 @@ async fn environment_pass(app: &AppHandle) -> Result<bool, String> {
     }
     let mut plan = environment_plan(&workers).await?;
     if plan == EnvironmentPlan::Rebuild {
-        let deferred = app
-            .state::<CliUpdater>()
+        let deferred = task
+            .updater
             .rebuild_after
             .lock()
             .ok()
@@ -169,7 +178,7 @@ async fn environment_pass(app: &AppHandle) -> Result<bool, String> {
         );
         let rebuilt = blocking(move || environment::rebuild_environment_images(&packages)).await?;
         if let Err(error) = rebuilt {
-            if let Ok(mut after) = app.state::<CliUpdater>().rebuild_after.lock() {
+            if let Ok(mut after) = task.updater.rebuild_after.lock() {
                 *after = Some(Instant::now() + REBUILD_RETRY_INTERVAL);
             }
             return Err(error);
@@ -189,7 +198,7 @@ async fn environment_pass(app: &AppHandle) -> Result<bool, String> {
             if !blocking(move || workers_idle(&containers)).await? {
                 return Ok(false);
             }
-            let manager = app.state::<profiles::ProfileManager>().inner().clone();
+            let manager = task.manager.clone();
             blocking(move || environment::recreate_environment_workers(&manager)).await??;
             eprintln!("[environment-images] the workers now run the rebuilt environment");
             Ok(true)
@@ -209,13 +218,13 @@ async fn environment_plan(workers: &[(Provider, Vec<String>)]) -> Result<Environ
 /// One pass over both providers' CLIs. Returns whether everything is settled:
 /// each provider with a running worker is current and at least one was
 /// checked.
-async fn cli_pass(app: &AppHandle) -> Result<bool, String> {
+async fn cli_pass(task: &Task) -> Result<bool, String> {
     let mut settled = true;
     let mut inspected = false;
     for provider in PROVIDERS {
         let containers = blocking(move || running_workers(provider)).await??;
         let Some(first) = containers.first().cloned() else {
-            set_status(app, provider, None);
+            set_status(task, provider, None);
             continue;
         };
         let Some(installed) = blocking({
@@ -247,7 +256,7 @@ async fn cli_pass(app: &AppHandle) -> Result<bool, String> {
             }
         })
         .await?;
-        let pending = pending_restart(app, provider);
+        let pending = pending_restart(task, provider);
         let (target, needs_install) = match plan(
             &installed,
             latest.as_deref(),
@@ -255,22 +264,22 @@ async fn cli_pass(app: &AppHandle) -> Result<bool, String> {
             pending.as_deref(),
         ) {
             Plan::Nothing => {
-                set_pending_restart(app, provider, None);
-                set_status(app, provider, Some(current(provider, &installed, checked)));
+                set_pending_restart(task, provider, None);
+                set_status(task, provider, Some(current(provider, &installed, checked)));
                 continue;
             }
             Plan::Install(version) => {
-                set_restarted_onto(app, provider, None);
+                set_restarted_onto(task, provider, None);
                 (version, true)
             }
             Plan::Restart(version) => {
-                if restarted_onto(app, provider).as_deref() == Some(version.as_str()) {
+                if restarted_onto(task, provider).as_deref() == Some(version.as_str()) {
                     eprintln!(
                             "[cli-updates] {} workers still report another CLI version after restarting onto {version}; not restarting again",
                             provider.executable()
                         );
-                    set_pending_restart(app, provider, None);
-                    set_status(app, provider, Some(current(provider, &installed, checked)));
+                    set_pending_restart(task, provider, None);
+                    set_status(task, provider, Some(current(provider, &installed, checked)));
                     continue;
                 }
                 (version, false)
@@ -284,7 +293,7 @@ async fn cli_pass(app: &AppHandle) -> Result<bool, String> {
             checked,
         };
         if needs_install {
-            set_status(app, provider, Some(status(CliState::Updating)));
+            set_status(task, provider, Some(status(CliState::Updating)));
             let result = blocking({
                 let (first, version) = (first.clone(), target.clone());
                 move || install(&first, provider, &version)
@@ -292,11 +301,11 @@ async fn cli_pass(app: &AppHandle) -> Result<bool, String> {
             .await?;
             if let Err(error) = result {
                 eprintln!("[cli-updates] {error}");
-                set_status(app, provider, Some(status(CliState::Behind)));
+                set_status(task, provider, Some(status(CliState::Behind)));
                 settled = false;
                 continue;
             }
-            set_pending_restart(app, provider, Some(target.clone()));
+            set_pending_restart(task, provider, Some(target.clone()));
         }
         // Installing left running turns alone; restarting would end them.
         let idle = blocking({
@@ -305,11 +314,11 @@ async fn cli_pass(app: &AppHandle) -> Result<bool, String> {
         })
         .await?;
         if !idle {
-            set_status(app, provider, Some(status(CliState::Waiting)));
+            set_status(task, provider, Some(status(CliState::Waiting)));
             settled = false;
             continue;
         }
-        set_status(app, provider, Some(status(CliState::Updating)));
+        set_status(task, provider, Some(status(CliState::Updating)));
         let restarted = blocking(move || {
             restart(&containers)?;
             wait_until_healthy(&containers)
@@ -317,13 +326,13 @@ async fn cli_pass(app: &AppHandle) -> Result<bool, String> {
         .await?;
         if let Err(error) = restarted {
             eprintln!("[cli-updates] {error}");
-            set_status(app, provider, Some(status(CliState::Behind)));
+            set_status(task, provider, Some(status(CliState::Behind)));
             settled = false;
             continue;
         }
-        set_pending_restart(app, provider, None);
-        set_restarted_onto(app, provider, Some(target.clone()));
-        set_status(app, provider, Some(current(provider, &target, checked)));
+        set_pending_restart(task, provider, None);
+        set_restarted_onto(task, provider, Some(target.clone()));
+        set_status(task, provider, Some(current(provider, &target, checked)));
     }
     Ok(settled && inspected)
 }
@@ -375,9 +384,8 @@ fn plan(
     }
 }
 
-fn set_status(app: &AppHandle, provider: Provider, status: Option<CliStatus>) {
-    let updater = app.state::<CliUpdater>();
-    let Ok(mut statuses) = updater.statuses.lock() else {
+fn set_status(task: &Task, provider: Provider, status: Option<CliStatus>) {
+    let Ok(mut statuses) = task.updater.statuses.lock() else {
         return;
     };
     let before = serde_json::to_value(&*statuses).ok();
@@ -385,40 +393,36 @@ fn set_status(app: &AppHandle, provider: Provider, status: Option<CliStatus>) {
     statuses.extend(status);
     statuses.sort_by_key(|s| PROVIDERS.iter().position(|p| *p == s.provider));
     if serde_json::to_value(&*statuses).ok() != before {
-        let _ = app.emit(STATUS_EVENT, statuses.clone());
+        task.events.publish(STATUS_EVENT, &*statuses);
     }
 }
 
-fn pending_restart(app: &AppHandle, provider: Provider) -> Option<String> {
-    let updater = app.state::<CliUpdater>();
-    let pending = updater.restart_pending.lock().ok()?;
+fn pending_restart(task: &Task, provider: Provider) -> Option<String> {
+    let pending = task.updater.restart_pending.lock().ok()?;
     pending
         .iter()
         .find(|(p, _)| *p == provider)
         .map(|(_, version)| version.clone())
 }
 
-fn set_pending_restart(app: &AppHandle, provider: Provider, version: Option<String>) {
-    let updater = app.state::<CliUpdater>();
-    let Ok(mut pending) = updater.restart_pending.lock() else {
+fn set_pending_restart(task: &Task, provider: Provider, version: Option<String>) {
+    let Ok(mut pending) = task.updater.restart_pending.lock() else {
         return;
     };
     pending.retain(|(p, _)| *p != provider);
     pending.extend(version.map(|version| (provider, version)));
 }
 
-fn restarted_onto(app: &AppHandle, provider: Provider) -> Option<String> {
-    let updater = app.state::<CliUpdater>();
-    let restarted = updater.restarted_onto.lock().ok()?;
+fn restarted_onto(task: &Task, provider: Provider) -> Option<String> {
+    let restarted = task.updater.restarted_onto.lock().ok()?;
     restarted
         .iter()
         .find(|(p, _)| *p == provider)
         .map(|(_, version)| version.clone())
 }
 
-fn set_restarted_onto(app: &AppHandle, provider: Provider, version: Option<String>) {
-    let updater = app.state::<CliUpdater>();
-    let Ok(mut restarted) = updater.restarted_onto.lock() else {
+fn set_restarted_onto(task: &Task, provider: Provider, version: Option<String>) {
+    let Ok(mut restarted) = task.updater.restarted_onto.lock() else {
         return;
     };
     restarted.retain(|(p, _)| *p != provider);
@@ -428,7 +432,7 @@ fn set_restarted_onto(app: &AppHandle, provider: Provider, version: Option<Strin
 async fn blocking<T: Send + 'static>(
     work: impl FnOnce() -> T + Send + 'static,
 ) -> Result<T, String> {
-    tauri::async_runtime::spawn_blocking(work)
+    crate::runtime::spawn_blocking(work)
         .await
         .map_err(|_| "the CLI update stopped unexpectedly".to_string())
 }
@@ -508,7 +512,7 @@ fn worker_activity(container: &str) -> Activity {
 }
 
 /// Whether no agent's worker, of any provider, is launching or running a turn.
-pub(crate) fn all_workers_idle() -> Result<bool, String> {
+pub fn all_workers_idle() -> Result<bool, String> {
     for provider in PROVIDERS {
         if !workers_idle(&running_workers(provider)?) {
             return Ok(false);

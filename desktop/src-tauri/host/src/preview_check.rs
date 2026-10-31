@@ -97,7 +97,6 @@ pub struct PreviewCheckRun {
 /// One check at a time: each builds images and starts a whole app.
 static CHECKS: Mutex<()> = Mutex::new(());
 
-#[tauri::command]
 pub async fn run_preview_check(check_id: String) -> Result<PreviewCheckRun, String> {
     if !safe_check_id(&check_id) {
         return Err("preview check ID is invalid".into());
@@ -126,7 +125,7 @@ pub async fn run_preview_check(check_id: String) -> Result<PreviewCheckRun, Stri
             let (repository, open) = check_inputs(&client, &check.project_id).await?;
             let project_id = check.project_id.clone();
             let commit_id = check.commit_id.clone();
-            tauri::async_runtime::spawn_blocking(move || {
+            crate::runtime::spawn_blocking(move || {
                 let _one_at_a_time = CHECKS
                     .lock()
                     .unwrap_or_else(|poisoned| poisoned.into_inner());

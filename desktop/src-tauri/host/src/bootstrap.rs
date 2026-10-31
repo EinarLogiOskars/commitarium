@@ -467,7 +467,6 @@ impl ForgejoApi {
     }
 }
 
-#[tauri::command]
 pub async fn get_forgejo_viewer_status() -> Result<ForgejoViewerStatus, String> {
     let compose_file = docker::compose_file()?;
     let api = ForgejoApi::new(&compose_file).await?;
@@ -475,7 +474,6 @@ pub async fn get_forgejo_viewer_status() -> Result<ForgejoViewerStatus, String> 
     Ok(api.status(viewer.as_ref()))
 }
 
-#[tauri::command]
 pub async fn configure_forgejo_viewer(password: String) -> Result<ForgejoViewerStatus, String> {
     let password = Zeroizing::new(password);
     validate_viewer_password(&password)?;
@@ -497,7 +495,7 @@ pub async fn configure_forgejo_viewer(password: String) -> Result<ForgejoViewerS
 /// turn a missing bind-mount source into a directory. The result says whether
 /// any source changed, so the launcher can recreate containers whose old mount
 /// was created while that source had the wrong type.
-pub(crate) fn prepare_transport_secrets(compose_file: &Path) -> Result<bool, String> {
+pub fn prepare_transport_secrets(compose_file: &Path) -> Result<bool, String> {
     let root = compose_root(compose_file)?;
     let mut changed = false;
     for location in TRANSPORT_SECRETS {
@@ -512,7 +510,7 @@ pub(crate) fn prepare_transport_secrets(compose_file: &Path) -> Result<bool, Str
 
 /// Ensure each agent worker has a bearer token, named as the coordinator
 /// expects (`agent-<id>-worker-token`). Returns whether any token was created.
-pub(crate) fn prepare_agent_worker_tokens(
+pub fn prepare_agent_worker_tokens(
     compose_file: &Path,
     agents: &[agents::Agent],
 ) -> Result<bool, String> {
@@ -546,7 +544,7 @@ fn ensure_random_secret(path: &Path) -> Result<bool, String> {
 /// restore creates all service containers. The files intentionally remain
 /// empty: after Forgejo data is restored, ordinary bootstrap replaces them
 /// with newly generated tokens for the restored identities.
-pub(crate) fn prepare_forgejo_secret_mounts(
+pub fn prepare_forgejo_secret_mounts(
     compose_file: &Path,
     agents: &[agents::Agent],
 ) -> Result<(), String> {
@@ -907,7 +905,7 @@ impl ForgejoAdmin for DockerForgejoAdmin {
         thread::scope(|scope| {
             scope
                 .spawn(|| {
-                    tauri::async_runtime::block_on(revoke_tokens_over_api(
+                    crate::runtime::block_on(revoke_tokens_over_api(
                         base_url, &username, &password, suffixes,
                     ))
                 })

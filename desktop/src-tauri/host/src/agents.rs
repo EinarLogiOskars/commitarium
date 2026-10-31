@@ -6,7 +6,6 @@
 //! agent's private provider volume, journal, bearer token, both Forgejo
 //! tokens, and both workspace trees. Nothing here reads provider credentials.
 
-use commitarium_host::docker::AGENTS_COMPOSE_ENV;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use std::fs;
@@ -15,6 +14,7 @@ use std::path::PathBuf;
 use std::thread;
 use std::time::Duration;
 
+use crate::docker::AGENTS_COMPOSE_ENV;
 use crate::{bootstrap, docker, environment};
 
 const TEMPLATE_PROFILE: &str = "agent-template";
@@ -89,8 +89,8 @@ pub(crate) fn cli_script(provider: Provider) -> String {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub(crate) struct Agent {
-    pub(crate) id: String,
+pub struct Agent {
+    pub id: String,
     pub(crate) name: String,
     pub(crate) provider: Provider,
 }
@@ -108,7 +108,7 @@ impl Agent {
 
 /// Agent IDs are lowercase letters, digits, and dashes (at most 30), the same
 /// rule the coordinator enforces, so every derived name below stays valid.
-pub(crate) fn valid_id(id: &str) -> bool {
+pub fn valid_id(id: &str) -> bool {
     let bytes = id.as_bytes();
     !bytes.is_empty()
         && bytes.len() <= MAX_ID_LENGTH
@@ -119,7 +119,7 @@ pub(crate) fn valid_id(id: &str) -> bool {
         && bytes[bytes.len() - 1] != b'-'
 }
 
-pub(crate) fn worker_service(agent_id: &str) -> String {
+pub fn worker_service(agent_id: &str) -> String {
     format!("agent-{agent_id}-worker")
 }
 
@@ -169,7 +169,7 @@ pub(crate) fn fetch(wait: bool) -> Result<Vec<Agent>, String> {
         // always safe to block.
         let fetched = thread::scope(|scope| {
             scope
-                .spawn(|| tauri::async_runtime::block_on(fetch_once()))
+                .spawn(|| crate::runtime::block_on(fetch_once()))
                 .join()
                 .unwrap_or_else(|_| Err("could not reach the coordinator".to_string()))
         });
@@ -225,7 +225,7 @@ async fn fetch_once() -> Result<Vec<Agent>, String> {
 
 /// The agents from the coordinator, or the last list seen when it is not
 /// running (the stack may be stopped while the user manages logins).
-pub(crate) fn current() -> Result<Vec<Agent>, String> {
+pub fn current() -> Result<Vec<Agent>, String> {
     fetch(false).or_else(|error| load_cache().ok_or(error))
 }
 

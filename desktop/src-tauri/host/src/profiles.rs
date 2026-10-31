@@ -15,11 +15,11 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::Duration;
-use tauri::{AppHandle, Emitter, State};
 use zeroize::Zeroizing;
 
 use crate::agents::{self, Provider};
 use crate::docker;
+use crate::events::Events;
 
 const PROGRESS_EVENT: &str = "login_progress";
 const OUTPUT_LIMIT: usize = 64 * 1024;
@@ -262,7 +262,7 @@ impl ProfileManager {
 
     fn transition(
         &self,
-        app: &AppHandle,
+        events: &Events,
         spec: &ProfileSpec,
         status: ProfileStatus,
         detail: Option<ProfileDetail>,
@@ -273,9 +273,9 @@ impl ProfileManager {
             .expect("profile state poisoned")
             .statuses
             .insert(spec.id.clone(), (status, detail.clone()));
-        let _ = app.emit(
+        events.publish(
             PROGRESS_EVENT,
-            LoginProgress {
+            &LoginProgress {
                 profile_id: spec.id.clone(),
                 status,
                 detail,
@@ -341,10 +341,9 @@ fn profile_spec(agent_id: &str) -> Result<ProfileSpec, String> {
         .ok_or_else(|| "unknown agent".to_string())
 }
 
-#[tauri::command]
-pub async fn list_profiles(manager: State<'_, ProfileManager>) -> Result<Vec<Profile>, String> {
-    let manager = manager.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
+pub async fn list_profiles(manager: &ProfileManager) -> Result<Vec<Profile>, String> {
+    let manager = manager.clone();
+    crate::runtime::spawn_blocking(move || {
         let agents = agents::current()?;
         // A new agent's worker must exist before its login can be inspected.
         // If that is not possible yet (the stack is stopped), its login is
@@ -406,10 +405,9 @@ fn inspect_profiles(manager: &ProfileManager, specs: Vec<ProfileSpec>) -> Vec<Pr
         .collect()
 }
 
-#[tauri::command]
 pub fn begin_login(
-    app: AppHandle,
-    manager: State<'_, ProfileManager>,
+    events: Events,
+    manager: &ProfileManager,
     profile_id: String,
     method: String,
 ) -> Result<(), String> {
@@ -418,23 +416,22 @@ pub fn begin_login(
     provision_worker(&spec)?;
     match method {
         LoginMethod::ApiKey => {
-            let manager = manager.inner().clone();
+            let manager = manager.clone();
             manager.reserve(&spec, method, ProfileStatus::WaitingForApiKey)?;
             manager.transition(
-                &app,
+                &events,
                 &spec,
                 ProfileStatus::WaitingForApiKey,
                 Some(detail("Enter the API key to connect this profile.")),
             );
             Ok(())
         }
-        LoginMethod::Subscription => start_subscription(app, manager.inner().clone(), &spec),
+        LoginMethod::Subscription => start_subscription(events, manager.clone(), &spec),
     }
 }
 
-#[tauri::command]
 pub fn submit_login_code(
-    manager: State<'_, ProfileManager>,
+    manager: &ProfileManager,
     profile_id: String,
     code: String,
 ) -> Result<(), String> {
@@ -467,10 +464,9 @@ pub fn submit_login_code(
     Ok(())
 }
 
-#[tauri::command]
 pub fn submit_api_key(
-    app: AppHandle,
-    manager: State<'_, ProfileManager>,
+    events: Events,
+    manager: &ProfileManager,
     profile_id: String,
     key: String,
 ) -> Result<(), String> {
@@ -479,21 +475,20 @@ pub fn submit_api_key(
     if key.is_empty() || key.len() > 16 * 1024 || key.iter().any(u8::is_ascii_whitespace) {
         return Err("API key must be one non-empty value without whitespace".to_string());
     }
-    let manager = manager.inner().clone();
+    let manager = manager.clone();
     let active = manager
         .active(&spec)
         .filter(|active| active.method == LoginMethod::ApiKey)
         .ok_or_else(|| "begin API-key login for this agent first".to_string())?;
     manager.mark_submitted(&spec, active.generation)?;
     let generation = active.generation;
-    thread::spawn(move || provision_api_key(app, manager, &spec, generation, key));
+    thread::spawn(move || provision_api_key(events, manager, &spec, generation, key));
     Ok(())
 }
 
-#[tauri::command]
 pub fn cancel_login(
-    app: AppHandle,
-    manager: State<'_, ProfileManager>,
+    events: Events,
+    manager: &ProfileManager,
     profile_id: String,
 ) -> Result<(), String> {
     let spec = profile_spec(&profile_id)?;
@@ -505,23 +500,23 @@ pub fn cancel_login(
         let _ = child.lock().expect("login process poisoned").kill();
         remove_login_container(&spec);
         manager.transition(
-            &app,
+            &events,
             &spec,
             ProfileStatus::Verifying,
             Some(detail("Cancelling login and checking the profile.")),
         );
     } else if !active.submitted {
         manager.transition(
-            &app,
+            &events,
             &spec,
             ProfileStatus::Verifying,
             Some(detail("Cancelling login and checking the profile.")),
         );
-        let manager = manager.inner().clone();
+        let manager = manager.clone();
         thread::spawn(move || {
             let current = probe_profile(&spec);
             manager.transition(
-                &app,
+                &events,
                 &spec,
                 current.status,
                 Some(ProfileDetail {
@@ -535,7 +530,7 @@ pub fn cancel_login(
         });
     } else {
         manager.transition(
-            &app,
+            &events,
             &spec,
             ProfileStatus::Verifying,
             Some(detail("Cancelling login and checking the profile.")),
@@ -544,23 +539,21 @@ pub fn cancel_login(
     Ok(())
 }
 
-#[tauri::command]
 pub async fn verify_profile(
-    manager: State<'_, ProfileManager>,
+    manager: &ProfileManager,
     profile_id: String,
 ) -> Result<Profile, String> {
     let spec = profile_spec(&profile_id)?;
     if manager.is_active(&spec.id) {
         return Ok(manager.snapshot(&spec));
     }
-    tauri::async_runtime::spawn_blocking(move || probe_profile(&spec))
+    crate::runtime::spawn_blocking(move || probe_profile(&spec))
         .await
         .map_err(|_| "could not verify the provider profile".to_string())
 }
 
-#[tauri::command]
 pub async fn disconnect_profile(
-    manager: State<'_, ProfileManager>,
+    manager: &ProfileManager,
     profile_id: String,
 ) -> Result<Profile, String> {
     let spec = profile_spec(&profile_id)?;
@@ -569,7 +562,7 @@ pub async fn disconnect_profile(
     }
     // While the worker runs, the logout runs inside it. A work order mid-turn
     // then pauses until the agent logs in again (ADR-017); nothing is lost.
-    tauri::async_runtime::spawn_blocking(move || {
+    crate::runtime::spawn_blocking(move || {
         if spec.provider == Provider::Claude {
             run_profile_command(
                 &spec,
@@ -613,13 +606,13 @@ pub async fn disconnect_profile(
 }
 
 fn start_subscription(
-    app: AppHandle,
+    events: Events,
     manager: ProfileManager,
     spec: &ProfileSpec,
 ) -> Result<(), String> {
     let generation = manager.reserve(spec, LoginMethod::Subscription, ProfileStatus::Starting)?;
     manager.transition(
-        &app,
+        &events,
         spec,
         ProfileStatus::Starting,
         Some(detail("Starting provider login.")),
@@ -638,7 +631,7 @@ fn start_subscription(
         Ok(child) => child,
         Err(error) => {
             manager.finish(spec, generation);
-            manager.transition(&app, spec, ProfileStatus::Failed, Some(detail(&error)));
+            manager.transition(&events, spec, ProfileStatus::Failed, Some(detail(&error)));
             return Err(error);
         }
     };
@@ -651,14 +644,14 @@ fn start_subscription(
     let spec = spec.clone();
     thread::spawn(move || {
         monitor_subscription(
-            app, manager, &spec, generation, child, stdout, stderr, cancelled,
+            events, manager, &spec, generation, child, stdout, stderr, cancelled,
         )
     });
     Ok(())
 }
 
 fn provision_api_key(
-    app: AppHandle,
+    events: Events,
     manager: ProfileManager,
     spec: &ProfileSpec,
     generation: u64,
@@ -670,7 +663,7 @@ fn provision_api_key(
     {
         let current = probe_profile(spec);
         manager.transition(
-            &app,
+            &events,
             spec,
             current.status,
             Some(ProfileDetail {
@@ -684,7 +677,7 @@ fn provision_api_key(
         return;
     }
     manager.transition(
-        &app,
+        &events,
         spec,
         ProfileStatus::Starting,
         Some(detail(
@@ -706,13 +699,13 @@ fn provision_api_key(
     let result = run_secret_command(&manager, spec, generation, executable, arguments, &key);
     if result.is_ok() {
         manager.transition(
-            &app,
+            &events,
             spec,
             ProfileStatus::Verifying,
             Some(detail("Verifying the provider login.")),
         );
         let verified = probe_profile(spec);
-        manager.transition(&app, spec, verified.status, verified.detail);
+        manager.transition(&events, spec, verified.status, verified.detail);
     } else {
         let cancelled = manager
             .active(spec)
@@ -720,7 +713,7 @@ fn provision_api_key(
         if cancelled {
             let current = probe_profile(spec);
             manager.transition(
-                &app,
+                &events,
                 spec,
                 current.status,
                 Some(ProfileDetail {
@@ -732,7 +725,7 @@ fn provision_api_key(
             );
         } else {
             manager.transition(
-                &app,
+                &events,
                 spec,
                 ProfileStatus::Failed,
                 Some(detail("The provider could not accept this API key.")),
@@ -810,7 +803,7 @@ fn run_secret_command(
 
 #[allow(clippy::too_many_arguments)]
 fn monitor_subscription(
-    app: AppHandle,
+    events: Events,
     manager: ProfileManager,
     spec: &ProfileSpec,
     generation: u64,
@@ -832,7 +825,7 @@ fn monitor_subscription(
     let exit_status = loop {
         while let Ok(bytes) = receiver.try_recv() {
             parser.ingest(&bytes);
-            publish_parser_progress(&app, &manager, spec, &mut parser);
+            publish_parser_progress(&events, &manager, spec, &mut parser);
         }
         if cancelled.load(Ordering::Acquire) {
             let mut process = child.lock().expect("login process poisoned");
@@ -848,13 +841,13 @@ fn monitor_subscription(
     };
     while let Ok(bytes) = receiver.try_recv() {
         parser.ingest(&bytes);
-        publish_parser_progress(&app, &manager, spec, &mut parser);
+        publish_parser_progress(&events, &manager, spec, &mut parser);
     }
 
     if cancelled.load(Ordering::Acquire) {
         let current = probe_profile(spec);
         manager.transition(
-            &app,
+            &events,
             spec,
             current.status,
             Some(ProfileDetail {
@@ -865,29 +858,29 @@ fn monitor_subscription(
             }),
         );
     } else {
-        finish_subscription(&app, &manager, spec, exit_status);
+        finish_subscription(&events, &manager, spec, exit_status);
     }
     manager.finish(spec, generation);
 }
 
 fn finish_subscription(
-    app: &AppHandle,
+    events: &Events,
     manager: &ProfileManager,
     spec: &ProfileSpec,
     exit_status: Option<ExitStatus>,
 ) {
     if exit_status.is_some_and(|status| status.success()) {
         manager.transition(
-            app,
+            events,
             spec,
             ProfileStatus::Verifying,
             Some(detail("Verifying the provider login.")),
         );
         let verified = probe_profile(spec);
-        manager.transition(app, spec, verified.status, verified.detail);
+        manager.transition(events, spec, verified.status, verified.detail);
     } else {
         manager.transition(
-            app,
+            events,
             spec,
             ProfileStatus::Failed,
             Some(detail("Provider login did not complete.")),
@@ -915,7 +908,7 @@ fn spawn_reader(mut reader: impl Read + Send + 'static, sender: mpsc::Sender<Zer
 }
 
 fn publish_parser_progress(
-    app: &AppHandle,
+    events: &Events,
     manager: &ProfileManager,
     spec: &ProfileSpec,
     parser: &mut LoginOutputParser,
@@ -923,7 +916,7 @@ fn publish_parser_progress(
     if parser.url_changed {
         parser.url_changed = false;
         manager.transition(
-            app,
+            events,
             spec,
             ProfileStatus::WaitingForBrowser,
             Some(ProfileDetail {
@@ -937,7 +930,7 @@ fn publish_parser_progress(
         parser.code_changed = false;
         parser.waiting_for_paste_changed = false;
         manager.transition(
-            app,
+            events,
             spec,
             ProfileStatus::WaitingForCode,
             Some(ProfileDetail {

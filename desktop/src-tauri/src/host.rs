@@ -10,7 +10,7 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use commitarium_host::events::Frames;
+use commitarium_host::events::{Events, Frames, Sink};
 use commitarium_host::server::{Launch, Ready};
 use serde::Serialize;
 use tauri::ipc::CapabilityBuilder;
@@ -86,6 +86,20 @@ pub(crate) fn launch(app: &AppHandle) {
     if let Err(error) = app.state::<Host>().connection(app) {
         eprintln!("[host] {error}");
     }
+}
+
+/// Delivers updates as Tauri events, for host work still running in this
+/// process.
+struct TauriEvents(AppHandle);
+
+impl Sink for TauriEvents {
+    fn send(&self, name: &'static str, data: String) {
+        let _ = self.0.emit_str(name, data);
+    }
+}
+
+pub(crate) fn events(app: &AppHandle) -> Events {
+    Events::new(TauriEvents(app.clone()))
 }
 
 /// Repeats the host's updates as Tauri events, so pages and app windows keep

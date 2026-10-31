@@ -26,10 +26,9 @@ mod tests {
     #[test]
     fn every_program_starts_through_command() {
         let mut found = Vec::new();
-        sources(
-            &Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
-            &mut found,
-        );
+        let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+        sources(&manifest.join("src"), &mut found);
+        sources(&manifest.join("host/src"), &mut found);
         let offenders: Vec<_> = found
             .iter()
             .filter(|(path, text)| !path.ends_with("process.rs") && text.contains("Command::new("))
