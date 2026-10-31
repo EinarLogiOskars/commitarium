@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, State};
 
-use crate::{cli_updates, docker, environment};
+use commitarium_host::{cli_updates, docker, environment};
 
 const SERVICE: &str = "coordinator";
 /// What the coordinator image is built from, as docker/coordinator.Dockerfile

@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_updater::{Update, UpdaterExt};
 
-use crate::profiles;
+use commitarium_host::profiles;
 
 pub const UPDATE_PROGRESS_EVENT: &str = "desktop-update-progress";
 

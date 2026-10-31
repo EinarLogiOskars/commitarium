@@ -480,7 +480,7 @@ pub fn get_project_source(app: AppHandle, project_id: String) -> Result<Option<S
 #[tauri::command]
 pub async fn delete_project(
     app: AppHandle,
-    previews: State<'_, crate::preview::PreviewManager>,
+    previews: State<'_, commitarium_host::preview::PreviewManager>,
     project_id: String,
     idempotency_key: String,
     force: Option<bool>,
@@ -522,7 +522,12 @@ pub async fn delete_project(
         ));
     }
     let result = serde_json::from_str(&body).map_err(|e| format!("parse project deletion: {e}"))?;
-    crate::preview::delete_project_data(&app, previews.inner().clone(), project_id.trim()).await?;
+    commitarium_host::preview::delete_project_data(
+        &crate::host::events(&app),
+        previews.inner().clone(),
+        project_id.trim(),
+    )
+    .await?;
     remove_source(&app, project_id.trim())?;
     crate::handoff::project::remove_project_handoff_state(&app, project_id.trim())?;
     crate::git_providers::remove_project_remote_state(&app, project_id.trim())?;

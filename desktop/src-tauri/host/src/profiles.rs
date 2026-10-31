@@ -1,0 +1,1465 @@
+//! Agent login (provider authentication) owned by the trusted desktop backend.
+//!
+//! Provider credentials never cross into the coordinator. Each agent (ADR-016)
+//! has one login, run inside the agent's worker service whose private
+//! provider-state volume will later be used for both its lead and reviewer
+//! work. Only deliberately parsed progress facts (a trusted browser URL, a
+//! one-time device code, or a generic status) are emitted to the frontend; raw
+//! provider CLI output is never forwarded.
+
+use serde::Serialize;
+use std::collections::HashMap;
+use std::io::{Read, Write};
+use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{mpsc, Arc, Mutex};
+use std::thread;
+use std::time::Duration;
+use zeroize::Zeroizing;
+
+use crate::agents::{self, Provider};
+use crate::docker;
+use crate::events::Events;
+
+const PROGRESS_EVENT: &str = "login_progress";
+const OUTPUT_LIMIT: usize = 64 * 1024;
+const POLL_INTERVAL: Duration = Duration::from_millis(50);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProfileStatus {
+    NotConfigured,
+    Starting,
+    WaitingForBrowser,
+    WaitingForCode,
+    WaitingForApiKey,
+    Verifying,
+    Connected,
+    Expired,
+    Failed,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfileDetail {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    message: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    browser_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    device_code: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Profile {
+    id: String,
+    name: String,
+    provider: Provider,
+    status: ProfileStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    detail: Option<ProfileDetail>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LoginProgress {
+    profile_id: String,
+    status: ProfileStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    detail: Option<ProfileDetail>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum LoginMethod {
+    Subscription,
+    ApiKey,
+}
+
+impl LoginMethod {
+    fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "subscription" => Ok(Self::Subscription),
+            "api_key" => Ok(Self::ApiKey),
+            _ => Err("login method must be subscription or api_key".to_string()),
+        }
+    }
+}
+
+/// One agent's login: its worker service and fixed login helper container.
+#[derive(Clone, Debug)]
+struct ProfileSpec {
+    id: String,
+    name: String,
+    provider: Provider,
+    service: String,
+    login_container: String,
+}
+
+impl ProfileSpec {
+    fn for_agent(agent: &agents::Agent) -> Self {
+        Self {
+            id: agent.id.clone(),
+            name: agent.name.clone(),
+            provider: agent.provider,
+            service: agents::worker_service(&agent.id),
+            login_container: agents::login_container(&agent.id),
+        }
+    }
+
+    fn executable(&self) -> &'static str {
+        self.provider.executable()
+    }
+}
+
+/// The small part of an agent login that the stack launcher needs.
+///
+/// Authentication remains owned by this module. The launcher receives only a
+/// yes/no decision plus the agent's Compose service, never provider
+/// credentials or provider command output.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct WorkerConnection {
+    pub(crate) service: String,
+    pub(crate) connected: bool,
+}
+
+#[derive(Clone)]
+struct ActiveLogin {
+    spec: ProfileSpec,
+    generation: u64,
+    method: LoginMethod,
+    submitted: bool,
+    child: Option<Arc<Mutex<Child>>>,
+    stdin: Option<Arc<Mutex<Option<ChildStdin>>>>,
+    cancelled: Arc<AtomicBool>,
+}
+
+struct ProfileState {
+    statuses: HashMap<String, (ProfileStatus, Option<ProfileDetail>)>,
+    active: HashMap<String, ActiveLogin>,
+}
+
+struct ProfileManagerInner {
+    state: Mutex<ProfileState>,
+    next_generation: AtomicU64,
+}
+
+/// Shared in-memory login-process registry. Credentials themselves are never
+/// stored here; only process handles and non-secret progress state are kept.
+#[derive(Clone)]
+pub struct ProfileManager {
+    inner: Arc<ProfileManagerInner>,
+}
+
+impl ProfileManager {
+    pub fn new() -> Self {
+        Self {
+            inner: Arc::new(ProfileManagerInner {
+                state: Mutex::new(ProfileState {
+                    statuses: HashMap::new(),
+                    active: HashMap::new(),
+                }),
+                next_generation: AtomicU64::new(1),
+            }),
+        }
+    }
+
+    fn snapshot(&self, spec: &ProfileSpec) -> Profile {
+        let state = self.inner.state.lock().expect("profile state poisoned");
+        let (status, detail) = state
+            .statuses
+            .get(&spec.id)
+            .cloned()
+            .unwrap_or((ProfileStatus::NotConfigured, None));
+        profile(spec, status, detail)
+    }
+
+    fn is_active(&self, profile_id: &str) -> bool {
+        self.inner
+            .state
+            .lock()
+            .expect("profile state poisoned")
+            .active
+            .contains_key(profile_id)
+    }
+
+    fn reserve(
+        &self,
+        spec: &ProfileSpec,
+        method: LoginMethod,
+        status: ProfileStatus,
+    ) -> Result<u64, String> {
+        let mut state = self.inner.state.lock().expect("profile state poisoned");
+        if state.active.contains_key(&spec.id) {
+            return Err("a login is already in progress for this agent".to_string());
+        }
+        let generation = self.inner.next_generation.fetch_add(1, Ordering::Relaxed);
+        state.active.insert(
+            spec.id.clone(),
+            ActiveLogin {
+                spec: spec.clone(),
+                generation,
+                method,
+                submitted: false,
+                child: None,
+                stdin: None,
+                cancelled: Arc::new(AtomicBool::new(false)),
+            },
+        );
+        state.statuses.insert(spec.id.clone(), (status, None));
+        Ok(generation)
+    }
+
+    fn attach_process(
+        &self,
+        spec: &ProfileSpec,
+        generation: u64,
+        child: Arc<Mutex<Child>>,
+        stdin: Arc<Mutex<Option<ChildStdin>>>,
+    ) -> Result<Arc<AtomicBool>, String> {
+        let mut state = self.inner.state.lock().expect("profile state poisoned");
+        let active = state
+            .active
+            .get_mut(&spec.id)
+            .filter(|active| active.generation == generation)
+            .ok_or_else(|| "the login was cancelled before it started".to_string())?;
+        active.child = Some(child);
+        active.stdin = Some(stdin);
+        Ok(active.cancelled.clone())
+    }
+
+    fn mark_submitted(&self, spec: &ProfileSpec, generation: u64) -> Result<(), String> {
+        let mut state = self.inner.state.lock().expect("profile state poisoned");
+        let active = state
+            .active
+            .get_mut(&spec.id)
+            .filter(|active| active.generation == generation)
+            .ok_or_else(|| "the login is no longer active".to_string())?;
+        active.submitted = true;
+        Ok(())
+    }
+
+    fn active(&self, spec: &ProfileSpec) -> Option<ActiveLogin> {
+        self.inner
+            .state
+            .lock()
+            .expect("profile state poisoned")
+            .active
+            .get(&spec.id)
+            .cloned()
+    }
+
+    fn finish(&self, spec: &ProfileSpec, generation: u64) {
+        let mut state = self.inner.state.lock().expect("profile state poisoned");
+        if state
+            .active
+            .get(&spec.id)
+            .is_some_and(|active| active.generation == generation)
+        {
+            state.active.remove(&spec.id);
+        }
+    }
+
+    fn transition(
+        &self,
+        events: &Events,
+        spec: &ProfileSpec,
+        status: ProfileStatus,
+        detail: Option<ProfileDetail>,
+    ) {
+        self.inner
+            .state
+            .lock()
+            .expect("profile state poisoned")
+            .statuses
+            .insert(spec.id.clone(), (status, detail.clone()));
+        events.publish(
+            PROGRESS_EVENT,
+            &LoginProgress {
+                profile_id: spec.id.clone(),
+                status,
+                detail,
+            },
+        );
+    }
+
+    /// Stop only the fixed, Commitarium-owned authentication processes. This
+    /// runs when the desktop application exits so an abandoned login cannot
+    /// keep a private profile volume mounted behind the next app launch.
+    pub fn shutdown(&self) {
+        let active: Vec<_> = self
+            .inner
+            .state
+            .lock()
+            .expect("profile state poisoned")
+            .active
+            .values()
+            .cloned()
+            .collect();
+        for login in active {
+            login.cancelled.store(true, Ordering::Release);
+            if let Some(child) = login.child {
+                let _ = child.lock().expect("login process poisoned").kill();
+            }
+            remove_login_container(&login.spec);
+        }
+    }
+}
+
+impl Default for ProfileManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+fn profile(spec: &ProfileSpec, status: ProfileStatus, detail: Option<ProfileDetail>) -> Profile {
+    Profile {
+        id: spec.id.clone(),
+        name: spec.name.clone(),
+        provider: spec.provider,
+        status,
+        detail,
+    }
+}
+
+/// Provision the agent's worker before a login runs in it.
+fn provision_worker(spec: &ProfileSpec) -> Result<(), String> {
+    let agents = agents::current()?;
+    if !agents.iter().any(|agent| agent.id == spec.id) {
+        return Err("unknown agent".to_string());
+    }
+    docker::provision_agents(&agents, false).map(|_| ())
+}
+
+/// The login of an agent the coordinator knows. The ID is only ever matched
+/// against the agent list, never turned into a Compose name directly.
+fn profile_spec(agent_id: &str) -> Result<ProfileSpec, String> {
+    agents::current()?
+        .iter()
+        .find(|agent| agent.id == agent_id)
+        .map(ProfileSpec::for_agent)
+        .ok_or_else(|| "unknown agent".to_string())
+}
+
+pub async fn list_profiles(manager: &ProfileManager) -> Result<Vec<Profile>, String> {
+    let manager = manager.clone();
+    crate::runtime::spawn_blocking(move || {
+        let agents = agents::current()?;
+        // A new agent's worker must exist before its login can be inspected.
+        // If that is not possible yet (the stack is stopped), its login is
+        // reported as not inspectable rather than hiding the other agents.
+        let _ = docker::provision_agents(&agents, false);
+        let specs = agents.iter().map(ProfileSpec::for_agent).collect();
+        Ok(inspect_profiles(&manager, specs))
+    })
+    .await
+    .map_err(|_| "could not inspect agent logins".to_string())?
+}
+
+/// Verify each agent's login and return only the routing facts needed by
+/// stack startup. Active login sessions are deliberately not re-probed: their
+/// private volume is already owned by the login helper, and their in-memory
+/// non-connected state keeps the long-lived worker stopped.
+pub(crate) fn worker_connections(
+    manager: &ProfileManager,
+    agents: &[agents::Agent],
+) -> Vec<WorkerConnection> {
+    let specs: Vec<_> = agents.iter().map(ProfileSpec::for_agent).collect();
+    inspect_profiles(manager, specs.clone())
+        .into_iter()
+        .zip(specs)
+        .map(|(profile, spec)| WorkerConnection {
+            service: spec.service,
+            connected: profile.status == ProfileStatus::Connected,
+        })
+        .collect()
+}
+
+fn inspect_profiles(manager: &ProfileManager, specs: Vec<ProfileSpec>) -> Vec<Profile> {
+    let checks: Vec<_> = specs
+        .iter()
+        .cloned()
+        .map(|spec| {
+            let manager = manager.clone();
+            thread::spawn(move || {
+                if manager.is_active(&spec.id) {
+                    manager.snapshot(&spec)
+                } else {
+                    probe_profile(&spec)
+                }
+            })
+        })
+        .collect();
+    checks
+        .into_iter()
+        .zip(specs)
+        .map(|(check, spec)| {
+            check.join().unwrap_or_else(|_| {
+                profile(
+                    &spec,
+                    ProfileStatus::Failed,
+                    Some(detail("The agent login could not be inspected.")),
+                )
+            })
+        })
+        .collect()
+}
+
+pub fn begin_login(
+    events: Events,
+    manager: &ProfileManager,
+    profile_id: String,
+    method: String,
+) -> Result<(), String> {
+    let spec = profile_spec(&profile_id)?;
+    let method = LoginMethod::parse(&method)?;
+    provision_worker(&spec)?;
+    match method {
+        LoginMethod::ApiKey => {
+            let manager = manager.clone();
+            manager.reserve(&spec, method, ProfileStatus::WaitingForApiKey)?;
+            manager.transition(
+                &events,
+                &spec,
+                ProfileStatus::WaitingForApiKey,
+                Some(detail("Enter the API key to connect this profile.")),
+            );
+            Ok(())
+        }
+        LoginMethod::Subscription => start_subscription(events, manager.clone(), &spec),
+    }
+}
+
+pub fn submit_login_code(
+    manager: &ProfileManager,
+    profile_id: String,
+    code: String,
+) -> Result<(), String> {
+    let spec = profile_spec(&profile_id)?;
+    if spec.provider != Provider::Claude {
+        return Err("Codex device codes are entered in the browser".to_string());
+    }
+    let code = Zeroizing::new(code);
+    if code.trim().is_empty() || code.len() > 4096 {
+        return Err("login code must be between 1 and 4096 characters".to_string());
+    }
+    let active = manager
+        .active(&spec)
+        .filter(|active| active.method == LoginMethod::Subscription)
+        .ok_or_else(|| "this profile is not waiting for a login code".to_string())?;
+    let stdin = active
+        .stdin
+        .ok_or_else(|| "the provider login is not ready for a code yet".to_string())?;
+    let mut slot = stdin.lock().expect("login stdin poisoned");
+    let mut input = slot
+        .take()
+        .ok_or_else(|| "the login code was already submitted".to_string())?;
+    input
+        .write_all(code.trim().as_bytes())
+        .and_then(|_| input.write_all(b"\n"))
+        .map_err(|_| "could not send the login code to the provider".to_string())?;
+    input
+        .flush()
+        .map_err(|_| "could not send the login code to the provider".to_string())?;
+    Ok(())
+}
+
+pub fn submit_api_key(
+    events: Events,
+    manager: &ProfileManager,
+    profile_id: String,
+    key: String,
+) -> Result<(), String> {
+    let spec = profile_spec(&profile_id)?;
+    let key = Zeroizing::new(key.into_bytes());
+    if key.is_empty() || key.len() > 16 * 1024 || key.iter().any(u8::is_ascii_whitespace) {
+        return Err("API key must be one non-empty value without whitespace".to_string());
+    }
+    let manager = manager.clone();
+    let active = manager
+        .active(&spec)
+        .filter(|active| active.method == LoginMethod::ApiKey)
+        .ok_or_else(|| "begin API-key login for this agent first".to_string())?;
+    manager.mark_submitted(&spec, active.generation)?;
+    let generation = active.generation;
+    thread::spawn(move || provision_api_key(events, manager, &spec, generation, key));
+    Ok(())
+}
+
+pub fn cancel_login(
+    events: Events,
+    manager: &ProfileManager,
+    profile_id: String,
+) -> Result<(), String> {
+    let spec = profile_spec(&profile_id)?;
+    let active = manager
+        .active(&spec)
+        .ok_or_else(|| "no login is in progress for this profile".to_string())?;
+    active.cancelled.store(true, Ordering::Release);
+    if let Some(child) = active.child {
+        let _ = child.lock().expect("login process poisoned").kill();
+        remove_login_container(&spec);
+        manager.transition(
+            &events,
+            &spec,
+            ProfileStatus::Verifying,
+            Some(detail("Cancelling login and checking the profile.")),
+        );
+    } else if !active.submitted {
+        manager.transition(
+            &events,
+            &spec,
+            ProfileStatus::Verifying,
+            Some(detail("Cancelling login and checking the profile.")),
+        );
+        let manager = manager.clone();
+        thread::spawn(move || {
+            let current = probe_profile(&spec);
+            manager.transition(
+                &events,
+                &spec,
+                current.status,
+                Some(ProfileDetail {
+                    message: Some(
+                        "Login cancelled; any previous profile login was preserved.".to_string(),
+                    ),
+                    ..current.detail.unwrap_or_default()
+                }),
+            );
+            manager.finish(&spec, active.generation);
+        });
+    } else {
+        manager.transition(
+            &events,
+            &spec,
+            ProfileStatus::Verifying,
+            Some(detail("Cancelling login and checking the profile.")),
+        );
+    }
+    Ok(())
+}
+
+pub async fn verify_profile(
+    manager: &ProfileManager,
+    profile_id: String,
+) -> Result<Profile, String> {
+    let spec = profile_spec(&profile_id)?;
+    if manager.is_active(&spec.id) {
+        return Ok(manager.snapshot(&spec));
+    }
+    crate::runtime::spawn_blocking(move || probe_profile(&spec))
+        .await
+        .map_err(|_| "could not verify the provider profile".to_string())
+}
+
+pub async fn disconnect_profile(
+    manager: &ProfileManager,
+    profile_id: String,
+) -> Result<Profile, String> {
+    let spec = profile_spec(&profile_id)?;
+    if manager.is_active(&spec.id) {
+        return Err("cancel the login before disconnecting this profile".to_string());
+    }
+    // While the worker runs, the logout runs inside it. A work order mid-turn
+    // then pauses until the agent logs in again (ADR-017); nothing is lost.
+    crate::runtime::spawn_blocking(move || {
+        if spec.provider == Provider::Claude {
+            run_profile_command(
+                &spec,
+                "/usr/local/bin/commitarium-claude-api-key",
+                &["clear"],
+                Stdio::null(),
+                Stdio::null(),
+                Stdio::null(),
+            )?;
+        }
+        let arguments: &[&str] = match spec.provider {
+            Provider::Codex => &["logout"],
+            Provider::Claude => &["auth", "logout"],
+        };
+        // A provider may report "already logged out" as non-zero. The real
+        // status probe below is authoritative, so no CLI text is surfaced.
+        let _ = run_profile_command(
+            &spec,
+            spec.executable(),
+            arguments,
+            Stdio::null(),
+            Stdio::null(),
+            Stdio::null(),
+        );
+        let result = probe_profile(&spec);
+        match result.status {
+            ProfileStatus::NotConfigured => Ok(profile(
+                &spec,
+                ProfileStatus::NotConfigured,
+                Some(detail("Profile disconnected.")),
+            )),
+            ProfileStatus::Connected => Err("the provider profile is still connected".to_string()),
+            ProfileStatus::Expired => {
+                Err("stored provider credentials could not be removed".to_string())
+            }
+            _ => Err("the disconnected provider profile could not be verified".to_string()),
+        }
+    })
+    .await
+    .map_err(|_| "could not disconnect the provider profile".to_string())?
+}
+
+fn start_subscription(
+    events: Events,
+    manager: ProfileManager,
+    spec: &ProfileSpec,
+) -> Result<(), String> {
+    let generation = manager.reserve(spec, LoginMethod::Subscription, ProfileStatus::Starting)?;
+    manager.transition(
+        &events,
+        spec,
+        ProfileStatus::Starting,
+        Some(detail("Starting provider login.")),
+    );
+
+    let arguments: &[&str] = match spec.provider {
+        Provider::Codex => &[
+            "-c",
+            "cli_auth_credentials_store=\"file\"",
+            "login",
+            "--device-auth",
+        ],
+        Provider::Claude => &["auth", "login"],
+    };
+    let mut child = match spawn_profile_command(spec, spec.executable(), arguments) {
+        Ok(child) => child,
+        Err(error) => {
+            manager.finish(spec, generation);
+            manager.transition(&events, spec, ProfileStatus::Failed, Some(detail(&error)));
+            return Err(error);
+        }
+    };
+    let stdin = Arc::new(Mutex::new(child.stdin.take()));
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+    let child = Arc::new(Mutex::new(child));
+    let cancelled = manager.attach_process(spec, generation, child.clone(), stdin)?;
+
+    let spec = spec.clone();
+    thread::spawn(move || {
+        monitor_subscription(
+            events, manager, &spec, generation, child, stdout, stderr, cancelled,
+        )
+    });
+    Ok(())
+}
+
+fn provision_api_key(
+    events: Events,
+    manager: ProfileManager,
+    spec: &ProfileSpec,
+    generation: u64,
+    key: Zeroizing<Vec<u8>>,
+) {
+    if manager
+        .active(spec)
+        .is_some_and(|active| active.cancelled.load(Ordering::Acquire))
+    {
+        let current = probe_profile(spec);
+        manager.transition(
+            &events,
+            spec,
+            current.status,
+            Some(ProfileDetail {
+                message: Some(
+                    "Login cancelled; the current profile state was checked.".to_string(),
+                ),
+                ..current.detail.unwrap_or_default()
+            }),
+        );
+        manager.finish(spec, generation);
+        return;
+    }
+    manager.transition(
+        &events,
+        spec,
+        ProfileStatus::Starting,
+        Some(detail(
+            "Saving the API key in this profile's private volume.",
+        )),
+    );
+    let (executable, arguments): (&str, &[&str]) = match spec.provider {
+        Provider::Codex => (
+            "codex",
+            &[
+                "-c",
+                "cli_auth_credentials_store=\"file\"",
+                "login",
+                "--with-api-key",
+            ],
+        ),
+        Provider::Claude => ("/usr/local/bin/commitarium-claude-api-key", &["store"]),
+    };
+    let result = run_secret_command(&manager, spec, generation, executable, arguments, &key);
+    if result.is_ok() {
+        manager.transition(
+            &events,
+            spec,
+            ProfileStatus::Verifying,
+            Some(detail("Verifying the provider login.")),
+        );
+        let verified = probe_profile(spec);
+        manager.transition(&events, spec, verified.status, verified.detail);
+    } else {
+        let cancelled = manager
+            .active(spec)
+            .is_some_and(|active| active.cancelled.load(Ordering::Acquire));
+        if cancelled {
+            let current = probe_profile(spec);
+            manager.transition(
+                &events,
+                spec,
+                current.status,
+                Some(ProfileDetail {
+                    message: Some(
+                        "Login cancelled; the current profile state was checked.".to_string(),
+                    ),
+                    ..current.detail.unwrap_or_default()
+                }),
+            );
+        } else {
+            manager.transition(
+                &events,
+                spec,
+                ProfileStatus::Failed,
+                Some(detail("The provider could not accept this API key.")),
+            );
+        }
+    }
+    manager.finish(spec, generation);
+}
+
+fn run_secret_command(
+    manager: &ProfileManager,
+    spec: &ProfileSpec,
+    generation: u64,
+    executable: &str,
+    arguments: &[&str],
+    secret: &[u8],
+) -> Result<(), String> {
+    let mut child = spawn_profile_command(spec, executable, arguments)?;
+    let mut input = child
+        .stdin
+        .take()
+        .ok_or_else(|| "provider login input is unavailable".to_string())?;
+    let child = Arc::new(Mutex::new(child));
+    let stdin = Arc::new(Mutex::new(None));
+    let cancelled = match manager.attach_process(spec, generation, child.clone(), stdin) {
+        Ok(cancelled) => cancelled,
+        Err(error) => {
+            let mut process = child.lock().expect("login process poisoned");
+            let _ = process.kill();
+            let _ = process.wait();
+            return Err(error);
+        }
+    };
+    if cancelled.load(Ordering::Acquire) {
+        let mut process = child.lock().expect("login process poisoned");
+        let _ = process.kill();
+        let _ = process.wait();
+        return Err("provider login cancelled".to_string());
+    }
+    if input.write_all(secret).is_err() {
+        let _ = child.lock().expect("login process poisoned").kill();
+        return Err("could not send the API key to the provider".to_string());
+    }
+    if spec.provider == Provider::Codex && input.write_all(b"\n").is_err() {
+        let _ = child.lock().expect("login process poisoned").kill();
+        return Err("could not send the API key to the provider".to_string());
+    }
+    if input.flush().is_err() {
+        let _ = child.lock().expect("login process poisoned").kill();
+        return Err("could not send the API key to the provider".to_string());
+    }
+    drop(input);
+    loop {
+        if cancelled.load(Ordering::Acquire) {
+            let mut process = child.lock().expect("login process poisoned");
+            let _ = process.kill();
+            let _ = process.wait();
+            return Err("provider login cancelled".to_string());
+        }
+        if let Some(status) = child
+            .lock()
+            .expect("login process poisoned")
+            .try_wait()
+            .map_err(|_| "could not wait for provider login".to_string())?
+        {
+            return if status.success() {
+                Ok(())
+            } else {
+                Err("the provider rejected the login".to_string())
+            };
+        }
+        thread::sleep(POLL_INTERVAL);
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn monitor_subscription(
+    events: Events,
+    manager: ProfileManager,
+    spec: &ProfileSpec,
+    generation: u64,
+    child: Arc<Mutex<Child>>,
+    stdout: Option<std::process::ChildStdout>,
+    stderr: Option<std::process::ChildStderr>,
+    cancelled: Arc<AtomicBool>,
+) {
+    let (sender, receiver) = mpsc::channel();
+    if let Some(stdout) = stdout {
+        spawn_reader(stdout, sender.clone());
+    }
+    if let Some(stderr) = stderr {
+        spawn_reader(stderr, sender.clone());
+    }
+    drop(sender);
+
+    let mut parser = LoginOutputParser::new(spec.provider);
+    let exit_status = loop {
+        while let Ok(bytes) = receiver.try_recv() {
+            parser.ingest(&bytes);
+            publish_parser_progress(&events, &manager, spec, &mut parser);
+        }
+        if cancelled.load(Ordering::Acquire) {
+            let mut process = child.lock().expect("login process poisoned");
+            let _ = process.kill();
+            let _ = process.wait();
+            break None;
+        }
+        match child.lock().expect("login process poisoned").try_wait() {
+            Ok(Some(status)) => break Some(status),
+            Ok(None) => thread::sleep(POLL_INTERVAL),
+            Err(_) => break None,
+        }
+    };
+    while let Ok(bytes) = receiver.try_recv() {
+        parser.ingest(&bytes);
+        publish_parser_progress(&events, &manager, spec, &mut parser);
+    }
+
+    if cancelled.load(Ordering::Acquire) {
+        let current = probe_profile(spec);
+        manager.transition(
+            &events,
+            spec,
+            current.status,
+            Some(ProfileDetail {
+                message: Some(
+                    "Login cancelled; the current profile state was checked.".to_string(),
+                ),
+                ..current.detail.unwrap_or_default()
+            }),
+        );
+    } else {
+        finish_subscription(&events, &manager, spec, exit_status);
+    }
+    manager.finish(spec, generation);
+}
+
+fn finish_subscription(
+    events: &Events,
+    manager: &ProfileManager,
+    spec: &ProfileSpec,
+    exit_status: Option<ExitStatus>,
+) {
+    if exit_status.is_some_and(|status| status.success()) {
+        manager.transition(
+            events,
+            spec,
+            ProfileStatus::Verifying,
+            Some(detail("Verifying the provider login.")),
+        );
+        let verified = probe_profile(spec);
+        manager.transition(events, spec, verified.status, verified.detail);
+    } else {
+        manager.transition(
+            events,
+            spec,
+            ProfileStatus::Failed,
+            Some(detail("Provider login did not complete.")),
+        );
+    }
+}
+
+fn spawn_reader(mut reader: impl Read + Send + 'static, sender: mpsc::Sender<Zeroizing<Vec<u8>>>) {
+    thread::spawn(move || {
+        let mut buffer = [0_u8; 2048];
+        loop {
+            match reader.read(&mut buffer) {
+                Ok(0) | Err(_) => return,
+                Ok(count) => {
+                    if sender
+                        .send(Zeroizing::new(buffer[..count].to_vec()))
+                        .is_err()
+                    {
+                        return;
+                    }
+                }
+            }
+        }
+    });
+}
+
+fn publish_parser_progress(
+    events: &Events,
+    manager: &ProfileManager,
+    spec: &ProfileSpec,
+    parser: &mut LoginOutputParser,
+) {
+    if parser.url_changed {
+        parser.url_changed = false;
+        manager.transition(
+            events,
+            spec,
+            ProfileStatus::WaitingForBrowser,
+            Some(ProfileDetail {
+                message: Some("Open the provider login page in your browser.".to_string()),
+                browser_url: parser.browser_url.clone(),
+                device_code: parser.device_code.clone(),
+            }),
+        );
+    }
+    if parser.code_changed || parser.waiting_for_paste_changed {
+        parser.code_changed = false;
+        parser.waiting_for_paste_changed = false;
+        manager.transition(
+            events,
+            spec,
+            ProfileStatus::WaitingForCode,
+            Some(ProfileDetail {
+                message: Some(match spec.provider {
+                    Provider::Codex => {
+                        "Enter this one-time code on the provider login page.".to_string()
+                    }
+                    Provider::Claude => {
+                        "Complete browser login, then paste the returned code here.".to_string()
+                    }
+                }),
+                browser_url: parser.browser_url.clone(),
+                device_code: parser.device_code.clone(),
+            }),
+        );
+    }
+}
+
+struct LoginOutputParser {
+    provider: Provider,
+    output: Zeroizing<String>,
+    browser_url: Option<String>,
+    device_code: Option<String>,
+    waiting_for_paste: bool,
+    url_changed: bool,
+    code_changed: bool,
+    waiting_for_paste_changed: bool,
+}
+
+impl LoginOutputParser {
+    fn new(provider: Provider) -> Self {
+        Self {
+            provider,
+            output: Zeroizing::new(String::new()),
+            browser_url: None,
+            device_code: None,
+            waiting_for_paste: false,
+            url_changed: false,
+            code_changed: false,
+            waiting_for_paste_changed: false,
+        }
+    }
+
+    fn ingest(&mut self, bytes: &[u8]) {
+        self.output.push_str(&String::from_utf8_lossy(bytes));
+        if self.output.len() > OUTPUT_LIMIT {
+            let mut keep_from = self.output.len() - OUTPUT_LIMIT;
+            while !self.output.is_char_boundary(keep_from) {
+                keep_from += 1;
+            }
+            self.output.drain(..keep_from);
+        }
+        if self.browser_url.is_none() {
+            if let Some(url) = extract_trusted_url(&self.output, self.provider) {
+                self.browser_url = Some(url);
+                self.url_changed = true;
+            }
+        }
+        if self.provider == Provider::Codex && self.device_code.is_none() {
+            if let Some(code) = extract_device_code(&self.output) {
+                self.device_code = Some(code);
+                self.code_changed = true;
+            }
+        }
+        if self.provider == Provider::Claude
+            && !self.waiting_for_paste
+            && self.output.to_ascii_lowercase().contains("paste code here")
+        {
+            self.waiting_for_paste = true;
+            self.waiting_for_paste_changed = true;
+        }
+    }
+}
+
+fn extract_trusted_url(output: &str, provider: Provider) -> Option<String> {
+    for (start, _) in output.match_indices("https://") {
+        let tail = &output[start..];
+        let end = tail
+            .char_indices()
+            .find_map(|(index, character)| {
+                (index > 0
+                    && (character.is_ascii_whitespace()
+                        || character.is_ascii_control()
+                        || matches!(character, '\x1b' | '"' | '\'' | '<' | '>')))
+                .then_some(index)
+            })
+            .unwrap_or(tail.len());
+        let candidate = &tail[..end];
+        let trusted = match provider {
+            Provider::Codex => candidate.starts_with("https://auth.openai.com/"),
+            Provider::Claude => {
+                candidate.starts_with("https://claude.com/")
+                    || candidate.starts_with("https://platform.claude.com/")
+            }
+        };
+        if trusted {
+            return Some(candidate.to_string());
+        }
+    }
+    None
+}
+
+fn extract_device_code(output: &str) -> Option<String> {
+    let output = Zeroizing::new(strip_terminal_control_sequences(output));
+    output
+        .split(|character: char| !(character.is_ascii_alphanumeric() || character == '-'))
+        .find(|token| {
+            let mut parts = token.split('-');
+            let left = parts.next().unwrap_or_default();
+            let right = parts.next().unwrap_or_default();
+            parts.next().is_none()
+                && left.len() == 4
+                && right.len() == 5
+                && token
+                    .bytes()
+                    .filter(|byte| *byte != b'-')
+                    .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit())
+        })
+        .map(str::to_string)
+}
+
+/// Codex decorates its device-login prompt with ANSI colors even when its
+/// output is piped. Strip terminal control sequences before tokenizing so the
+/// trailing `m` from an SGR sequence (for example `\x1b[94m`) cannot become
+/// part of the device code. OSC sequences are removed as well because some
+/// provider CLIs render links as terminal hyperlinks.
+fn strip_terminal_control_sequences(output: &str) -> String {
+    let mut cleaned = String::with_capacity(output.len());
+    let mut characters = output.chars().peekable();
+
+    while let Some(character) = characters.next() {
+        if character != '\x1b' {
+            cleaned.push(character);
+            continue;
+        }
+
+        match characters.peek().copied() {
+            Some('[') => {
+                characters.next();
+                for control in characters.by_ref() {
+                    if ('@'..='~').contains(&control) {
+                        break;
+                    }
+                }
+            }
+            Some(']') => {
+                characters.next();
+                let mut saw_escape = false;
+                for control in characters.by_ref() {
+                    if control == '\x07' || (saw_escape && control == '\\') {
+                        break;
+                    }
+                    saw_escape = control == '\x1b';
+                }
+            }
+            Some(_) => {
+                characters.next();
+            }
+            None => {}
+        }
+    }
+
+    cleaned
+}
+
+fn detail(message: &str) -> ProfileDetail {
+    ProfileDetail {
+        message: Some(message.to_string()),
+        browser_url: None,
+        device_code: None,
+    }
+}
+
+fn probe_profile(spec: &ProfileSpec) -> Profile {
+    let arguments: &[&str] = match spec.provider {
+        Provider::Codex => &[
+            "-c",
+            "cli_auth_credentials_store=\"file\"",
+            "login",
+            "status",
+        ],
+        Provider::Claude => &["auth", "status"],
+    };
+    match profile_command_status(
+        spec,
+        spec.executable(),
+        arguments,
+        Stdio::null(),
+        Stdio::null(),
+        Stdio::null(),
+    ) {
+        Ok(true) => profile(
+            spec,
+            ProfileStatus::Connected,
+            Some(detail("Provider login verified.")),
+        ),
+        Ok(false) => match profile_has_credentials(spec) {
+            Ok(true) => profile(
+                spec,
+                ProfileStatus::Expired,
+                Some(detail("Stored provider login is no longer valid.")),
+            ),
+            Ok(false) => profile(spec, ProfileStatus::NotConfigured, None),
+            Err(_) => profile(
+                spec,
+                ProfileStatus::Failed,
+                Some(detail("The provider profile could not be inspected.")),
+            ),
+        },
+        Err(_) => profile(
+            spec,
+            ProfileStatus::Failed,
+            Some(detail("The provider profile could not be inspected.")),
+        ),
+    }
+}
+
+fn profile_has_credentials(spec: &ProfileSpec) -> Result<bool, String> {
+    let script = match spec.provider {
+        Provider::Codex => "test -s /var/lib/commitarium-provider/auth.json",
+        Provider::Claude => {
+            "test -s /var/lib/commitarium-provider/.credentials.json || test -s /var/lib/commitarium-provider/commitarium-api-key"
+        }
+    };
+    profile_command_status(
+        spec,
+        "/bin/sh",
+        &["-c", script],
+        Stdio::null(),
+        Stdio::null(),
+        Stdio::null(),
+    )
+}
+
+fn service_is_running(spec: &ProfileSpec) -> Result<bool, String> {
+    let mut command = docker::docker_command();
+    command.arg("compose");
+    docker::append_compose_files(&mut command)?;
+    let output = command
+        .args([
+            "-p",
+            docker::PROJECT_NAME,
+            "ps",
+            "--status",
+            "running",
+            "--services",
+            &spec.service,
+        ])
+        .output()
+        .map_err(|_| "could not inspect the provider worker".to_string())?;
+    if !output.status.success() {
+        return Err("could not inspect the provider worker".to_string());
+    }
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .any(|line| line.trim() == spec.service))
+}
+
+fn compose_command(
+    spec: &ProfileSpec,
+    executable: &str,
+    running_service: bool,
+    login_container: Option<&str>,
+) -> Result<Command, String> {
+    // The provider CLI runs through the worker's choice of CLI, so a login
+    // verified here is one the agent's turns can use.
+    let provider_cli = executable == spec.executable();
+    let entrypoint = if provider_cli { "/bin/sh" } else { executable };
+    let mut command = docker::docker_command();
+    command.arg("compose");
+    docker::append_compose_files(&mut command)?;
+    command.args(["-p", docker::PROJECT_NAME]);
+    if running_service {
+        command.args(["exec", "-T", &spec.service, entrypoint]);
+    } else {
+        command.args(["run", "--rm", "--no-deps"]);
+        if docker::release_mode() {
+            command.args(["--pull", "missing"]);
+        }
+        if let Some(container) = login_container {
+            command.args(["--name", container]);
+        }
+        command.args(["--entrypoint", entrypoint, &spec.service]);
+    }
+    if provider_cli {
+        command.args(["-c", &agents::cli_script(spec.provider), executable]);
+    }
+    Ok(command)
+}
+
+fn spawn_profile_command(
+    spec: &ProfileSpec,
+    executable: &str,
+    arguments: &[&str],
+) -> Result<Child, String> {
+    // A process left by an unclean desktop exit has a fixed internal name.
+    // Starting a new user-requested login removes only that exact stale helper,
+    // never a worker or arbitrary container.
+    remove_login_container(spec);
+    // While the agent's worker runs, log in inside it, as `/login` does in a
+    // provider session: no second container mounts the provider volume, and
+    // the worker's next provider process uses the new login without a
+    // restart. Otherwise a fixed-name helper container runs the login.
+    let running = service_is_running(spec)?;
+    let mut command = compose_command(
+        spec,
+        executable,
+        running,
+        (!running).then_some(spec.login_container.as_str()),
+    )?;
+    command
+        .args(arguments)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|_| "could not start the provider login container".to_string())
+}
+
+fn run_profile_command(
+    spec: &ProfileSpec,
+    executable: &str,
+    arguments: &[&str],
+    stdin: Stdio,
+    stdout: Stdio,
+    stderr: Stdio,
+) -> Result<(), String> {
+    match profile_command_status(spec, executable, arguments, stdin, stdout, stderr)? {
+        true => Ok(()),
+        false => Err("provider profile command failed".to_string()),
+    }
+}
+
+fn profile_command_status(
+    spec: &ProfileSpec,
+    executable: &str,
+    arguments: &[&str],
+    stdin: Stdio,
+    stdout: Stdio,
+    stderr: Stdio,
+) -> Result<bool, String> {
+    let running_service = service_is_running(spec)?;
+    let status = compose_command(spec, executable, running_service, None)?
+        .args(arguments)
+        .stdin(stdin)
+        .stdout(stdout)
+        .stderr(stderr)
+        .status()
+        .map_err(|_| "could not run the provider profile command".to_string())?;
+    Ok(status.success())
+}
+
+/// Ends a login left behind: the fixed-name helper container, and a login
+/// process running inside the agent's worker. Only provider login commands
+/// are matched, never the worker's own provider turns.
+fn remove_login_container(spec: &ProfileSpec) {
+    let _ = docker::docker_command()
+        .args(["rm", "--force", &spec.login_container])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+    if service_is_running(spec).unwrap_or(false) {
+        if let Ok(mut command) = compose_command(spec, "/bin/sh", true, None) {
+            let _ = command
+                .args(["-c", END_LOGIN_PROCESSES])
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+        }
+    }
+}
+
+/// Stops provider login processes inside a worker without depending on
+/// procps, which the worker images do not include.
+const END_LOGIN_PROCESSES: &str = r#"for process in /proc/[0-9]*; do
+  [ "${process#/proc/}" = "$$" ] && continue
+  command=$(tr '\0' ' ' < "$process/cmdline" 2>/dev/null) || continue
+  case "$command" in
+    *" auth login"*|*" login --device-auth"*|*" login --with-api-key"*|*"commitarium-claude-api-key store"*)
+      kill "${process#/proc/}" 2>/dev/null ;;
+  esac
+done"#;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn spec(id: &str, provider: Provider) -> ProfileSpec {
+        ProfileSpec::for_agent(&agents::Agent::new(id, "Test agent", provider))
+    }
+
+    #[test]
+    fn each_agent_logs_in_once_in_its_own_worker_service() {
+        let claude = spec("claude-max", Provider::Claude);
+        assert_eq!(claude.service, "agent-claude-max-worker");
+        assert_eq!(claude.login_container, "commitarium-login-claude-max");
+        assert_eq!(claude.executable(), "claude");
+        assert_eq!(spec("codex", Provider::Codex).executable(), "codex");
+    }
+
+    #[test]
+    fn login_method_is_a_closed_contract() {
+        assert_eq!(
+            LoginMethod::parse("subscription").unwrap(),
+            LoginMethod::Subscription
+        );
+        assert_eq!(LoginMethod::parse("api_key").unwrap(), LoginMethod::ApiKey);
+        assert!(LoginMethod::parse("token").is_err());
+    }
+
+    #[test]
+    fn codex_output_exposes_only_the_trusted_url_and_device_code() {
+        let mut parser = LoginOutputParser::new(Provider::Codex);
+        parser.ingest(
+            b"Open https://evil.example/x then \x1b[94mhttps://auth.openai.com/codex/device\x1b[0m\nEnter this one-time code \x1b[90m(expires in 15 minutes)\x1b[0m\n \x1b[94m80HQ-J9E0B\x1b[0m\nsecret-token",
+        );
+        assert_eq!(
+            parser.browser_url.as_deref(),
+            Some("https://auth.openai.com/codex/device")
+        );
+        assert_eq!(parser.device_code.as_deref(), Some("80HQ-J9E0B"));
+        assert!(!parser.browser_url.unwrap().contains("secret-token"));
+    }
+
+    #[test]
+    fn claude_output_handles_terminal_hyperlinks_and_paste_prompt() {
+        let mut parser = LoginOutputParser::new(Provider::Claude);
+        parser.ingest(
+            b"\x1b]8;;https://claude.com/cai/oauth/authorize?code=true\x07Login\x1b]8;;\x07\nPaste code here if prompted >",
+        );
+        assert_eq!(
+            parser.browser_url.as_deref(),
+            Some("https://claude.com/cai/oauth/authorize?code=true")
+        );
+        assert!(parser.waiting_for_paste_changed);
+        parser.waiting_for_paste_changed = false;
+        parser.ingest(b"more output");
+        assert!(!parser.waiting_for_paste_changed);
+    }
+
+    #[test]
+    fn unrelated_codes_and_urls_are_not_exposed() {
+        assert_eq!(extract_device_code("short ABC-123"), None);
+        assert_eq!(
+            extract_trusted_url("https://example.com/callback", Provider::Claude),
+            None
+        );
+    }
+
+    #[test]
+    fn profile_manager_fences_duplicate_logins() {
+        let manager = ProfileManager::new();
+        let spec = spec("codex", Provider::Codex);
+        manager
+            .reserve(&spec, LoginMethod::ApiKey, ProfileStatus::WaitingForApiKey)
+            .unwrap();
+        assert!(manager
+            .reserve(&spec, LoginMethod::Subscription, ProfileStatus::Starting)
+            .is_err());
+    }
+
+    #[test]
+    fn profile_serialization_matches_the_frontend_contract() {
+        let value = serde_json::to_value(profile(
+            &spec("codex", Provider::Codex),
+            ProfileStatus::WaitingForBrowser,
+            Some(ProfileDetail {
+                message: Some("Open the page.".to_string()),
+                browser_url: Some("https://auth.openai.com/codex/device".to_string()),
+                device_code: Some("ABCD-12345".to_string()),
+            }),
+        ))
+        .unwrap();
+        assert_eq!(value["id"], "codex");
+        assert_eq!(value["name"], "Test agent");
+        assert_eq!(value["provider"], "codex");
+        assert!(value.get("role").is_none());
+        assert_eq!(value["status"], "waiting_for_browser");
+        assert_eq!(
+            value["detail"]["browserUrl"],
+            "https://auth.openai.com/codex/device"
+        );
+        assert_eq!(value["detail"]["deviceCode"], "ABCD-12345");
+    }
+
+    #[test]
+    fn compose_command_contains_only_fixed_non_secret_arguments() {
+        let root = tempfile::tempdir().unwrap();
+        let compose_file = root.path().join("compose.yml");
+        std::fs::write(&compose_file, "services: {}").unwrap();
+        std::env::set_var("COMMITARIUM_COMPOSE_FILE", &compose_file);
+        let command = compose_command(
+            &spec("claude", Provider::Claude),
+            "claude",
+            false,
+            Some("commitarium-login-claude"),
+        )
+        .unwrap();
+        let arguments: Vec<_> = command
+            .get_args()
+            .map(|argument| argument.to_string_lossy().into_owned())
+            .collect();
+        // The CLI runs through the worker's choice of CLI, not the image's.
+        assert!(arguments
+            .windows(2)
+            .any(|pair| pair == ["--entrypoint", "/bin/sh"]));
+        assert_eq!(
+            arguments[arguments.len() - 4..],
+            [
+                "agent-claude-worker".to_string(),
+                "-c".to_string(),
+                agents::cli_script(Provider::Claude),
+                "claude".to_string(),
+            ]
+        );
+        assert!(arguments
+            .windows(2)
+            .any(|pair| { pair == ["--name", "commitarium-login-claude"] }));
+        let helper = compose_command(&spec("claude", Provider::Claude), "/bin/sh", true, None)
+            .unwrap()
+            .get_args()
+            .map(|argument| argument.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            helper[helper.len() - 2..],
+            ["agent-claude-worker", "/bin/sh"]
+        );
+        std::env::remove_var("COMMITARIUM_COMPOSE_FILE");
+    }
+}

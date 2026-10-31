@@ -532,7 +532,6 @@ dependencies = [
  "reqwest 0.12.28",
  "serde",
  "serde_json",
- "serde_yaml_ng",
  "sha2",
  "tauri",
  "tauri-build",
@@ -544,7 +543,6 @@ dependencies = [
  "tempfile",
  "tiny_http",
  "tokio",
- "zeroize",
 ]
 
 [[package]]
@@ -552,9 +550,16 @@ name = "commitarium-host"
 version = "0.9.3"
 dependencies = [
  "fs2",
+ "getrandom 0.3.4",
+ "reqwest 0.12.28",
  "serde",
  "serde_json",
+ "serde_yaml_ng",
+ "sha2",
+ "tempfile",
  "tiny_http",
+ "tokio",
+ "zeroize",
 ]
 
 [[package]]

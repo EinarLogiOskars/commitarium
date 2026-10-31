@@ -18,7 +18,7 @@ use std::time::Duration;
 use tauri::{AppHandle, Manager, State};
 use tauri_plugin_notification::NotificationExt;
 
-use crate::{agents, bootstrap, docker, profiles};
+use commitarium_host::{agents, bootstrap, docker, profiles};
 use std::borrow::Cow;
 
 const SETTINGS_FILE: &str = "desktop-settings.json";

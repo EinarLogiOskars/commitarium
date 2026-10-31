@@ -181,9 +181,9 @@ pnpm build
 ### Tauri backend
 
 ```sh
-cargo fmt --manifest-path desktop/src-tauri/Cargo.toml -- --check
-cargo clippy --manifest-path desktop/src-tauri/Cargo.toml --all-targets --locked -- -D warnings
-cargo test --manifest-path desktop/src-tauri/Cargo.toml --locked
+cargo fmt --manifest-path desktop/src-tauri/Cargo.toml --all -- --check
+cargo clippy --manifest-path desktop/src-tauri/Cargo.toml --workspace --all-targets --locked -- -D warnings
+cargo test --manifest-path desktop/src-tauri/Cargo.toml --workspace --locked
 ```
 
 ### Compose and integration behavior
