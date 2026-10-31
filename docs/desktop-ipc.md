@@ -77,6 +77,9 @@ bearer token, the exact Host, and a known Origin:
   well as `PATH`, because packaged desktop apps do not inherit a login shell.
 - `GET /v1/disk/space -> DiskSpaceProbe` — free space at the app-data
   filesystem.
+- `GET /v1/events` — one Server-Sent Events stream of named JSON updates, with
+  a keep-alive comment when quiet. The app repeats each one as a Tauri event,
+  so pages and app windows listen as before.
 - `GET /v1/stack/status -> ServiceStatus[]` — one current row per Compose
   service, ordered by service name. If Compose briefly exposes both sides of a
   container replacement, the running/healthy row wins.

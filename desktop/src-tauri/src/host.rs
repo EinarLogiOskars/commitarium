@@ -10,12 +10,15 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
+use commitarium_host::events::Frames;
 use commitarium_host::server::{Launch, Ready};
 use serde::Serialize;
 use tauri::ipc::CapabilityBuilder;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 const READY_TIMEOUT: Duration = Duration::from_secs(10);
+/// How soon the app listens again after the host's stream ends.
+const RELISTEN_AFTER: Duration = Duration::from_secs(1);
 
 /// How the main window reaches its host.
 #[derive(Clone, Debug, Serialize)]
@@ -56,6 +59,14 @@ impl Host {
         Ok(connection)
     }
 
+    /// The host if it is running. Listening never starts one, or it would
+    /// bring back a host stopped for an update.
+    fn running(&self) -> Option<HostConnection> {
+        let mut running = self.running.lock().ok()?;
+        let host = running.as_mut()?;
+        matches!(host.child.try_wait(), Ok(None)).then(|| host.connection.clone())
+    }
+
     /// Ends the host and waits for it, because Windows cannot replace a file
     /// that is still running.
     pub(crate) fn stop(&self) {
@@ -75,6 +86,45 @@ pub(crate) fn launch(app: &AppHandle) {
     if let Err(error) = app.state::<Host>().connection(app) {
         eprintln!("[host] {error}");
     }
+}
+
+/// Repeats the host's updates as Tauri events, so pages and app windows keep
+/// listening the way they always have.
+pub(crate) fn relay_events(app: AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        let client = reqwest::Client::builder().no_proxy().build();
+        let Ok(client) = client else {
+            return;
+        };
+        loop {
+            if let Some(connection) = app.state::<Host>().running() {
+                let _ = relay(&app, &client, &connection).await;
+            }
+            tokio::time::sleep(RELISTEN_AFTER).await;
+        }
+    });
+}
+
+async fn relay(
+    app: &AppHandle,
+    client: &reqwest::Client,
+    connection: &HostConnection,
+) -> Result<(), reqwest::Error> {
+    let mut stream = client
+        .get(format!("{}/v1/events", connection.url))
+        .bearer_auth(&connection.token)
+        .send()
+        .await?
+        .error_for_status()?;
+    let mut frames = Frames::default();
+    while let Some(piece) = stream.chunk().await? {
+        for (name, data) in frames.push(&piece) {
+            if let Ok(payload) = serde_json::from_str::<serde_json::Value>(&data) {
+                let _ = app.emit(&name, payload);
+            }
+        }
+    }
+    Ok(())
 }
 
 /// The bundler puts the host next to the app's own executable.
