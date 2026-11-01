@@ -29,6 +29,8 @@ use crate::{bootstrap, disk, docker, environment, preview_check};
 
 /// How often a quiet stream proves it is alive, and notices a client has gone.
 const KEEP_ALIVE: Duration = Duration::from_secs(15);
+/// How long a service waits before starting the stack again.
+const STACK_RETRY: Duration = Duration::from_secs(30);
 /// More than any request needs: the longest is a project's open sessions.
 pub const MAX_BODY: usize = 1024 * 1024;
 
@@ -92,6 +94,22 @@ impl Shared {
             drop(sweeping);
             cli_updates::spawn(updater, profiles, events);
         });
+    }
+
+    /// Brings the stack up, for a host no app starts. Docker can come up after
+    /// the service does, so a failure is tried again until it works.
+    pub fn keep_trying_to_start_stack(&self) {
+        loop {
+            match block_on(docker::stack_start(
+                self.events.clone(),
+                &self.profiles,
+                &self.updater,
+            )) {
+                Ok(_) => return,
+                Err(error) => eprintln!("[host] the stack did not start: {error}"),
+            }
+            thread::sleep(STACK_RETRY);
+        }
     }
 
     pub(crate) fn wait_for_sweep(&self) {

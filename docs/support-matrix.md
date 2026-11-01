@@ -39,7 +39,9 @@ and `ubuntu-22.04` runners.
 - **WebKitGTK and NVIDIA.** WebKitGTK 2.42 and newer can render a blank window
   on NVIDIA drivers. Launch with `WEBKIT_DISABLE_DMABUF_RENDERER=1` if that
   happens. Rolling distributions hit this sooner than Ubuntu 22.04 does.
-- **ARM Linux** hosts are not packaged. The service images support `linux/arm64`,
+- **Linux servers** can run the host with no desktop app, on x86-64 or ARM64:
+  `scripts/install-host.sh` needs systemd, 2 GB of memory and 20 GB of free disk.
+- **ARM Linux** desktops are not packaged. The service images support `linux/arm64`,
   but no ARM Linux desktop installer is built.
 
 ## Docker and Compose

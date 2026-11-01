@@ -101,6 +101,44 @@ jobs:
           releaseAssetNamePattern: Commitarium_[version]_[platform]_[arch][setup][ext]
           args: ${{ matrix.args }}
 
+  publish-host:
+    needs: publish
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+            file: commitarium-host-linux-x86_64
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            file: commitarium-host-linux-aarch64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install the musl toolchain
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Build the host
+        working-directory: desktop/src-tauri
+        run: cargo build --release --package commitarium-host --target ${{ matrix.target }}
+
+      - name: Attach the host to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          cp "desktop/src-tauri/target/${{ matrix.target }}/release/commitarium-host" "${{ matrix.file }}"
+          sha256sum "${{ matrix.file }}" > "${{ matrix.file }}.sha256"
+          npx --yes @tauri-apps/cli@2 signer sign "${{ matrix.file }}"
+          gh release upload "${GITHUB_REF_NAME}" "${{ matrix.file }}" "${{ matrix.file }}.sha256" "${{ matrix.file }}.sig" scripts/install-host.sh --clobber
+
   verify-updater:
     needs: publish
     runs-on: ubuntu-latest

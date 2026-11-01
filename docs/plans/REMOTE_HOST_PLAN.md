@@ -1,6 +1,6 @@
 # Remote Host: Implementation Plan
 
-**Status:** agreed direction, RH0 and RH1 done, RH2 done in code, with a live test owed before a release, [ADR-040](../adr/0040-split-the-host-from-the-app.md).
+**Status:** agreed direction, RH0 to RH2 done, with a signed-build test owed before a release, RH3 to RH5 planned to build and test together, [ADR-040](../adr/0040-split-the-host-from-the-app.md).
 Earlier plans are parked while this is explored. A release still needs the
 [RH1](#rh1-a-bundled-host-that-does-almost-nothing) update check.
 
@@ -118,41 +118,189 @@ details as each module moves.
   opening Docker stays in the app.
 - Done when the desktop side holds only client and local-mode-only work.
 
+## RH3 to RH5: how they fit
+
+RH3, RH4 and RH5 are built in order, in separate PRs, and are released and
+tested together. Each PR is reviewed and merged, but none is released until the
+final test passes on a real VPS. These decisions hold across all three.
+
+- **The goal is one command and one code.** A user runs one line on a server,
+  gets one thing to paste into the app, and is connected.
+- **The existing API stays private.** The host's loopback API, its token and
+  `Access::allows` do not change. A new gateway in the host is the only remote
+  door.
+- **The webview never touches the network or the key.** In remote mode the
+  app's Rust side runs a loopback bridge. The UI talks to the bridge as it
+  talks to the coordinator and host today, and the bridge holds the key and
+  checks the host's identity. So almost no React code changes, and the
+  webview's HTTP permissions stay narrow.
+- **Mutual TLS is the device signature.** The host and the device each hold an
+  Ed25519 key and present a self-signed certificate. Each side pins the other
+  from pairing, so no certificate authority, domain or fixed address is needed.
+  This covers long streams, which request signing would not.
+
 ## RH3: Headless on Linux
 
-- The same binary runs as a service with no desktop app, on loopback.
-- Install script or Docker image, for x86 and ARM, added to the release
-  workflows.
-- Work keeps running with no app open. Decide how a headless host updates.
+Done when a fresh Ubuntu or Debian VPS, x86 or ARM, is running the stack after
+one command, keeps running across a reboot, and works with no app.
+
+**Service mode**
+
+- `commitarium-host serve` needs no stdin. It reads a config file, makes its
+  own loopback token, and writes it where only the service user can read it.
+- It starts the stack itself with `docker::stack_start`, retrying if Docker is
+  late, and runs `jobs::watch` as it does now.
+- SIGTERM stops previews and logins and leaves the stack up, like an app
+  crash does today.
+- The launch from the desktop app is unchanged.
+- The compose files already embed in the host. Check that nothing else depends
+  on a desktop path, a Docker Desktop feature or a window.
+
+**Commands on the server**
+
+- `commitarium-host status`: version and stack.
+- `commitarium-host pair`, `devices`, `revoke`: RH4.
+- `commitarium-host update`: RH5.
+- They use the same API as the app. The service writes its port and token to
+  a file only its user and root can read, so no second way in is needed.
+
+**Install**
+
+`curl -fsSL <url> | sh`, and it:
+
+1. Checks the OS, architecture, disk and memory, and stops with a plain reason.
+2. Offers to install Docker Engine if missing, using Docker's own script, and
+   adds nothing else.
+3. Creates a `commitarium` system user in the `docker` group, which is
+   root-equivalent on that machine, and says so in the docs.
+4. Downloads the binary, verifies its signature, and installs the systemd unit.
+5. Starts the service, shows progress while images pull, and waits for health.
+6. Opens pairing and prints one line to paste into the app, from RH4 on.
+
+Running it again repairs or upgrades and keeps the data. `--uninstall` removes
+the service and leaves the stack and data.
+
+The script checks downloads against a checksum over HTTPS, which is the same
+trust as the script itself. The host's own updates in RH5 verify the signature.
+
+**Release**
+
+- `publish-desktop.yml` builds static (musl) `commitarium-host` for
+  `x86_64-linux` and `aarch64-linux` and signs them with the release key.
+- `publish-images.yml` already builds both architectures. Check that every
+  image, including workers, really runs on ARM.
+
+**Tests**
+
+- Unit: config loading, the socket's permissions, the service's start with
+  Docker late.
+- CI: the script against a Debian container, up to the Docker step.
 
 ## RH4: Device keys and pairing
 
-- **Before this slice:** rewrite the threat model for remote operation.
-- Pairing by code and PAKE, device keys in the OS keychain, a revocable device
-  list on the host, a role on each key (`owner` only).
-- The host refuses unsigned requests. Coordinator and Forgejo stay on loopback,
-  and the host forwards authenticated requests to them, so a remote client
-  only ever talks to the host.
-- Tests:
-  - a code works once, expires, and dies after wrong tries;
-  - pairing is closed unless started;
-  - a revoked device is refused at once;
-  - a fake host is rejected by the client.
+Done when only a paired device can reach anything on the host.
+
+**Before any code:** rewrite `docs/threat-model.md` for remote operation, and
+update ADR-040 for the decisions here. Questions it must answer: a stolen
+device, a stolen VPS, a compromised worker reaching the gateway, pairing brute
+force, and a fake host.
+
+**Gateway**
+
+- A new `gateway` module with a TLS listener on a port from the config, 7443
+  by default. It is off in the desktop app and on in `serve`.
+- It is built on `hyper` and `tokio-rustls`, because it must carry streams.
+  `tiny_http` keeps serving loopback.
+- A connection with a known device certificate reaches `/host/*`,
+  `/coordinator/*` and `/forgejo/*`, which forward to loopback.
+- A connection with no certificate reaches only the pairing routes, and only
+  while pairing is open. Anything else is dropped before any request is read.
+- Forwarding adds the loopback token, sets the Host, and removes Origin and
+  any client Authorization.
+- Revoking a device also ends its open connections.
+- Workers run on the Docker network, so a test proves they cannot reach the
+  gateway's forwards without a device key.
+
+**Pairing**
+
+- `commitarium-host pair` opens a window of 5 minutes for one device.
+- It prints `commitarium://<address>:7443#<code>`. The address comes from
+  Tailscale if present, otherwise the public IP.
+- The code has 40 bits of randomness, works once and dies after 3 wrong tries.
+- SPAKE2 runs over TLS the client does not yet trust. Its key then authenticates
+  both certificate fingerprints, so a machine in the middle fails the pairing.
+- The host stores the device's name, key, role (`owner` only) and last use.
+- The app stores its private key in the OS keychain, one per device, and pins
+  the host's identity. A host's address can change without pairing again.
+
+**Tests**
+
+The four in ADR-040, and also: a code does not work after its window; a wrong
+fingerprint ends pairing; no route answers without a certificate; `/pair` is
+closed when not opened; a revoked device's open stream ends.
 
 ## RH5: Remote mode
 
-Ships with RH4.
+Done when the app can do its daily work on a remote host, and says so plainly
+when something is not available.
 
-- The app can connect to a paired host: a pairing screen, a host switcher, a
-  saved address list per host, and reconnecting after network drops.
-- Remove the hardcoded `127.0.0.1:8080` from `client.ts` and from Tauri's HTTP
-  permissions, without widening them for app windows.
-- API version check between app and host.
-- First launch asks "Run on this computer" or "Connect to a host". Connect skips
-  Docker, and the choice can change later. There is no separate install.
-- Features not yet working remotely say so in plain words.
-- Docs for Tailscale first, then a VPS. On a VPS, the firewall leaves
-  coordinator and Forgejo closed.
+**App**
+
+- First launch asks **Run on this computer** or **Connect to a server**.
+  Connect skips Docker and the local host. The choice can change in Settings.
+- Connecting takes the pasted line. It also shows the install command to copy,
+  for people with no server set up yet.
+- Settings lists saved hosts and paired devices, with switching, Add device and
+  revoke.
+- `COORDINATOR_BASE` and the host's address come from the connection, which is
+  the bridge in remote mode. Tauri's HTTP permission stays on loopback, because
+  the bridge is on loopback with a per-launch port, and app windows stay as
+  ADR-029 limits them.
+- Reconnecting after a network drop is quiet and shows one calm status line.
+  Streams resume as they do after a coordinator restart today.
+
+**Versions and updates**
+
+- `/v1/version` gains an `api_version`. A client too old or too new for a host
+  says which side to update, and the update routes keep working across
+  versions.
+- The host checks releases and tells the client. The client shows **Update
+  available** with the host's name, and the user chooses when. Nothing updates
+  on its own, and updating is blocked while work orders run, as it is today.
+- Update means: download, verify the signature, swap the binary keeping the old
+  one, exit, let systemd restart it, then update the stack. The client waits
+  and reconnects. Running the install line again is the way back from a failed
+  update.
+
+**What works remotely in the first release**
+
+| Works | Says it is not available yet |
+| --- | --- |
+| Chat, work orders, agents, autopilot | Pull, Bring in, importing a folder |
+| Agent sign-in, by device code | Backups and restore |
+| Validation, stack control, updates | Publishing to GitHub and other remotes |
+| New projects, with code kept on the host | Publishing apps on a domain |
+| App previews, through a forwarded port | |
+
+Previews in remote mode: the gateway forwards to a preview's loopback port only
+while that preview runs, the bridge gives it a local port, and the app window
+opens that as usual.
+
+**Docs:** Tailscale first, then a VPS. On a VPS, only 7443 opens.
+
+## Final test
+
+On a fresh VPS, from a Mac, after a signed build:
+
+1. Run the one line. Paste what it prints into the app.
+2. Sign in an agent, create a project, and run a work order.
+3. Close the app. Reopen it and see the work finished.
+4. Open a preview.
+5. Drop the network mid-stream and see it reconnect.
+6. Reboot the VPS and see everything come back.
+7. Update the host from the app.
+8. Pair a second device, then revoke it from the first.
+9. Repeat 1 and 2 on an ARM VPS.
 
 ## After this milestone
 
@@ -169,7 +317,6 @@ Ships with RH4.
   host's loopback ports.
 - **Code on the host:** keep on host or sync to a git remote, with per-repo
   push credentials. Say plainly that keeping code only on a VPS needs backups.
-- **Remote previews.** Agent sign-ins need a real remote test.
 - **Imports:** a repo URL for remote hosts.
 - **Backups and git providers on a host:** paths on the host, and tokens where
   today they use the machine's CLIs.
@@ -180,7 +327,6 @@ Ships with RH4.
   with a port forward, or a tunnel like Tailscale Funnel.
 - How published apps control access. Likely public or password at Caddy.
 - How Bring in works from a git remote branch.
-- How app and host versions are allowed to differ.
 
 ## Not in this plan
 
