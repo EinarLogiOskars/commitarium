@@ -17,3 +17,5 @@ pub mod process;
 pub mod profiles;
 pub mod runtime;
 pub mod server;
+#[cfg(unix)]
+pub mod service;

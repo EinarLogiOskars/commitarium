@@ -4,6 +4,9 @@
 //! An app leaving normally has already stopped everything through the API and
 //! kills the host; a pipe that just closes means it crashed, so the host stops
 //! the previews and logins nobody could reach again. The stack stays up.
+//!
+//! On a server it runs with no app: `commitarium-host serve` is the service,
+//! and `commitarium-host status` asks it how it is (`service.rs`).
 
 use std::io::{self, BufRead, Write};
 use std::sync::Arc;
@@ -21,6 +24,24 @@ fn main() {
 }
 
 fn run() -> Result<(), String> {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    match args.split_first() {
+        None => run_for_the_app(),
+        #[cfg(unix)]
+        Some((command, rest)) if command == "serve" => {
+            commitarium_host::service::serve(commitarium_host::service::data_dir(rest)?)
+        }
+        #[cfg(unix)]
+        Some((command, rest)) if command == "status" => {
+            let dir = commitarium_host::service::data_dir(rest)?;
+            println!("{}", commitarium_host::service::status(&dir)?);
+            Ok(())
+        }
+        Some((command, _)) => Err(format!("unknown command: {command}")),
+    }
+}
+
+fn run_for_the_app() -> Result<(), String> {
     let mut stdin = io::stdin().lock();
     let mut line = String::new();
     stdin
