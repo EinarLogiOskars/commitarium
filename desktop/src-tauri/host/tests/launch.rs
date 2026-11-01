@@ -228,6 +228,7 @@ fn no_work_route_runs_without_the_token() {
     let host = Sandbox::start();
     host.wait_for_docker(|calls| calls.contains("ps -a"));
     let routes = [
+        "/v1/stack/start",
         "/v1/stack/up",
         "/v1/stack/down",
         "/v1/stack/update",

@@ -1,16 +1,14 @@
 import { useCallback, useEffect, useState } from "react";
-import { coordinatorReachable } from "../api/health";
-import { dockerProbe, launchDockerDesktop, stackStatus, stackUp, type DockerProbe } from "../ipc";
+import {
+  dockerProbe,
+  launchDockerDesktop,
+  onStackProgress,
+  stackStart,
+  type DockerProbe,
+} from "../ipc";
 
 export type BootPhase =
-  | "probing"
-  | "launching-docker"
-  | "starting"
-  | "checking"
-  | "finishing"
-  | "docker-down"
-  | "failed"
-  | "ready";
+  "probing" | "launching-docker" | "starting" | "finishing" | "docker-down" | "failed" | "ready";
 
 // Minimum time the loading screen stays up on a healthy start, so a fast boot
 // doesn't flash the detailed splash. Measured from boot start, so a slow start
@@ -19,30 +17,13 @@ const MIN_VISIBLE_MS = 6000;
 // After everything is up, hold the full bar this long so the snap-to-100% is
 // actually seen before we hand off to the workspace.
 const FINISH_HOLD_MS = 1000;
-// How often we re-check the coordinator while the stack is coming up.
+// How often we re-check Docker while Docker Desktop is coming up.
 const POLL_MS = 1500;
 const DOCKER_START_TIMEOUT_MS = 120_000;
-// Once Compose has returned, bound readiness polling so a broken container or
-// occupied port becomes an actionable retry screen instead of an endless bar.
-const STACK_READY_TIMEOUT_MS = 120_000;
 const PROGRESS_TICK_MS = 80;
 const FINISH_MESSAGE = "Ready — opening Commitarium…";
-const REQUIRED_CORE_SERVICES = ["forgejo", "coordinator", "simulated-codex-worker"];
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
-const stackReady = async () => {
-  if (!(await coordinatorReachable())) return false;
-  try {
-    const statuses = await stackStatus();
-    return REQUIRED_CORE_SERVICES.every((service) => {
-      const status = statuses.find((candidate) => candidate.service === service);
-      return status?.state === "running" && (!status.health || status.health === "healthy");
-    });
-  } catch {
-    return false;
-  }
-};
 
 /**
  * Startup gate: probe Docker, bring the stack up if needed, and hold a loading
@@ -159,40 +140,26 @@ export function useBoot() {
 
       // Docker is up. Reconcile every core service and provider worker on each
       // desktop launch; this is idempotent and also starts a provider that was
-      // connected after the previous stack run.
+      // connected after the previous stack run. The host reports its steps and
+      // answers once the stack is ready.
       setPhase("starting");
       setDetail("Pulling images and starting local services…");
-      advanceProgress(30, 82);
-      let startupError: string | null = null;
+      advanceProgress(30, 96);
+      const stopListening = onStackProgress((step) => {
+        if (!cancelled) setDetail(step);
+      });
       try {
-        setWarning(await stackUp());
+        setWarning(await stackStart());
       } catch (e) {
         if (cancelled) return;
-        // Compose may report an error after creating some containers, so give
-        // the reconciled stack a short chance to become healthy before
-        // surfacing the exact failure. Keep it in the log either way, so a
-        // failed step behind a healthy stack is not lost.
-        startupError = String(e);
-        console.warn("[boot] stack startup reported an error:", startupError);
-      }
-
-      setPhase("checking");
-      setDetail("Checking local service health…");
-      advanceProgress(82, 96);
-      const readyDeadline = Date.now() + (startupError ? 15_000 : STACK_READY_TIMEOUT_MS);
-      while (!cancelled && !(await stackReady()) && Date.now() < readyDeadline) {
-        await wait(POLL_MS);
-      }
-      if (cancelled) return;
-      if (!(await stackReady())) {
         clearInterval(creep);
-        setDetail(
-          startupError ??
-            "The local services did not become healthy in time. Check Docker and try again.",
-        );
+        setDetail(String(e));
         setPhase("failed");
         return;
+      } finally {
+        void stopListening.then((stop) => stop());
       }
+      if (cancelled) return;
 
       await holdMinVisible();
       if (cancelled) return;

@@ -12,8 +12,10 @@ use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::{Duration, Instant};
 
 use crate::cli_updates::CliUpdater;
+use crate::events::Events;
 use crate::{agents, bootstrap, cleanup, cli_updates, environment, profiles};
 
 /// Where to send the user when Docker is missing. A fixed, trusted URL, never
@@ -458,6 +460,20 @@ const RETIRED_WORKER_SERVICES: &[&str] = &[
 /// Services that do not contain provider credentials and are useful even when
 /// no real agent profile has been connected yet.
 const CORE_SERVICES: &[&str] = &["coordinator", "simulated-codex-worker"];
+const REQUIRED_CORE_SERVICES: &[&str] = &["forgejo", "coordinator", "simulated-codex-worker"];
+
+/// Bounds the wait, so a broken container or occupied port becomes a clear
+/// error instead of an endless start.
+const STACK_READY_TIMEOUT: Duration = Duration::from_secs(120);
+const FAILED_START_READY_TIMEOUT: Duration = Duration::from_secs(15);
+const READY_POLL: Duration = Duration::from_millis(1500);
+
+pub const PROGRESS_EVENT: &str = "stack_progress";
+
+#[derive(Serialize)]
+struct StackProgress<'a> {
+    step: &'a str,
+}
 
 const RELEASE_MODE_ENV: &str = "COMMITARIUM_RELEASE_MODE";
 const EMBEDDED_COMPOSE: &str = include_str!("../../../../compose.yml");
@@ -617,17 +633,96 @@ fn configured_service_image_from_json(configured: &str, service: &str) -> Result
     Ok(image)
 }
 
+/// Tells whoever is listening which step a stack start or update has reached.
+fn report_step(events: &Events, step: &str) {
+    events.publish(PROGRESS_EVENT, &StackProgress { step });
+}
+
+/// Starts the stack and waits until its core services are ready, which is all
+/// it takes to bring Commitarium up with or without an app. Compose can report
+/// an error after creating some containers, so a failed start still gets a
+/// short chance to become healthy. The error is then only logged, so a failed
+/// step behind a healthy stack is not lost.
+pub async fn stack_start(
+    events: Events,
+    manager: &profiles::ProfileManager,
+    updater: &CliUpdater,
+) -> Result<Option<String>, String> {
+    let started = stack_up(events.clone(), manager, updater).await;
+    report_step(&events, "Checking local service health…");
+    let patience = if started.is_ok() {
+        STACK_READY_TIMEOUT
+    } else {
+        FAILED_START_READY_TIMEOUT
+    };
+    let ready = wait_until_ready(patience).await;
+    match (started, ready) {
+        (Ok(warning), true) => Ok(warning),
+        (Ok(_), false) => Err(
+            "The local services did not become healthy in time. Check Docker and try again."
+                .to_string(),
+        ),
+        (Err(error), true) => {
+            eprintln!("[host] stack startup reported an error: {error}");
+            Ok(None)
+        }
+        (Err(error), false) => Err(error),
+    }
+}
+
+async fn wait_until_ready(patience: Duration) -> bool {
+    let client = reqwest::Client::new();
+    let deadline = Instant::now() + patience;
+    loop {
+        if stack_ready(&client).await {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(READY_POLL).await;
+    }
+}
+
+async fn stack_ready(client: &reqwest::Client) -> bool {
+    let healthy = client
+        .get(crate::preview::coordinator_url("/health"))
+        .send()
+        .await
+        .is_ok_and(|response| response.status().is_success());
+    if !healthy {
+        return false;
+    }
+    crate::runtime::spawn_blocking(stack_status)
+        .await
+        .is_ok_and(|statuses| statuses.is_ok_and(|statuses| core_services_ready(&statuses)))
+}
+
+fn core_services_ready(statuses: &[ServiceStatus]) -> bool {
+    REQUIRED_CORE_SERVICES.iter().all(|service| {
+        statuses.iter().any(|status| {
+            status.service == *service
+                && status.state == "running"
+                && status
+                    .health
+                    .as_deref()
+                    .is_none_or(|health| health == "healthy")
+        })
+    })
+}
+
 /// Bring core services up and reconcile every real role worker against its
 /// exact provider profile. A disconnected, expired, or failed profile keeps
 /// only its matching worker stopped; it does not prevent the app from opening.
 /// Returns a warning for the user when the stack is up but something needs
 /// their attention.
 pub async fn stack_up(
+    events: Events,
     manager: &profiles::ProfileManager,
     updater: &CliUpdater,
 ) -> Result<Option<String>, String> {
     let manager = manager.clone();
-    let warning = crate::runtime::spawn_blocking(move || start_stack(&manager))
+    let warning = crate::runtime::spawn_blocking(move || start_stack(&events, &manager))
         .await
         .map_err(|_| "could not start the Commitarium stack".to_string())??;
     // The workers are up: check their CLIs now rather than at the next retry.
@@ -635,23 +730,42 @@ pub async fn stack_up(
     Ok(warning)
 }
 
-fn start_stack(manager: &profiles::ProfileManager) -> Result<Option<String>, String> {
+fn start_stack(
+    events: &Events,
+    manager: &profiles::ProfileManager,
+) -> Result<Option<String>, String> {
     let file = compose_file()?;
     let transport_changed = bootstrap::prepare_transport_secrets(&file)?;
     if release_mode() {
+        report_step(events, "Pulling images…");
         compose_base(PROVIDER_PROFILES, &["pull", "--policy", "missing"])?;
     }
     // Forgejo must exist before its own admin CLI can create the internal
     // identities and tokens required by the other services.
+    report_step(events, "Starting the local Git server…");
     start_forgejo()?;
     // Preview leftovers are swept once, as the host starts (server.rs): this
     // runs again on every window reload and agent sign-in, while previews
     // run, and sweeping here removed their folders and containers.
-    let forgejo_changed = bootstrap::provision_forgejo(&file, PROJECT_NAME)?;
-    let agents_changed = refresh_agent_identities(&file);
+    start_services(events, manager, &file, transport_changed)
+}
+
+/// The steps from a running Forgejo to running workers.
+fn start_services(
+    events: &Events,
+    manager: &profiles::ProfileManager,
+    file: &Path,
+    transport_changed: bool,
+) -> Result<Option<String>, String> {
+    report_step(events, "Setting up the local Git server…");
+    let forgejo_changed = bootstrap::provision_forgejo(file, PROJECT_NAME)?;
+    let agents_changed = refresh_agent_identities(file);
     let credentials_changed = transport_changed || forgejo_changed;
+    report_step(events, "Starting Commitarium's services…");
     start_core_services(credentials_changed)?;
+    report_step(events, "Preparing agent environments…");
     let warning = prepare_environment_images();
+    report_step(events, "Starting your agents…");
     reconcile_agent_workers(manager, credentials_changed || agents_changed)?;
     Ok(warning)
 }
@@ -671,29 +785,30 @@ pub fn stack_down_blocking() -> Result<(), String> {
 
 /// Update the stack: pull the latest images, then recreate in the background.
 pub async fn stack_update(
+    events: Events,
     manager: &profiles::ProfileManager,
     updater: &CliUpdater,
 ) -> Result<Option<String>, String> {
     let manager = manager.clone();
-    let warning = crate::runtime::spawn_blocking(move || stack_update_with_manager(&manager))
-        .await
-        .map_err(|_| "could not update the Commitarium stack".to_string())??;
+    let warning =
+        crate::runtime::spawn_blocking(move || stack_update_with_manager(&events, &manager))
+            .await
+            .map_err(|_| "could not update the Commitarium stack".to_string())??;
     cli_updates::wake(updater);
     Ok(warning)
 }
 
-fn stack_update_with_manager(manager: &profiles::ProfileManager) -> Result<Option<String>, String> {
+fn stack_update_with_manager(
+    events: &Events,
+    manager: &profiles::ProfileManager,
+) -> Result<Option<String>, String> {
     let file = compose_file()?;
     let transport_changed = bootstrap::prepare_transport_secrets(&file)?;
+    report_step(events, "Pulling images…");
     compose_base(PROVIDER_PROFILES, &["pull"])?;
+    report_step(events, "Starting the local Git server…");
     start_forgejo()?;
-    let forgejo_changed = bootstrap::provision_forgejo(&file, PROJECT_NAME)?;
-    let agents_changed = refresh_agent_identities(&file);
-    let credentials_changed = transport_changed || forgejo_changed;
-    start_core_services(credentials_changed)?;
-    let warning = prepare_environment_images();
-    reconcile_agent_workers(manager, credentials_changed || agents_changed)?;
-    Ok(warning)
+    start_services(events, manager, &file, transport_changed)
 }
 
 /// Bring the known agents' Forgejo tokens up to date (scopes, the one-time
@@ -898,6 +1013,35 @@ fn stale_worker_containers(listing: &str, current: &[String]) -> Vec<String> {
 mod tests {
     use super::*;
 
+    fn service(name: &str, state: &str, health: Option<&str>) -> ServiceStatus {
+        ServiceStatus {
+            service: name.to_string(),
+            state: state.to_string(),
+            health: health.map(str::to_string),
+            status: String::new(),
+        }
+    }
+
+    #[test]
+    fn core_services_are_ready_only_when_all_run_healthy() {
+        let mut statuses = vec![
+            service("forgejo", "running", Some("healthy")),
+            service("coordinator", "running", None),
+            service("simulated-codex-worker", "running", Some("healthy")),
+        ];
+        assert!(core_services_ready(&statuses));
+
+        statuses[2].health = Some("starting".to_string());
+        assert!(!core_services_ready(&statuses));
+
+        statuses[2].health = None;
+        statuses[1].state = "exited".to_string();
+        assert!(!core_services_ready(&statuses));
+
+        statuses.remove(0);
+        assert!(!core_services_ready(&statuses));
+    }
+
     #[test]
     fn compose_json_lines_are_sorted_and_deduplicated_by_service() {
         let raw = r#"{"Service":"forgejo","State":"created","Health":"","Status":"Created"}
@@ -1025,7 +1169,8 @@ mod tests {
     fn live_start_matches_each_provider_connection() {
         let manager = profiles::ProfileManager::new();
 
-        start_stack(&manager).unwrap();
+        let events = Events::new(crate::events::Bus::default());
+        start_stack(&events, &manager).unwrap();
         let expected = profiles::worker_connections(&manager, &agents::fetch(false).unwrap());
         let statuses = stack_status().unwrap();
 

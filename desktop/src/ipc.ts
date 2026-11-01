@@ -41,6 +41,9 @@ export interface ServiceStatus {
 
 export const launchDockerDesktop = (): Promise<void> => invoke("launch_docker_desktop");
 
+/** Starts the stack and waits until it is ready. Resolves to a warning for the
+ * user when it is up but needs attention. */
+export const stackStart = (): Promise<string | null> => invoke("stack_start");
 /** Resolves to a warning for the user when the stack is up but needs attention. */
 export const stackUp = (): Promise<string | null> => invoke("stack_up");
 export const stackDown = (): Promise<void> => invoke("stack_down");
@@ -642,6 +645,9 @@ export const disconnectProfile = (profileId: ProfileId): Promise<Profile> =>
   invoke("disconnect_profile", { profileId });
 
 /** Subscribe to login-progress transitions. Returns an unlisten function. */
+export const onStackProgress = (handler: (step: string) => void): Promise<UnlistenFn> =>
+  listen<{ step: string }>("stack_progress", (event) => handler(event.payload.step));
+
 export const onLoginProgress = (
   handler: (p: { profileId: ProfileId; status: ProfileStatus; detail?: ProfileDetail }) => void,
 ): Promise<UnlistenFn> =>

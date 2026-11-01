@@ -43,6 +43,12 @@ pub fn launch_docker_desktop() -> Result<(), String> {
         .map_err(|e| format!("could not launch Docker Desktop: {e}"))
 }
 
+/// Bring the stack up and wait until its core services are ready.
+#[tauri::command]
+pub async fn stack_start(app: AppHandle) -> Result<Value, String> {
+    host::post(&app, "/v1/stack/start", Value::Null).await
+}
+
 /// Bring core services up and reconcile every real role worker against its
 /// exact provider profile.
 #[tauri::command]

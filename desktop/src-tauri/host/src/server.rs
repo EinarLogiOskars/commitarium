@@ -274,9 +274,22 @@ fn respond_to_post(path: &str, body: &[u8], shared: &Shared) -> Reply {
     let logins = &shared.profiles;
     let previews = &shared.previews;
     match path {
-        "/v1/stack/up" => respond_with(block_on(docker::stack_up(logins, &shared.updater))),
+        "/v1/stack/start" => respond_with(block_on(docker::stack_start(
+            events(),
+            logins,
+            &shared.updater,
+        ))),
+        "/v1/stack/up" => respond_with(block_on(docker::stack_up(
+            events(),
+            logins,
+            &shared.updater,
+        ))),
         "/v1/stack/down" => respond_with(block_on(docker::stack_down())),
-        "/v1/stack/update" => respond_with(block_on(docker::stack_update(logins, &shared.updater))),
+        "/v1/stack/update" => respond_with(block_on(docker::stack_update(
+            events(),
+            logins,
+            &shared.updater,
+        ))),
 
         "/v1/profiles/login/begin" => with_body(body, |login: BeginLogin| {
             profiles::begin_login(events(), logins, login.profile_id, login.method)

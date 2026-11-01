@@ -88,6 +88,7 @@ pub fn run() {
             coordinator_build::rebuild_coordinator,
             preview::prune_session_previews,
             docker::launch_docker_desktop,
+            docker::stack_start,
             docker::stack_up,
             docker::stack_down,
             docker::stack_update,

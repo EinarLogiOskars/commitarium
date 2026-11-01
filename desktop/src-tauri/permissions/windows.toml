@@ -12,6 +12,7 @@ permissions = [
   "allow-rebuild-coordinator",
   "allow-prune-session-previews",
   "allow-launch-docker-desktop",
+  "allow-stack-start",
   "allow-stack-up",
   "allow-stack-down",
   "allow-stack-update",
