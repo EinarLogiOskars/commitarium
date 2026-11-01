@@ -29,6 +29,9 @@ use crate::{bootstrap, disk, docker, environment, preview_check};
 
 /// How often a quiet stream proves it is alive, and notices a client has gone.
 const KEEP_ALIVE: Duration = Duration::from_secs(15);
+/// Raised when an app and a host of different versions can no longer work
+/// together. A client that does not match still reaches `/v1/host/update`.
+pub const API_VERSION: u32 = 1;
 /// How long a service waits before starting the stack again.
 const STACK_RETRY: Duration = Duration::from_secs(30);
 /// More than any request needs: the longest is a project's open sessions.
@@ -80,6 +83,11 @@ impl Shared {
             #[cfg(unix)]
             gateway: std::sync::OnceLock::new(),
         }
+    }
+
+    #[cfg(unix)]
+    pub fn previews(&self) -> PreviewManager {
+        self.previews.clone()
     }
 
     #[cfg(unix)]
@@ -227,7 +235,11 @@ fn respond_to_get(path: &str, shared: &Shared) -> Reply {
     match path {
         "/v1/version" => json(
             200,
-            serde_json::json!({ "version": env!("CARGO_PKG_VERSION") }).to_string(),
+            serde_json::json!({
+                "version": env!("CARGO_PKG_VERSION"),
+                "api_version": API_VERSION,
+            })
+            .to_string(),
         ),
         "/v1/stack/status" => respond_with(docker::stack_status()),
         "/v1/docker/probe" => respond_with(Ok(docker::docker_probe())),
@@ -235,6 +247,8 @@ fn respond_to_get(path: &str, shared: &Shared) -> Reply {
         "/v1/profiles" => respond_with(block_on(profiles::list_profiles(&shared.profiles))),
         "/v1/agents/cli-status" => respond_with(Ok(cli_updates::agent_cli_status(&shared.updater))),
         "/v1/forgejo/viewer" => respond_with(block_on(bootstrap::get_forgejo_viewer_status())),
+        #[cfg(unix)]
+        "/v1/host/update" => respond_with(block_on(crate::host_update::check())),
         #[cfg(unix)]
         "/v1/devices" => respond_with(shared.gateway().map(|(gateway, _)| gateway.devices())),
         _ => failure(404, "not found"),
@@ -318,6 +332,12 @@ fn respond_to_post(path: &str, body: &[u8], shared: &Shared) -> Reply {
     let logins = &shared.profiles;
     let previews = &shared.previews;
     match path {
+        #[cfg(unix)]
+        "/v1/host/update" => respond_with(
+            shared
+                .gateway()
+                .and_then(|_| block_on(crate::host_update::install())),
+        ),
         #[cfg(unix)]
         "/v1/pairing/open" => respond_with(
             shared

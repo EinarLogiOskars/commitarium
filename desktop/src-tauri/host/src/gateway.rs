@@ -10,7 +10,7 @@
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use http_body_util::{combinators::BoxBody, BodyExt, Full, Limited};
 use hyper::body::{Bytes, Incoming};
-use hyper::header::{AUTHORIZATION, HOST, ORIGIN};
+use hyper::header::{HeaderValue, AUTHORIZATION, CONNECTION, HOST, ORIGIN, UPGRADE};
 use hyper::service::service_fn;
 use hyper::{Method, Request, Response, StatusCode, Uri};
 use hyper_util::client::legacy::{connect::HttpConnector, Client};
@@ -26,13 +26,14 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use tokio::net::TcpListener;
+use tokio::io::copy_bidirectional;
+use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::watch;
 use tokio_rustls::TlsAcceptor;
 
 use crate::device_keys::{
     fingerprint, pake_answer, proof, proof_matches, provider, Identity, PairDone, PairFinish,
-    PairStart, DEVICE_SIDE, HOST_SIDE,
+    PairStart, DEVICE_SIDE, HOST_SIDE, TUNNEL_PREFIX, TUNNEL_PROTOCOL,
 };
 
 pub const DEFAULT_PORT: u16 = 7443;
@@ -61,6 +62,9 @@ pub struct Upstreams {
     pub host_token: String,
     pub coordinator_port: u16,
     pub forgejo_port: u16,
+    /// Whether a port belongs to a running preview, the only other thing on
+    /// loopback a device may reach.
+    pub is_preview: Box<dyn Fn(u16) -> bool + Send + Sync>,
 }
 
 struct Window {
@@ -276,7 +280,8 @@ impl Gateway {
             async move { Ok::<_, hyper::Error>(gateway.answer(request, is_paired).await) }
         });
         let connection = hyper::server::conn::http1::Builder::new()
-            .serve_connection(TokioIo::new(stream), service);
+            .serve_connection(TokioIo::new(stream), service)
+            .with_upgrades();
         tokio::pin!(connection);
         loop {
             tokio::select! {
@@ -305,7 +310,36 @@ impl Gateway {
                 _ => plain(StatusCode::NOT_FOUND),
             };
         }
+        if let Some(port) = path.strip_prefix(TUNNEL_PREFIX) {
+            return self.tunnel(request, port);
+        }
         self.forward(request, &path).await
+    }
+
+    /// Hands the connection over to a running preview, so it carries whatever
+    /// the preview speaks, websockets for live reload included.
+    fn tunnel(&self, request: Request<Incoming>, port: &str) -> Reply {
+        let Some(port) = port
+            .parse()
+            .ok()
+            .filter(|port| (self.upstreams.is_preview)(*port))
+        else {
+            return plain(StatusCode::NOT_FOUND);
+        };
+        tokio::spawn(async move {
+            let Ok(upgraded) = hyper::upgrade::on(request).await else {
+                return;
+            };
+            let Ok(mut preview) = TcpStream::connect(("127.0.0.1", port)).await else {
+                return;
+            };
+            let _ = copy_bidirectional(&mut TokioIo::new(upgraded), &mut preview).await;
+        });
+        let mut response = plain(StatusCode::SWITCHING_PROTOCOLS);
+        let headers = response.headers_mut();
+        headers.insert(CONNECTION, HeaderValue::from_static("upgrade"));
+        headers.insert(UPGRADE, HeaderValue::from_static(TUNNEL_PROTOCOL));
+        response
     }
 
     async fn pairing_step<B, A>(

@@ -131,7 +131,12 @@ fn coordinator_url(path: &str) -> String {
     format!("http://127.0.0.1:{port}{path}")
 }
 
-async fn running_work_orders() -> Result<Vec<RunningWorkOrder>, String> {
+/// A server's work orders do not depend on this app, so they never hold up
+/// its update.
+async fn running_work_orders(app: &AppHandle) -> Result<Vec<RunningWorkOrder>, String> {
+    if crate::host::is_remote(app) {
+        return Ok(Vec::new());
+    }
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(5))
         .build()
@@ -198,7 +203,7 @@ pub async fn install_desktop_update(
         .ok_or_else(|| "no application update is currently available".to_string())?;
     verify_expected_version(expected_version, &update.version)?;
 
-    if let Some(blocked) = blocked_result(running_work_orders().await?) {
+    if let Some(blocked) = blocked_result(running_work_orders(&app).await?) {
         return Ok(blocked);
     }
 
@@ -226,7 +231,7 @@ pub async fn install_desktop_update(
 
     // A run can begin while the package downloads. Re-check immediately before
     // installation so an updater can never interrupt a newly active provider.
-    if let Some(blocked) = blocked_result(running_work_orders().await?) {
+    if let Some(blocked) = blocked_result(running_work_orders(&app).await?) {
         return Ok(blocked);
     }
 

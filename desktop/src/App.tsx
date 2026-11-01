@@ -15,6 +15,7 @@ import { AutopilotBanner, LaunchBanner } from "./views/AutopilotBanner";
 import { AppsView } from "./views/AppsView";
 import { MarketplaceView } from "./views/MarketplaceView";
 import { CoordinatorBanner } from "./views/CoordinatorBanner";
+import { ServerBanner } from "./views/ServerSection";
 import type { AutopilotGoal, LaunchStage } from "./api/assistant";
 import { Launcher } from "./views/Launcher";
 import { Projects } from "./views/Projects";
@@ -414,6 +415,7 @@ function App() {
       )}
 
       <CoordinatorBanner />
+      <ServerBanner onOpen={() => setShowSettings(true)} />
 
       {exitDialog}
       {startupNotice}

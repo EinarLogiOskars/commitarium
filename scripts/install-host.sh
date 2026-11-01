@@ -8,9 +8,11 @@ set -eu
 REPOSITORY="EinarLogiOskars/commitarium"
 SERVICE="commitarium-host"
 SERVICE_USER="commitarium"
-BINARY="/usr/local/bin/commitarium-host"
+COMMAND="/usr/local/bin/commitarium-host"
 UNIT="/etc/systemd/system/${SERVICE}.service"
 DATA_DIR="/var/lib/commitarium"
+# The service updates itself, so it owns its own program.
+BINARY="$DATA_DIR/bin/commitarium-host"
 MINIMUM_DISK_GB=20
 MINIMUM_MEMORY_GB=2
 READY_SECONDS=900
@@ -81,8 +83,10 @@ download_host() {
   curl -fsSL -o "$folder/$file.sha256" "$base/$file.sha256"
   (cd "$folder" && sha256sum -c "$file.sha256" >/dev/null) ||
     stop "the download did not match its checksum."
-  install -m 0755 "$folder/$file" "$BINARY.new"
+  install -d -m 0700 -o "$SERVICE_USER" -g "$SERVICE_USER" "$DATA_DIR" "$DATA_DIR/bin"
+  install -m 0755 -o "$SERVICE_USER" -g "$SERVICE_USER" "$folder/$file" "$BINARY.new"
   mv -f "$BINARY.new" "$BINARY"
+  ln -sf "$BINARY" "$COMMAND"
 }
 
 install_service() {
@@ -124,7 +128,7 @@ wait_until_ready() {
 uninstall() {
   [ "$(id -u)" -eq 0 ] || stop "run it with sudo."
   systemctl disable --now "$SERVICE" >/dev/null 2>&1 || true
-  rm -f "$UNIT" "$BINARY"
+  rm -f "$UNIT" "$COMMAND"
   systemctl daemon-reload
   say "The service is removed. Your stack and data are still in $DATA_DIR."
   say "To stop the stack: sudo docker compose -p commitarium down"

@@ -1,4 +1,4 @@
-import { COORDINATOR_BASE, NetworkError, request } from "./client";
+import { COORDINATOR_BASE, NetworkError, coordinatorAuth, request } from "./client";
 import { MAX_DOCUMENT_BYTES, type ProjectDocument, base64Of } from "./documents";
 import { fetch } from "@tauri-apps/plugin-http";
 
@@ -111,6 +111,7 @@ export async function readAttachment(owner: string, name: string): Promise<Blob>
   try {
     response = await fetch(
       `${COORDINATOR_BASE}${attachmentsPath(owner)}/${encodeURIComponent(name)}`,
+      { headers: coordinatorAuth() },
     );
   } catch (e) {
     throw new NetworkError(`cannot reach coordinator: ${String(e)}`);

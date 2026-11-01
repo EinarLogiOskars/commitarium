@@ -6,8 +6,21 @@
 
 import { fetch } from "@tauri-apps/plugin-http";
 
-// The coordinator listens here under Compose. Loopback only, by design.
-export const COORDINATOR_BASE = "http://127.0.0.1:8080";
+// The coordinator listens here under Compose. Loopback only, by design. In
+// remote mode this is the app's bridge, also on loopback (ADR-040), which wants
+// the token below.
+export let COORDINATOR_BASE = "http://127.0.0.1:8080";
+let coordinatorToken: string | null = null;
+
+/** Points every coordinator call at the bridge to a paired server. */
+export function connectBridge(url: string, token: string) {
+  COORDINATOR_BASE = url;
+  coordinatorToken = token;
+}
+
+/** Added to each coordinator call. */
+export const coordinatorAuth = (): Record<string, string> =>
+  coordinatorToken ? { Authorization: `Bearer ${coordinatorToken}` } : {};
 
 /** The coordinator's error envelope: {"error":{"code","message"}}. */
 export interface ApiErrorBody {
@@ -42,7 +55,7 @@ interface RequestOptions {
 }
 
 export async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
-  const headers: Record<string, string> = {};
+  const headers: Record<string, string> = coordinatorAuth();
   if (options.body !== undefined) headers["Content-Type"] = "application/json";
   if (options.idempotencyKey) headers["Idempotency-Key"] = options.idempotencyKey;
 

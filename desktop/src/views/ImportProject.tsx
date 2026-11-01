@@ -1,3 +1,5 @@
+import { NotOnAServer } from "./NotOnAServer";
+import { connectedServer } from "../connection";
 import { useState } from "react";
 import { openAssistantOn } from "../attention/askAssistant";
 import { pickFolder, inspectFolder, importProject, type FolderInfo } from "../ipc";
@@ -14,7 +16,7 @@ import {
 } from "./ProjectDefaultsFields";
 import type { ToolchainSuggestion } from "../api/types";
 
-export function ImportProject({
+function ImportProjectOnThisComputer({
   onClose,
   onImported,
 }: {
@@ -309,4 +311,9 @@ function formatBytes(n: number): string {
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
   if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
   return `${(n / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+}
+
+export function ImportProject(props: React.ComponentProps<typeof ImportProjectOnThisComputer>) {
+  if (connectedServer()) return <NotOnAServer what="Importing a folder" />;
+  return <ImportProjectOnThisComputer {...props} />;
 }

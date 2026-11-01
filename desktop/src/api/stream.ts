@@ -9,7 +9,7 @@
 // backoff and resumes from Last-Event-ID so no events are missed across drops.
 
 import { fetch } from "@tauri-apps/plugin-http";
-import { COORDINATOR_BASE } from "./client";
+import { COORDINATOR_BASE, coordinatorAuth } from "./client";
 
 export interface StreamEvent {
   id?: string;
@@ -40,7 +40,10 @@ export function streamEvents(path: string, opts: StreamOptions): StreamHandle {
     while (!closed) {
       controller = new AbortController();
       try {
-        const headers: Record<string, string> = { Accept: "text/event-stream" };
+        const headers: Record<string, string> = {
+          Accept: "text/event-stream",
+          ...coordinatorAuth(),
+        };
         if (lastId) headers["Last-Event-ID"] = lastId;
         const response = await fetch(`${COORDINATOR_BASE}${path}`, {
           headers,

@@ -1,6 +1,6 @@
 # Remote Host: Implementation Plan
 
-**Status:** agreed direction, RH0 to RH4 built, RH5 next, tested together on a VPS, with a signed-build test owed before a release, [ADR-040](../adr/0040-split-the-host-from-the-app.md).
+**Status:** agreed direction, RH0 to RH5 built, tested together on a VPS next, with a signed-build test owed before a release, [ADR-040](../adr/0040-split-the-host-from-the-app.md).
 Earlier plans are parked while this is explored. A release still needs the
 [RH1](#rh1-a-bundled-host-that-does-almost-nothing) update check.
 
@@ -250,8 +250,9 @@ when something is not available.
   Connect skips Docker and the local host. The choice can change in Settings.
 - Connecting takes the pasted line. It also shows the install command to copy,
   for people with no server set up yet.
-- Settings lists saved hosts and paired devices, with switching, Add device and
-  revoke.
+- Settings shows the server, its update, paired devices with Add device and
+  revoke, and a way back to this computer. Changing server restarts the app.
+  Pairing another server is how to switch.
 - `COORDINATOR_BASE` and the host's address come from the connection, which is
   the bridge in remote mode. Tauri's HTTP permission stays on loopback, because
   the bridge is on loopback with a per-launch port, and app windows stay as
@@ -277,7 +278,7 @@ when something is not available.
 | Works | Says it is not available yet |
 | --- | --- |
 | Chat, work orders, agents, autopilot | Pull, Bring in, importing a folder |
-| Agent sign-in, by device code | Backups and restore |
+| Agent sign-in, by device code | Backups and restore, the audit viewer |
 | Validation, stack control, updates | Publishing to GitHub and other remotes |
 | New projects, with code kept on the host | Publishing apps on a domain |
 | App previews, through a forwarded port | |
@@ -285,6 +286,10 @@ when something is not available.
 Previews in remote mode: the gateway forwards to a preview's loopback port only
 while that preview runs, the bridge gives it a local port, and the app window
 opens that as usual.
+
+An app's own window still expects the coordinator on loopback, because it may
+not hold the bridge's token (ADR-029). Its page opens, but anything it asks the
+coordinator fails, and this needs an answer before release.
 
 **Docs:** Tailscale first, then a VPS. On a VPS, only 7443 opens.
 

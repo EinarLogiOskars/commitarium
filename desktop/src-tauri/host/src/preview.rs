@@ -229,6 +229,17 @@ struct PreviewRegistry {
 }
 
 impl PreviewManager {
+    /// Whether `port` is the local port of a preview now running.
+    pub fn serves_port(&self, port: u16) -> bool {
+        let wanted = format!("http://127.0.0.1:{port}");
+        self.inner.lock().is_ok_and(|registry| {
+            registry
+                .projects
+                .values()
+                .any(|record| record.status.urls.iter().any(|open| open.url == wanted))
+        })
+    }
+
     fn begin(&self, key: &str, status: PreviewStatus) -> Result<u64, String> {
         let mut registry = self
             .inner

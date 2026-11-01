@@ -3,6 +3,7 @@
 
 pub mod agents;
 pub mod bootstrap;
+pub mod bridge;
 pub mod cleanup;
 pub mod cli_updates;
 pub mod device_keys;
@@ -12,6 +13,8 @@ pub mod environment;
 pub mod events;
 #[cfg(unix)]
 pub mod gateway;
+#[cfg(unix)]
+pub mod host_update;
 pub mod jobs;
 pub mod preview;
 pub mod preview_check;

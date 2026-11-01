@@ -1,3 +1,4 @@
+import { ServerSection } from "./ServerSection";
 import { useEffect, useRef, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import {
@@ -134,6 +135,7 @@ export function AppSettings({
   // Every panel stays mounted, so a backup in progress keeps reporting while
   // another tab is open.
   const panels: Record<Tab, React.ReactNode> = {
+    server: <ServerSection running={running.length > 0} />,
     general: (
       <>
         <Appearance />
@@ -362,10 +364,11 @@ export function AppSettings({
   );
 }
 
-type Tab = "general" | "notifications" | "marketplace" | "backup" | "about";
+type Tab = "general" | "server" | "notifications" | "marketplace" | "backup" | "about";
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "general", label: "General" },
+  { id: "server", label: "Server" },
   { id: "notifications", label: "Notifications" },
   { id: "marketplace", label: "Marketplace" },
   { id: "backup", label: "Backup" },

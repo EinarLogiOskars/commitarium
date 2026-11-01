@@ -1,6 +1,7 @@
 //! The gateway over real TLS, against small stand-ins for what it forwards to.
 #![cfg(unix)]
 
+use commitarium_host::bridge::Bridge;
 use commitarium_host::device_keys::{host_client, pair, Identity};
 use commitarium_host::gateway::{Gateway, Upstreams};
 use std::io::Read;
@@ -52,6 +53,7 @@ fn upstream() -> u16 {
 
 struct Fixture {
     gateway: Arc<Gateway>,
+    upstream: u16,
     address: String,
     port: u16,
     _dir: tempfile::TempDir,
@@ -67,6 +69,7 @@ async fn start() -> Fixture {
             host_token: "host-token".into(),
             coordinator_port: port,
             forgejo_port: port,
+            is_preview: Box::new(move |asked| asked == port),
         },
     )
     .unwrap();
@@ -75,6 +78,7 @@ async fn start() -> Fixture {
     tokio::spawn(gateway.clone().serve(listener));
     Fixture {
         gateway,
+        upstream: port,
         address: format!("127.0.0.1:{gateway_port}"),
         port: gateway_port,
         _dir: dir,
@@ -256,8 +260,107 @@ async fn devices_and_the_host_identity_outlast_a_restart() {
         host_token: "t".into(),
         coordinator_port: 1,
         forgejo_port: 1,
+        is_preview: Box::new(|_| false),
     };
     let first = Gateway::open(dir.path(), upstreams()).unwrap();
     let second = Gateway::open(dir.path(), upstreams()).unwrap();
     assert_eq!(first.fingerprint().unwrap(), second.fingerprint().unwrap());
+}
+
+async fn bridged(fixture: &Fixture) -> (Bridge, reqwest::Client) {
+    let (_, client) = fixture.paired("mac").await;
+    let bridge = Bridge::start(client, &fixture.address, "bridge-token".into(), vec![])
+        .await
+        .unwrap();
+    let local = reqwest::Client::builder().no_proxy().build().unwrap();
+    (bridge, local)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_bridge_carries_requests_and_keeps_its_token_local() {
+    let fixture = start().await;
+    let (bridge, local) = bridged(&fixture).await;
+    let answer = local
+        .get(format!("{}/v1/version", bridge.host_url()))
+        .bearer_auth("bridge-token")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(answer.status(), 200);
+    let text = answer.text().await.unwrap();
+    assert!(text.starts_with("/v1/version "), "{text}");
+    assert!(text.contains("authorization=Bearer host-token"), "{text}");
+    assert!(!text.contains("bridge-token"), "{text}");
+
+    let coordinator = local
+        .post(format!("{}/health?a=1", bridge.coordinator_url()))
+        .bearer_auth("bridge-token")
+        .body("hello")
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(coordinator.starts_with("/health?a=1 "), "{coordinator}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_bridge_answers_only_the_app() {
+    let fixture = start().await;
+    let (bridge, local) = bridged(&fixture).await;
+    let url = format!("{}/v1/version", bridge.host_url());
+    let status = |request: reqwest::RequestBuilder| async {
+        request.send().await.unwrap().status().as_u16()
+    };
+    assert_eq!(status(local.get(&url)).await, 401);
+    assert_eq!(
+        status(local.get(&url).bearer_auth("wrong-token!")).await,
+        401
+    );
+    assert_eq!(
+        status(
+            local
+                .get(&url)
+                .bearer_auth("bridge-token")
+                .header("Origin", "https://evil.example")
+        )
+        .await,
+        401
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_preview_reaches_the_app_through_a_tunnel() {
+    let fixture = start().await;
+    let (bridge, local) = bridged(&fixture).await;
+    let mut status = serde_json::json!({
+        "urls": [{ "url": format!("http://127.0.0.1:{}", fixture.upstream) }]
+    });
+    bridge.localize_previews(&mut status).await;
+    let url = status["urls"][0]["url"].as_str().unwrap().to_string();
+    assert_ne!(url, format!("http://127.0.0.1:{}", fixture.upstream));
+    let page = local
+        .get(format!("{url}/page"))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(page.starts_with("/page "), "{page}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_port_that_is_no_preview_stays_closed() {
+    let fixture = start().await;
+    let (_, client) = fixture.paired("mac").await;
+    let answer = client
+        .post(fixture.url("/tunnel/1"))
+        .header("Connection", "upgrade")
+        .header("Upgrade", "commitarium-tunnel")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(answer.status(), 404);
 }
