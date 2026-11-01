@@ -287,9 +287,8 @@ Previews in remote mode: the gateway forwards to a preview's loopback port only
 while that preview runs, the bridge gives it a local port, and the app window
 opens that as usual.
 
-An app's own window still expects the coordinator on loopback, because it may
-not hold the bridge's token (ADR-029). Its page opens, but anything it asks the
-coordinator fails, and this needs an answer before release.
+An app's own window reaches the coordinator as it does locally: the bridge gives
+it a second token that works only for the coordinator, never the host (ADR-029).
 
 **Docs:** Tailscale first, then a VPS. On a VPS, only 7443 opens.
 

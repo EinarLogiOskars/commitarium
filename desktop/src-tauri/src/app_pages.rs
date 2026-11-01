@@ -47,7 +47,9 @@ pub(crate) fn start(app: &AppHandle) {
             return;
         }
     };
-    if let Err(error) = app.add_capability(capability(&base)) {
+    let origin = base.as_str().trim_end_matches('/').to_string();
+    let bridge = crate::host::admit_app_pages(app, origin);
+    if let Err(error) = app.add_capability(capability(&base, bridge)) {
         eprintln!("[app-pages] could not grant the app windows' page its commands: {error}");
         return;
     }
@@ -56,18 +58,18 @@ pub(crate) fn start(app: &AppHandle) {
 
 /// The capability of an app window's page: its exact origin, port included,
 /// so the app on another port matches none of it.
-fn capability(base: &Url) -> CapabilityBuilder {
+fn capability(base: &Url, bridge: Option<String>) -> CapabilityBuilder {
+    let scopes = std::iter::once(COORDINATOR.to_string())
+        .chain(bridge)
+        .map(|url| serde_json::json!({ "url": url }))
+        .collect();
     CapabilityBuilder::new("app-page")
         .remote(origin_pattern(base))
         .local(false)
         .window("app-*")
         .permission("core:default")
         .permission("opener:default")
-        .permission_scoped(
-            "http:default",
-            vec![serde_json::json!({ "url": COORDINATOR })],
-            Vec::<serde_json::Value>::new(),
-        )
+        .permission_scoped("http:default", scopes, Vec::<serde_json::Value>::new())
         .permission("app-page")
 }
 

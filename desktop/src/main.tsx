@@ -5,7 +5,7 @@ import { AppWindow } from "./views/AppWindow";
 import { StartChoice } from "./views/StartChoice";
 import { connectBridge } from "./api/client";
 import { setServer } from "./connection";
-import { bridgeConnection, connectionMode } from "./ipc";
+import { bridgeConnection, connectionMode, coordinatorConnection } from "./ipc";
 import { applyTheme, readTheme } from "./settings/theme";
 
 applyTheme(readTheme());
@@ -18,6 +18,8 @@ const show = (page: React.ReactNode) => root.render(<React.StrictMode>{page}</Re
 
 async function start() {
   if (appProject) {
+    const connection = await coordinatorConnection().catch(() => null);
+    if (connection) connectBridge(connection.coordinator_url, connection.token);
     show(<AppWindow projectId={appProject} />);
     return;
   }

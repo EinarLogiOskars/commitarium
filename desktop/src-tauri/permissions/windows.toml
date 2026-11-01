@@ -17,6 +17,7 @@ permissions = [
   "allow-stack-down",
   "allow-stack-update",
   "allow-host-connection",
+  "allow-coordinator-connection",
   "allow-connection-mode",
   "allow-use-this-computer",
   "allow-connect-to-server",
@@ -72,9 +73,10 @@ permissions = [
 
 [[set]]
 identifier = "app-page"
-description = "What an app's window needs and no more: its preview, the assistant's agent sign-in, a snapshot of itself to show the assistant, and bringing the stack up. Its page is served from 127.0.0.1 so the app it frames is same-site (ADR-029)."
+description = "What an app's window needs and no more: its preview, the coordinator, the assistant's agent sign-in, a snapshot of itself to show the assistant, and bringing the stack up. Its page is served from 127.0.0.1 so the app it frames is same-site (ADR-029)."
 permissions = [
   "allow-get-preview-status",
+  "allow-coordinator-connection",
   "allow-start-preview",
   "allow-stop-preview",
   "allow-reset-preview-data",

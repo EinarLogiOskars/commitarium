@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-coordinator-connection"
+description = "Enables the coordinator_connection command without any pre-configured scope."
+commands.allow = ["coordinator_connection"]
+
+[[permission]]
+identifier = "deny-coordinator-connection"
+description = "Denies the coordinator_connection command without any pre-configured scope."
+commands.deny = ["coordinator_connection"]

@@ -308,6 +308,11 @@ pairing instead of joining it.
 | Someone on the server | The connection file and data directory are readable only by the service user and root. The `docker` group is root-equivalent, so nobody else belongs in it. |
 | Denial of service | Out of scope for a single-user host. A firewall or Tailscale is the answer. |
 
+**The bridge.** In remote mode the app runs a loopback server that holds what the
+device can do, so it has the host API's checks: exact Host, a known Origin and
+a per-launch token. App windows hold a second token that reaches only the
+coordinator, as they do locally. Their commands remain limited by ADR-029.
+
 **Limits.** All devices are `owner` and can do everything, including agents and
 stack updates. A paired device cannot run arbitrary commands, because the
 routes stay fixed, but it can direct agents, which run code in their
