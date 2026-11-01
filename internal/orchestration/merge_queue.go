@@ -95,7 +95,7 @@ func (starter *RemoteLeadStarter) leaveMergeQueue(ctx context.Context, runID str
 		starter.reportError(err)
 	}
 	if left {
-		go starter.advanceMergeQueue(starter.lifetime, projectID)
+		starter.queueTurns.Go(func() { starter.advanceMergeQueue(starter.lifetime, projectID) })
 	}
 }
 

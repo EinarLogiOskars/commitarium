@@ -1587,6 +1587,8 @@ func TestRemoteLeadRecoveryAutomaticallyMergesApprovedRevision(t *testing.T) {
 		t.Fatalf("recover automatic merge: %v", err)
 	}
 
+	starter.queueTurns.Wait()
+
 	mergedRun, err := executions.GetRun(t.Context(), runID)
 	if err != nil || mergedRun.Status != execution.RunStatusSucceeded ||
 		workspaceStub.mergeCalls != 1 || pump.called {
