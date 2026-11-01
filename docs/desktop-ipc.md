@@ -645,6 +645,8 @@ existing path. It briefly stops the Commitarium services for a coherent
 snapshot and restarts them if they were running. `inspect_backup` verifies the
 format, required component set, and every SHA-256 checksum without changing
 state; use it before showing the destructive restore confirmation.
+Both report their steps as `backup_progress` events with a `step`.
+
 `restore_backup` repeats that validation, creates an automatic temporary
 rollback snapshot, replaces the fixed durable components, restores allowlisted
 desktop state, and restarts the stack. A failure attempts rollback and reports
