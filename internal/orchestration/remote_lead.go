@@ -358,6 +358,8 @@ type RemoteLeadStarter struct {
 	mergeMu     sync.Mutex
 	// queueMu orders changes to the merge queue (merge_queue.go).
 	queueMu sync.Mutex
+	// queueTurns tracks the turns a run leaving the line sets off.
+	queueTurns sync.WaitGroup
 	// acceptanceJoinMu closes the small window where both parallel workers can
 	// observe the other as incomplete and then both leave without starting the
 	// review. The durable turn admission still provides cross-process safety.
