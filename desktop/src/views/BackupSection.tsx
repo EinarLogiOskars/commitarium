@@ -135,8 +135,8 @@ export function BackupSection({
 
       {restored && (
         <div className="banner banner--ok">
-          Restored from {restored.path}. Reconnect your providers under Providers before starting
-          new work.
+          Restored from {restored.path}. Check that your agents are connected under Agents before
+          starting new work.
         </div>
       )}
 
