@@ -88,6 +88,12 @@ export const connectToServer = (line: string): Promise<void> =>
 export const bridgeConnection = (): Promise<{ coordinator_url: string | null; token: string }> =>
   invoke("host_connection");
 
+/** How an app window reaches the coordinator on a server. Null on this computer. */
+export const coordinatorConnection = (): Promise<{
+  coordinator_url: string;
+  token: string;
+} | null> => invoke("coordinator_connection");
+
 export interface HostVersion {
   version: string;
   api_version: number;

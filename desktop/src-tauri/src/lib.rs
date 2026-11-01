@@ -129,6 +129,7 @@ pub fn run() {
             handoff::project::publish_project_upstream_branch,
             handoff::upstream::preview_upstream_branch,
             handoff::upstream::publish_upstream_branch,
+            host::coordinator_connection,
             remote::connection_mode,
             remote::use_this_computer,
             remote::connect_to_server,

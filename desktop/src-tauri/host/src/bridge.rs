@@ -29,8 +29,10 @@ struct Shared {
     client: reqwest::Client,
     server: String,
     token: String,
+    /// What an app window holds: the coordinator and nothing else (ADR-029).
+    coordinator_token: String,
     host: String,
-    origins: Vec<String>,
+    origins: Mutex<Vec<String>>,
     /// A preview's port on the server, and the local port standing for it.
     tunnels: Mutex<HashMap<u16, u16>>,
 }
@@ -48,6 +50,7 @@ impl Bridge {
         client: reqwest::Client,
         address: &str,
         token: String,
+        coordinator_token: String,
         origins: Vec<String>,
     ) -> Result<Self, String> {
         let listener = TcpListener::bind("127.0.0.1:0")
@@ -61,12 +64,22 @@ impl Bridge {
             client,
             server: format!("https://{address}"),
             token,
+            coordinator_token,
             host: format!("127.0.0.1:{port}"),
-            origins,
+            origins: Mutex::new(origins),
             tunnels: Mutex::default(),
         });
         tokio::spawn(accept(listener, shared.clone()));
         Ok(Self { shared, port })
+    }
+
+    /// Lets another of the app's own pages in, once its address is known.
+    pub fn allow_origin(&self, origin: String) {
+        self.shared
+            .origins
+            .lock()
+            .expect("the origins stay usable")
+            .push(origin);
     }
 
     pub fn base_url(&self) -> String {
@@ -165,24 +178,34 @@ fn plain(status: StatusCode) -> Reply {
     response
 }
 
-fn allowed(shared: &Shared, headers: &HeaderMap) -> bool {
-    let text = |name| headers.get(name).and_then(|value| value.to_str().ok());
-    let known_origin = text(ORIGIN).is_none_or(|origin| shared.origins.iter().any(|o| o == origin));
-    let token = text(AUTHORIZATION)
-        .and_then(|value| value.strip_prefix("Bearer "))
-        .unwrap_or("");
-    text(HOST) == Some(shared.host.as_str())
-        && known_origin
-        && token.len() == shared.token.len()
-        && token
-            .bytes()
-            .zip(shared.token.bytes())
-            .fold(0, |diff, (a, b)| diff | (a ^ b))
+fn same(a: &str, b: &str) -> bool {
+    a.len() == b.len()
+        && a.bytes()
+            .zip(b.bytes())
+            .fold(0, |diff, (x, y)| diff | (x ^ y))
             == 0
 }
 
+fn allowed(shared: &Shared, headers: &HeaderMap, path: &str) -> bool {
+    let text = |name| headers.get(name).and_then(|value| value.to_str().ok());
+    let known_origin = text(ORIGIN).is_none_or(|origin| {
+        shared
+            .origins
+            .lock()
+            .expect("the origins stay usable")
+            .iter()
+            .any(|known| known == origin)
+    });
+    let token = text(AUTHORIZATION)
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .unwrap_or("");
+    let holds_access = same(token, &shared.token)
+        || (path.starts_with("/coordinator/") && same(token, &shared.coordinator_token));
+    text(HOST) == Some(shared.host.as_str()) && known_origin && holds_access
+}
+
 async fn answer(shared: &Shared, request: Request<Incoming>) -> Reply {
-    if !allowed(shared, request.headers()) {
+    if !allowed(shared, request.headers(), request.uri().path()) {
         return plain(StatusCode::UNAUTHORIZED);
     }
     let (parts, body) = request.into_parts();

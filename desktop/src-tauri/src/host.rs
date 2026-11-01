@@ -40,8 +40,19 @@ pub struct HostConnection {
     token: String,
     /// In remote mode, the coordinator's address through the bridge.
     coordinator_url: Option<String>,
+    /// For app windows: the coordinator only (ADR-029). Never sent to a page
+    /// with the rest of this.
+    #[serde(skip)]
+    coordinator_token: Option<String>,
     #[serde(skip)]
     bridge: Option<Bridge>,
+}
+
+/// How an app window reaches the coordinator in remote mode.
+#[derive(Serialize)]
+pub struct WindowConnection {
+    coordinator_url: String,
+    token: String,
 }
 
 struct Running {
@@ -143,13 +154,20 @@ pub(crate) fn launch(app: &AppHandle) {
 }
 
 async fn connect_bridge(app: &AppHandle, server: &PairedHost) -> Result<HostConnection, String> {
-    let token = token()?;
-    let bridge = crate::remote::open_bridge(server, token.clone(), allowed_origins(app)).await?;
+    let (token, coordinator_token) = (token()?, token()?);
+    let bridge = crate::remote::open_bridge(
+        server,
+        token.clone(),
+        coordinator_token.clone(),
+        allowed_origins(app),
+    )
+    .await?;
     grant_main_window(app, &bridge.base_url())?;
     Ok(HostConnection {
         url: bridge.host_url(),
         token,
         coordinator_url: Some(bridge.coordinator_url()),
+        coordinator_token: Some(coordinator_token),
         bridge: Some(bridge),
     })
 }
@@ -481,6 +499,7 @@ fn start(origins: Vec<String>, data_dir: PathBuf) -> Result<Running, String> {
             url: format!("http://127.0.0.1:{}", ready.port),
             token: launch.token,
             coordinator_url: None,
+            coordinator_token: None,
             bridge: None,
         },
     })
@@ -550,6 +569,25 @@ fn grant_main_window(app: &AppHandle, url: &str) -> Result<(), String> {
     .map_err(|e| format!("reach the host: {e}"))
 }
 
+/// In remote mode, what the app windows' pages may reach, for their capability
+/// and the bridge's check. Their origin is only known once they are served.
+pub(crate) fn admit_app_pages(app: &AppHandle, origin: String) -> Option<String> {
+    let bridge = app.state::<Host>().running()?.bridge?;
+    let scope = format!("{}/*", bridge.coordinator_url());
+    bridge.allow_origin(origin);
+    Some(scope)
+}
+
+/// `None` on this computer, where an app window finds the coordinator itself.
+#[tauri::command]
+pub fn coordinator_connection(app: AppHandle) -> Option<WindowConnection> {
+    let connection = app.state::<Host>().remote().and_then(Result::ok)?;
+    Some(WindowConnection {
+        coordinator_url: connection.coordinator_url?,
+        token: connection.coordinator_token?,
+    })
+}
+
 #[tauri::command]
 pub async fn host_connection(app: AppHandle) -> Result<HostConnection, String> {
     connected(&app).await
@@ -573,6 +611,7 @@ mod tests {
             url: format!("http://127.0.0.1:{port}"),
             token: "token".into(),
             coordinator_url: None,
+            coordinator_token: None,
             bridge: None,
         }
     }
@@ -609,6 +648,7 @@ mod tests {
             url: "http://127.0.0.1:9".into(),
             token: "token".into(),
             coordinator_url: None,
+            coordinator_token: None,
             bridge: None,
         };
         let answer = tauri::async_runtime::block_on(post_if_running(&host, "/v1/stack/up"));

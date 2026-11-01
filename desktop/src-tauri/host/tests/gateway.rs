@@ -269,9 +269,15 @@ async fn devices_and_the_host_identity_outlast_a_restart() {
 
 async fn bridged(fixture: &Fixture) -> (Bridge, reqwest::Client) {
     let (_, client) = fixture.paired("mac").await;
-    let bridge = Bridge::start(client, &fixture.address, "bridge-token".into(), vec![])
-        .await
-        .unwrap();
+    let bridge = Bridge::start(
+        client,
+        &fixture.address,
+        "bridge-token".into(),
+        "window-token".into(),
+        vec![],
+    )
+    .await
+    .unwrap();
     let local = reqwest::Client::builder().no_proxy().build().unwrap();
     (bridge, local)
 }
@@ -328,6 +334,26 @@ async fn the_bridge_answers_only_the_app() {
         .await,
         401
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_app_window_reaches_the_coordinator_and_never_the_host() {
+    let fixture = start().await;
+    let (bridge, local) = bridged(&fixture).await;
+    let status = |url: String, origin: &'static str| {
+        let request = local
+            .get(url)
+            .bearer_auth("window-token")
+            .header("Origin", origin);
+        async move { request.send().await.unwrap().status().as_u16() }
+    };
+    let coordinator = format!("{}/health", bridge.coordinator_url());
+    let host = format!("{}/v1/version", bridge.host_url());
+    let page = "http://127.0.0.1:5555";
+    assert_eq!(status(coordinator.clone(), page).await, 401);
+    bridge.allow_origin(page.to_string());
+    assert_eq!(status(coordinator, page).await, 200);
+    assert_eq!(status(host, page).await, 401);
 }
 
 #[tokio::test(flavor = "multi_thread")]

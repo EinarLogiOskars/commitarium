@@ -105,10 +105,11 @@ pub(crate) fn active_host(app: &AppHandle) -> Result<Option<PairedHost>, String>
 pub(crate) async fn open_bridge(
     host: &PairedHost,
     token: String,
+    coordinator_token: String,
     origins: Vec<String>,
 ) -> Result<Bridge, String> {
     let client = host_client(&device_identity()?, &host.fingerprint)?;
-    Bridge::start(client, &host.address, token, origins).await
+    Bridge::start(client, &host.address, token, coordinator_token, origins).await
 }
 
 /// What the page needs before it shows anything.
