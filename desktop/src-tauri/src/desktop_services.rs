@@ -15,7 +15,7 @@ use std::path::{Component, Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_notification::NotificationExt;
 
 use commitarium_host::{agents, bootstrap, docker};
@@ -42,6 +42,11 @@ const APP_STATE_FILES: &[&str] = &[
     "project-workspace-setup-receipts.json",
     "upstream-publication-receipts.json",
 ];
+
+const BACKUP_PROGRESS_EVENT: &str = "backup_progress";
+/// Unpacked beside the old data, inside the volume, so nothing is deleted
+/// until the archive has been read in full.
+const RESTORE_STAGING: &str = ".commitarium-restore";
 
 const CORE_COMPONENTS: &[BackupComponent] = &[
     BackupComponent {
@@ -517,9 +522,11 @@ fn create_backup_blocking(app: &AppHandle, destination: &Path) -> Result<BackupR
         .map_err(|e| format!("create backup staging directory: {e}"))?;
 
     let was_running = stack_has_running_services()?;
+    report_backup_step(app, "Stopping services…");
     docker::compose(docker::PROVIDER_PROFILES, &["stop"])?;
-    let result = export_backup(app, staging.path());
+    let result = export_backup(app, staging.path(), "Backing up");
     let restart = if was_running {
+        report_backup_step(app, "Starting services…");
         start_stack(app)
     } else {
         Ok(())
@@ -557,7 +564,32 @@ fn start_stack(app: &AppHandle) -> Result<(), String> {
     crate::host::post_blocking(app, "/v1/stack/up", serde_json::Value::Null).map(|_| ())
 }
 
-fn export_backup(app: &AppHandle, destination: &Path) -> Result<BackupManifest, String> {
+#[derive(Clone, Serialize)]
+struct BackupProgress<'a> {
+    step: &'a str,
+}
+
+fn report_backup_step(app: &AppHandle, step: &str) {
+    let _ = app.emit(BACKUP_PROGRESS_EVENT, BackupProgress { step });
+}
+
+fn report_component(app: &AppHandle, action: &str, name: &str, index: usize, total: usize) {
+    let what = match name {
+        "coordinator" => "your records",
+        "forgejo" => "repositories",
+        "workspaces" => "workspaces",
+        "toolchains" => "toolchains and chats",
+        _ => "agent history",
+    };
+    let position = index + 1;
+    report_backup_step(app, &format!("{action} {what} ({position} of {total})…"));
+}
+
+fn export_backup(
+    app: &AppHandle,
+    destination: &Path,
+    action: &str,
+) -> Result<BackupManifest, String> {
     let coordinator_id = container_id("coordinator")?
         .ok_or_else(|| "the Commitarium stack has not been created yet".to_string())?;
     let helper_image = container_image(&coordinator_id)?;
@@ -565,7 +597,9 @@ fn export_backup(app: &AppHandle, destination: &Path) -> Result<BackupManifest, 
     let mut hashes = BTreeMap::new();
 
     let agents = agents::current().unwrap_or_default();
-    for component in backup_components(&agents) {
+    let all = backup_components(&agents);
+    for (index, component) in all.iter().enumerate() {
+        report_component(app, action, &component.name, index, all.len());
         let Some(container_id) = container_id(&component.service)? else {
             if component.required {
                 return Err(format!(
@@ -633,6 +667,7 @@ fn restore_backup_blocking(app: &AppHandle, source: &Path) -> Result<BackupResul
     if docker::release_mode() {
         create_args.push("--no-build");
     }
+    report_backup_step(app, "Stopping services…");
     docker::compose(docker::PROVIDER_PROFILES, &create_args)?;
     docker::compose(docker::PROVIDER_PROFILES, &["stop"])?;
 
@@ -643,22 +678,30 @@ fn restore_backup_blocking(app: &AppHandle, source: &Path) -> Result<BackupResul
         .prefix("restore-rollback-")
         .tempdir_in(app_data_dir(app)?)
         .map_err(|e| format!("create restore rollback directory: {e}"))?;
-    let recovery_manifest = export_backup(app, recovery.path())?;
+    let recovery_manifest = export_backup(app, recovery.path(), "Saving a safety copy of")?;
 
     if let Err(restore_error) = apply_backup(app, source, &manifest, &helper_image) {
         let rollback = apply_backup(app, recovery.path(), &recovery_manifest, &helper_image);
+        report_backup_step(app, "Starting services…");
         let restart = start_stack(app);
         return match (rollback, restart) {
             (Ok(()), Ok(())) => Err(format!(
                 "restore failed and the previous installation was restored: {restore_error}"
             )),
-            (rollback, restart) => Err(format!(
-                "restore failed ({restore_error}); automatic rollback was incomplete (rollback: {}; restart: {})",
-                rollback.err().unwrap_or_else(|| "ok".to_string()),
-                restart.err().unwrap_or_else(|| "ok".to_string())
-            )),
+            (rollback, restart) => {
+                // Without this copy a failed rollback would lose the only
+                // record of what was here.
+                let kept = recovery.keep();
+                Err(format!(
+                    "restore failed ({restore_error}); automatic rollback was incomplete (rollback: {}; restart: {}). A copy of the previous installation is at {}",
+                    rollback.err().unwrap_or_else(|| "ok".to_string()),
+                    restart.err().unwrap_or_else(|| "ok".to_string()),
+                    kept.display()
+                ))
+            }
         };
     }
+    report_backup_step(app, "Starting services…");
     start_stack(app)?;
     Ok(BackupResult {
         path: source.to_string_lossy().into_owned(),
@@ -674,9 +717,10 @@ fn apply_backup(
     manifest: &BackupManifest,
     helper_image: &str,
 ) -> Result<(), String> {
-    for name in &manifest.components {
+    for (index, name) in manifest.components.iter().enumerate() {
         let component = backup_component(name)
             .ok_or_else(|| format!("backup contains unknown component {name}"))?;
+        report_component(app, "Restoring", name, index, manifest.components.len());
         // A journal whose agent is not configured here has no worker to
         // restore into; its work orders can no longer resume anyway.
         let Some(container_id) = container_id(&component.service)? else {
@@ -815,14 +859,9 @@ fn restore_component(
     component: &BackupComponent,
     archive: &Path,
 ) -> Result<(), String> {
-    let script = format!(
-        "find '{}' -mindepth 1 -maxdepth 1 -exec rm -rf -- {{}} + && /bin/tar -C '{}' -xzf - && chown -R '{}' '{}'",
-        component.source, component.source, component.owner, component.source
-    );
     let input = File::open(archive).map_err(|e| format!("open {}: {e}", archive.display()))?;
     let output = docker::docker_command()
-        .args(["run", "--rm", "--user", "0", "--volumes-from", container_id])
-        .args(["--entrypoint", "/bin/sh", image, "-c", &script])
+        .args(restore_args(image, container_id, component))
         .stdin(Stdio::from(input))
         .output()
         .map_err(|e| format!("restore {}: {e}", component.name))?;
@@ -834,6 +873,36 @@ fn restore_component(
         ));
     }
     Ok(())
+}
+
+/// `-i` is what hands the archive to the container. The volume is only
+/// emptied once the whole archive has unpacked, so a bad read changes nothing.
+fn restore_args(image: &str, container_id: &str, component: &BackupComponent) -> Vec<String> {
+    let source = component.source;
+    let owner = &component.owner;
+    let staging = format!("{source}/{RESTORE_STAGING}");
+    let script = format!(
+        "rm -rf '{staging}' && mkdir '{staging}' && /bin/tar -C '{staging}' -xzf - \\
+         && find '{source}' -mindepth 1 -maxdepth 1 ! -name '{RESTORE_STAGING}' -exec rm -rf -- {{}} + \\
+         && find '{staging}' -mindepth 1 -maxdepth 1 -exec mv -- {{}} '{source}/' \\; \\
+         && rmdir '{staging}' && chown -R '{owner}' '{source}'"
+    );
+    [
+        "run",
+        "--rm",
+        "-i",
+        "--user",
+        "0",
+        "--volumes-from",
+        container_id,
+        "--entrypoint",
+        "/bin/sh",
+        image,
+        "-c",
+        &script,
+    ]
+    .map(str::to_string)
+    .to_vec()
 }
 
 /// The container of a Commitarium service, found by its Compose labels so a
@@ -1043,6 +1112,16 @@ mod tests {
         assert!(!coordinator.timeout(request_id));
         assert!(!coordinator.confirm());
         assert_eq!(begin_exit_stop(&coordinator), ExitRequestAction::Wait);
+    }
+
+    #[test]
+    fn a_restore_reads_the_archive_before_it_empties_the_volume() {
+        let args = restore_args("image", "container", &CORE_COMPONENTS[0]);
+        assert!(args.iter().any(|arg| arg == "-i"));
+        let script = args.last().expect("script");
+        let unpack = script.find("/bin/tar").expect("unpack");
+        let empty = script.find("rm -rf -- {}").expect("empty");
+        assert!(unpack < empty, "{script}");
     }
 
     #[test]

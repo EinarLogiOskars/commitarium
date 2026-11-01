@@ -108,6 +108,31 @@ func TestTheWatcherForgetsChatsOfDeletedProjects(t *testing.T) {
 	}
 }
 
+type noProjectsStub struct {
+	deletedProjectStub
+}
+
+func (noProjectsStub) List(context.Context) ([]project.Project, error) {
+	return nil, nil
+}
+
+// Records can go missing, as during a failed restore. Chats then stay until
+// the projects come back.
+func TestTheWatcherKeepsChatsWhenThereAreNoProjects(t *testing.T) {
+	service, worker := newTestService(t)
+	if err := service.Wake(t.Context(), "prj_kept", "Note", "Text"); err != nil {
+		t.Fatal(err)
+	}
+	worker.finish(workerhttp.TerminalResult{Outcome: workerhttp.OutcomeCompleted, Disposition: workerhttp.DispositionSucceeded, Summary: "Done."})
+	service.config.Projects = noProjectsStub{deletedProjectStub{missing: map[string]error{
+		"prj_kept": fmt.Errorf("get project: %w", project.ErrNotFound),
+	}}}
+	Watcher{Service: service}.Tick(t.Context())
+	if scopes := service.projectScopes(); !slices.Equal(scopes, []string{"prj_kept"}) {
+		t.Fatalf("scopes = %v", scopes)
+	}
+}
+
 func TestEventsWakeTheAssistantOneTurnAtATime(t *testing.T) {
 	service, worker := newTestService(t)
 	if _, err := service.Send(t.Context(), "prj_test", "Hi", "msg-1"); err != nil {

@@ -88,6 +88,7 @@ impl Shared {
         let events = self.events.clone();
         thread::spawn(move || {
             preview::sweep_leftovers();
+            profiles::sweep_login_containers();
             drop(sweeping);
             cli_updates::spawn(updater, profiles, events);
         });

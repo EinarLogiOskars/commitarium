@@ -648,6 +648,9 @@ export const disconnectProfile = (profileId: ProfileId): Promise<Profile> =>
 export const onStackProgress = (handler: (step: string) => void): Promise<UnlistenFn> =>
   listen<{ step: string }>("stack_progress", (event) => handler(event.payload.step));
 
+export const onBackupProgress = (handler: (step: string) => void): Promise<UnlistenFn> =>
+  listen<{ step: string }>("backup_progress", (event) => handler(event.payload.step));
+
 export const onLoginProgress = (
   handler: (p: { profileId: ProfileId; status: ProfileStatus; detail?: ProfileDetail }) => void,
 ): Promise<UnlistenFn> =>

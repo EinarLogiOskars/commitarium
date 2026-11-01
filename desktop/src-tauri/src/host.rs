@@ -76,8 +76,7 @@ impl Host {
         Ok(connection)
     }
 
-    /// The host if it is running. Listening never starts one, or it would
-    /// bring back a host stopped for an update.
+    /// The host if it is running. Asking never starts one.
     fn running(&self) -> Option<HostConnection> {
         let mut running = self.running.lock().ok()?;
         let host = running.as_mut()?;
@@ -305,8 +304,9 @@ impl LiveWork {
 }
 
 /// Repeats the host's updates as Tauri events, so pages and app windows keep
-/// listening the way they always have. It only ever follows a host that is
-/// already running, and picks up a new one when a call has started it.
+/// listening the way they always have. A host that has died is started again
+/// here, because jobs and work run there with no page asking for them. One
+/// stopped for an update stays down: `connected` refuses while it is closing.
 pub(crate) fn relay_events(app: AppHandle) {
     tauri::async_runtime::spawn(async move {
         let client = reqwest::Client::builder().no_proxy().build();
@@ -316,7 +316,12 @@ pub(crate) fn relay_events(app: AppHandle) {
         let mut live = LiveWork::default();
         let mut followed: Option<String> = None;
         loop {
-            if let Some(connection) = app.state::<Host>().running() {
+            let running = app.state::<Host>().running();
+            let connection = match (running, &followed) {
+                (None, Some(_)) => connected(&app).await.ok(),
+                (running, _) => running,
+            };
+            if let Some(connection) = connection {
                 if followed.is_some_and(|token| token != connection.token) {
                     report_lost_work(&app, &connection, &mut live).await;
                 }

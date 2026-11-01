@@ -127,8 +127,10 @@ pub(crate) fn worker_token_file(agent_id: &str) -> String {
     format!("agent-{agent_id}-worker-token")
 }
 
+pub(crate) const LOGIN_CONTAINER_PREFIX: &str = "commitarium-login-";
+
 pub(crate) fn login_container(agent_id: &str) -> String {
-    format!("commitarium-login-{agent_id}")
+    format!("{LOGIN_CONTAINER_PREFIX}{agent_id}")
 }
 
 /// The provider-state and journal volumes. The `codex` and `claude` agents
