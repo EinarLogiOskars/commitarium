@@ -116,6 +116,11 @@ func (watcher Watcher) Run(ctx context.Context) {
 // Tick looks once at every watched project.
 func (watcher Watcher) Tick(ctx context.Context) {
 	watcher.Service.RetryDueSignIns(ctx)
+	// No projects at all means records that are missing, as during a failed
+	// restore, not that every project was deleted: their chats must survive.
+	if projects, err := watcher.Service.config.Projects.List(ctx); err != nil || len(projects) == 0 {
+		return
+	}
 	for _, scope := range watcher.Service.projectScopes() {
 		if watcher.Service.forgetIfDeleted(ctx, scope) {
 			continue

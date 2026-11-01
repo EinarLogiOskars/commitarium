@@ -1,9 +1,10 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Fact } from "./Fact";
 import { join } from "@tauri-apps/api/path";
 import {
   createBackup,
   inspectBackup,
+  onBackupProgress,
   pickFolder,
   restoreBackup,
   type BackupInspection,
@@ -38,9 +39,16 @@ export function BackupSection({
   const [created, setCreated] = useState<BackupResult | null>(null);
   const [candidate, setCandidate] = useState<BackupInspection | null>(null);
   const [restored, setRestored] = useState<BackupResult | null>(null);
+  const [step, setStep] = useState<string | null>(null);
+
+  useEffect(() => {
+    const unlisten = onBackupProgress(setStep);
+    return () => void unlisten.then((u) => u());
+  }, []);
 
   const setBusy = (next: Busy) => {
     setBusyState(next);
+    setStep(null);
     onBusyChange(next !== null);
   };
 
@@ -115,7 +123,7 @@ export function BackupSection({
         </button>
       </div>
       <p className="muted set__note">
-        Commitarium stops its services while it copies them, then starts again.
+        {step ?? "Commitarium stops its services while it copies them, then starts again."}
       </p>
 
       {created && (

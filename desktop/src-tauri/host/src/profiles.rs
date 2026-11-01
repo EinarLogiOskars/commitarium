@@ -1290,6 +1290,35 @@ fn profile_command_status(
 /// Ends a login left behind: the fixed-name helper container, and a login
 /// process running inside the agent's worker. Only provider login commands
 /// are matched, never the worker's own provider turns.
+/// Removes the login containers an earlier host left when it died. A new host
+/// has no logins yet, so any that exist are not in use.
+pub fn sweep_login_containers() {
+    let Ok(output) = docker::docker_command()
+        .args([
+            "ps",
+            "-a",
+            "--filter",
+            &format!("name=^{}", agents::LOGIN_CONTAINER_PREFIX),
+            "--format",
+            "{{.Names}}",
+        ])
+        .output()
+    else {
+        return;
+    };
+    if !output.status.success() {
+        return;
+    }
+    for name in String::from_utf8_lossy(&output.stdout).split_whitespace() {
+        let _ = docker::docker_command()
+            .args(["rm", "--force", name])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+}
+
 fn remove_login_container(spec: &ProfileSpec) {
     let _ = docker::docker_command()
         .args(["rm", "--force", &spec.login_container])
