@@ -1,6 +1,6 @@
 # ADR-040: Split the host from the app
 
-- Status: Accepted (direction; the threat model must be revised before anything leaves loopback)
+- Status: Accepted; the threat model now covers remote operation
 - Date: 2026-10-30
 
 ## Context
@@ -43,8 +43,8 @@ to other people, without giving those people the assistant or the agents.
 - The private key stays in the device's OS keychain. Each device pairs on its
   own and the host keeps a list it can revoke from one at a time.
 - Every key carries a role from the start. Only `owner` exists at first.
-- Daily traffic is HTTPS and WebSocket to the host's API, signed with the
-  device key. SSH is only one way to get the first code. Losing every device
+- Daily traffic is mutual TLS to the host's gateway, with both sides pinned from
+  pairing, so it needs no certificate authority or domain. SSH is only one way to get the first code. Losing every device
   is recovered by running the pair command on the host.
 
 **Reaching a host.**

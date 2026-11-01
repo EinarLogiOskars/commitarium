@@ -1,8 +1,9 @@
 # Threat model
 
 - Status: Initial baseline
-- Last reviewed: 2026-10-31
-- Scope: Local desktop use with the bundled Docker Compose stack
+- Last reviewed: 2026-11-01
+- Scope: Local desktop use with the bundled Docker Compose stack, and a
+  headless host used from paired devices (see [Remote operation](#remote-operation))
 
 ## Scope and intent
 
@@ -260,17 +261,69 @@ backup-location protections remain responsible for confidentiality. Protecting
 backup files from the trusted signed-in local user remains outside this model.
 ADR-011 records the format and compatibility decision.
 
+## Remote operation
+
+A headless host (ADR-040) runs on a Linux server and is used from paired
+devices. The local model above still holds on that server, with the server
+taking the place of the user's computer. This section adds what changes when a
+network can reach it.
+
+**What must hold**
+
+- Nothing on the host answers a machine that is not a paired device.
+- Only someone who can run a command on the server, or who holds a paired
+  device, can pair a new device.
+- A device can tell its host from a fake one, even at a new address.
+- Workers, previews and published apps gain no way in through the gateway.
+
+**The gateway is the only door.** It listens on one port with TLS 1.3. The
+coordinator, Forgejo, previews and the host's API stay on loopback, and the
+loopback API keeps its token and checks. A device reaches them only through the
+gateway, which adds the token itself, so a device never holds it.
+
+**Devices.** The host and each device hold an Ed25519 key, and each presents a
+self-signed certificate. Each pins the other's certificate fingerprint at
+pairing. There is no certificate authority to trust, and a host's address can
+change without weakening this. A connection is checked at the handshake, and a
+revoked device's open connections end at once.
+
+**Pairing.** Pairing is closed unless someone opens it, from the server or a
+paired device. It lasts 5 minutes, for one device. Its code has 40 bits of
+randomness and is never sent: SPAKE2 proves both sides know it, which gives an
+attacker one guess per attempt, and only 3 attempts are allowed. The key from
+that exchange authenticates both certificate fingerprints, so a machine in the
+middle, which the client's first unverified TLS connection allows, fails
+pairing instead of joining it.
+
+| Threat | What happens |
+| --- | --- |
+| Scanner or attacker on the internet | TLS works, but any path without a device certificate is refused, and pairing routes answer only while pairing is open. They see a port, not a product. |
+| Guessing a code | 3 guesses against 40 bits, inside 5 minutes, while someone opened pairing. |
+| Machine in the middle at pairing | The fingerprint check under the SPAKE2 key fails, and nothing is stored. |
+| Fake host after pairing | The pinned fingerprint does not match, and the device does not connect. |
+| Stolen device | It has full access until revoked, from the server or another device. This is the largest risk here. The key sits in the OS keychain, so it is as safe as the device's login. |
+| Lost every device | `commitarium-host pair` on the server recovers access. |
+| Stolen or compromised server | Everything on it is exposed: code, agent logins, Forgejo. A VPS means trusting its provider. Device keys do not help here. |
+| Compromised worker or preview | It can reach the gateway's port through Docker's network, and is refused like any stranger. Pairing is the one route it could try while open, with the same limits. |
+| Someone on the server | The connection file and data directory are readable only by the service user and root. The `docker` group is root-equivalent, so nobody else belongs in it. |
+| Denial of service | Out of scope for a single-user host. A firewall or Tailscale is the answer. |
+
+**Limits.** All devices are `owner` and can do everything, including agents and
+stack updates. A paired device cannot run arbitrary commands, because the
+routes stay fixed, but it can direct agents, which run code in their
+containers. Tailscale adds a second layer but is not relied on.
+
 ## Outside the current model
 
 The following do not change the current host and upstream isolation guarantee:
 
 - strict worker network or resource policies;
 - installer signing; and
-- remote or multi-user access.
+- multi-user access.
 
 These may be valuable reliability, release, or future security features, but
-they are not unfinished parts of the current containment boundary. Remote or
-multi-user operation will require its own threat model before it is supported.
+they are not unfinished parts of the current containment boundary. Multi-user
+operation will require its own threat model before it is supported.
 
 ## Review triggers
 

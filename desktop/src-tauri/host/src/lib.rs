@@ -5,10 +5,13 @@ pub mod agents;
 pub mod bootstrap;
 pub mod cleanup;
 pub mod cli_updates;
+pub mod device_keys;
 pub mod disk;
 pub mod docker;
 pub mod environment;
 pub mod events;
+#[cfg(unix)]
+pub mod gateway;
 pub mod jobs;
 pub mod preview;
 pub mod preview_check;

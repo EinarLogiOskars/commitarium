@@ -1,6 +1,6 @@
 # Remote Host: Implementation Plan
 
-**Status:** agreed direction, RH0 to RH2 done, with a signed-build test owed before a release, RH3 to RH5 planned to build and test together, [ADR-040](../adr/0040-split-the-host-from-the-app.md).
+**Status:** agreed direction, RH0 to RH4 built, RH5 next, tested together on a VPS, with a signed-build test owed before a release, [ADR-040](../adr/0040-split-the-host-from-the-app.md).
 Earlier plans are parked while this is explored. A release still needs the
 [RH1](#rh1-a-bundled-host-that-does-almost-nothing) update check.
 

@@ -6,7 +6,7 @@
 //! the previews and logins nobody could reach again. The stack stays up.
 //!
 //! On a server it runs with no app: `commitarium-host serve` is the service,
-//! and `commitarium-host status` asks it how it is (`service.rs`).
+//! and `status`, `pair`, `devices` and `revoke` talk to it (`service.rs`).
 
 use std::io::{self, BufRead, Write};
 use std::sync::Arc;
@@ -28,17 +28,34 @@ fn run() -> Result<(), String> {
     match args.split_first() {
         None => run_for_the_app(),
         #[cfg(unix)]
-        Some((command, rest)) if command == "serve" => {
-            commitarium_host::service::serve(commitarium_host::service::data_dir(rest)?)
-        }
-        #[cfg(unix)]
-        Some((command, rest)) if command == "status" => {
-            let dir = commitarium_host::service::data_dir(rest)?;
-            println!("{}", commitarium_host::service::status(&dir)?);
-            Ok(())
-        }
+        Some((command, rest)) => run_on_a_server(command, rest),
+        #[cfg(not(unix))]
         Some((command, _)) => Err(format!("unknown command: {command}")),
     }
+}
+
+#[cfg(unix)]
+fn run_on_a_server(command: &str, args: &[String]) -> Result<(), String> {
+    use commitarium_host::service;
+    let dir = service::data_dir(args);
+    match command {
+        "serve" => service::serve(dir),
+        "status" => print(service::status(&dir)?),
+        "pair" => print(service::pair(&dir, service::option(args, "--address"))?),
+        "devices" => print(service::devices(&dir)?),
+        "revoke" => {
+            let device = args.first().ok_or("usage: revoke <device>")?;
+            service::revoke(&dir, device)?;
+            print(format!("Revoked {device}."))
+        }
+        _ => Err(format!("unknown command: {command}")),
+    }
+}
+
+#[cfg(unix)]
+fn print(text: String) -> Result<(), String> {
+    println!("{text}");
+    Ok(())
 }
 
 fn run_for_the_app() -> Result<(), String> {
