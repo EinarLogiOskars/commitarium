@@ -62,6 +62,9 @@ pub struct Shared {
     /// Held for writing until leftovers are swept, because a sweep removes
     /// any preview, and one started during it would be taken for a leftover.
     swept: Arc<RwLock<()>>,
+    /// The gateway and its port, on a headless host only.
+    #[cfg(unix)]
+    gateway: std::sync::OnceLock<(Arc<crate::gateway::Gateway>, u16)>,
 }
 
 impl Shared {
@@ -74,7 +77,21 @@ impl Shared {
             previews: PreviewManager::default(),
             updater: Arc::default(),
             swept: Arc::default(),
+            #[cfg(unix)]
+            gateway: std::sync::OnceLock::new(),
         }
+    }
+
+    #[cfg(unix)]
+    pub fn use_gateway(&self, gateway: Arc<crate::gateway::Gateway>, port: u16) {
+        let _ = self.gateway.set((gateway, port));
+    }
+
+    #[cfg(unix)]
+    fn gateway(&self) -> Result<&(Arc<crate::gateway::Gateway>, u16), String> {
+        self.gateway
+            .get()
+            .ok_or_else(|| "this host takes no remote devices".to_string())
     }
 
     /// Clears what an earlier host left and starts the agents' CLI updates.
@@ -218,6 +235,8 @@ fn respond_to_get(path: &str, shared: &Shared) -> Reply {
         "/v1/profiles" => respond_with(block_on(profiles::list_profiles(&shared.profiles))),
         "/v1/agents/cli-status" => respond_with(Ok(cli_updates::agent_cli_status(&shared.updater))),
         "/v1/forgejo/viewer" => respond_with(block_on(bootstrap::get_forgejo_viewer_status())),
+        #[cfg(unix)]
+        "/v1/devices" => respond_with(shared.gateway().map(|(gateway, _)| gateway.devices())),
         _ => failure(404, "not found"),
     }
 }
@@ -283,6 +302,12 @@ struct PreviewCheck {
     check_id: String,
 }
 
+#[cfg(unix)]
+#[derive(Deserialize)]
+struct RevokeDevice {
+    device: String,
+}
+
 #[derive(Deserialize)]
 struct ViewerPassword {
     password: String,
@@ -293,6 +318,18 @@ fn respond_to_post(path: &str, body: &[u8], shared: &Shared) -> Reply {
     let logins = &shared.profiles;
     let previews = &shared.previews;
     match path {
+        #[cfg(unix)]
+        "/v1/pairing/open" => respond_with(
+            shared
+                .gateway()
+                .and_then(|(gateway, port)| gateway.open_pairing(*port)),
+        ),
+        #[cfg(unix)]
+        "/v1/devices/revoke" => with_body(body, |revoke: RevokeDevice| {
+            shared
+                .gateway()
+                .and_then(|(gateway, _)| gateway.revoke(&revoke.device))
+        }),
         "/v1/stack/start" => respond_with(block_on(docker::stack_start(
             events(),
             logins,

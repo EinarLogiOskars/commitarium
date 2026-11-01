@@ -142,3 +142,8 @@ download_host
 install_service
 wait_until_ready
 say "Commitarium is running. Check it any time with: sudo commitarium-host status"
+say
+say "If this server has a firewall, open TCP port 7443, or use Tailscale."
+say
+"$BINARY" pair --data-dir "$DATA_DIR"
+say "To pair another device later: sudo commitarium-host pair"
