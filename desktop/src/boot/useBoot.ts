@@ -6,6 +6,7 @@ import {
   stackStart,
   type DockerProbe,
 } from "../ipc";
+import { connectedServer } from "../connection";
 
 export type BootPhase =
   "probing" | "launching-docker" | "starting" | "finishing" | "docker-down" | "failed" | "ready";
@@ -22,6 +23,7 @@ const POLL_MS = 1500;
 const DOCKER_START_TIMEOUT_MS = 120_000;
 const PROGRESS_TICK_MS = 80;
 const FINISH_MESSAGE = "Ready — opening Commitarium…";
+const CHECKING = () => (connectedServer() ? "Connecting to your server…" : "Checking Docker…");
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -32,7 +34,7 @@ const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
  */
 export function useBoot() {
   const [phase, setPhase] = useState<BootPhase>("probing");
-  const [detail, setDetail] = useState("Checking Docker…");
+  const [detail, setDetail] = useState(CHECKING());
   const [probe, setProbe] = useState<DockerProbe | null>(null);
   const [progress, setProgress] = useState(0);
   const [warning, setWarning] = useState<string | null>(null);
@@ -82,7 +84,7 @@ export function useBoot() {
         advanceProgress(2, 28);
       } else {
         setPhase("probing");
-        setDetail("Checking Docker…");
+        setDetail(CHECKING());
         advanceProgress(1, 8);
       }
 
@@ -143,7 +145,9 @@ export function useBoot() {
       // connected after the previous stack run. The host reports its steps and
       // answers once the stack is ready.
       setPhase("starting");
-      setDetail("Pulling images and starting local services…");
+      setDetail(
+        connectedServer() ? "Starting your server…" : "Pulling images and starting local services…",
+      );
       advanceProgress(30, 96);
       const stopListening = onStackProgress((step) => {
         if (!cancelled) setDetail(step);

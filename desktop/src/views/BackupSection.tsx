@@ -1,3 +1,5 @@
+import { NotOnAServer } from "./NotOnAServer";
+import { connectedServer } from "../connection";
 import { useEffect, useState } from "react";
 import { Fact } from "./Fact";
 import { join } from "@tauri-apps/api/path";
@@ -26,7 +28,7 @@ type Busy = "creating" | "inspecting" | "restoring" | null;
 // Backup and restore over the fixed native contract (ADR-011). The renderer
 // only ever supplies a directory chosen through the native picker: components,
 // containers, mounts and commands are decided in Rust.
-export function BackupSection({
+function BackupSectionOnThisComputer({
   diskWarning,
   onBusyChange,
 }: {
@@ -177,4 +179,9 @@ export function BackupSection({
       )}
     </section>
   );
+}
+
+export function BackupSection(props: React.ComponentProps<typeof BackupSectionOnThisComputer>) {
+  if (connectedServer()) return <NotOnAServer what="Backups" />;
+  return <BackupSectionOnThisComputer {...props} />;
 }

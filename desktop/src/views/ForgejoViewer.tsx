@@ -1,3 +1,5 @@
+import { NotOnAServer } from "./NotOnAServer";
+import { connectedServer } from "../connection";
 import { useEffect, useState } from "react";
 import {
   configureForgejoViewer,
@@ -10,7 +12,7 @@ import {
 // password for the fixed `commitarium-viewer` account, which then lets them open
 // the internal Forgejo (repos, PRs, reviews) that "View repository" / "Open PR"
 // links point to.
-export function ForgejoViewer({ onClose }: { onClose: () => void }) {
+function ForgejoViewerOnThisComputer({ onClose }: { onClose: () => void }) {
   const [status, setStatus] = useState<ForgejoViewerStatus | null>(null);
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
@@ -113,4 +115,9 @@ export function ForgejoViewer({ onClose }: { onClose: () => void }) {
       </div>
     </div>
   );
+}
+
+export function ForgejoViewer(props: React.ComponentProps<typeof ForgejoViewerOnThisComputer>) {
+  if (connectedServer()) return <NotOnAServer what="The audit viewer" />;
+  return <ForgejoViewerOnThisComputer {...props} />;
 }

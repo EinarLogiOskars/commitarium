@@ -90,6 +90,7 @@ pub fn serve(data_dir: PathBuf) -> Result<(), String> {
     thread::spawn(move || server::serve(http, access, serving));
 
     let gateway_port = port_setting("COMMITARIUM_GATEWAY_PORT", gateway::DEFAULT_PORT);
+    let previews = shared.previews();
     let gateway = Gateway::open(
         &gateway_dir,
         Upstreams {
@@ -97,6 +98,7 @@ pub fn serve(data_dir: PathBuf) -> Result<(), String> {
             host_token: gateway_token,
             coordinator_port: port_setting("COMMITARIUM_COORDINATOR_PORT", 8080),
             forgejo_port: port_setting("COMMITARIUM_FORGEJO_PORT", 3001),
+            is_preview: Box::new(move |port| previews.serves_port(port)),
         },
     )?;
     shared.use_gateway(gateway.clone(), gateway_port);

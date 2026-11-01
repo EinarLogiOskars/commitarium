@@ -13,9 +13,13 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use spake2::{Ed25519Group, Identity as PakeIdentity, Password, Spake2};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 pub(crate) const DEVICE_SIDE: &[u8] = b"commitarium device";
 pub(crate) const HOST_SIDE: &[u8] = b"commitarium host";
+/// Where a device asks to be connected to a preview's port.
+pub(crate) const TUNNEL_PREFIX: &str = "/tunnel/";
+pub(crate) const TUNNEL_PROTOCOL: &str = "commitarium-tunnel";
 
 /// A self-signed certificate and its private key, both base64 DER.
 #[derive(Clone, Deserialize, Serialize)]
@@ -247,10 +251,17 @@ fn reqwest_client(pin: Pin, device: Option<&Identity>) -> Result<reqwest::Client
     };
     reqwest::Client::builder()
         .no_proxy()
+        .connect_timeout(CONNECT_PATIENCE)
+        .tcp_keepalive(KEEP_ALIVE)
+        .http1_only()
         .use_preconfigured_tls(config)
         .build()
         .map_err(|e| e.to_string())
 }
+
+const CONNECT_PATIENCE: Duration = Duration::from_secs(10);
+/// Notices a network that went away during a long, quiet stream.
+const KEEP_ALIVE: Duration = Duration::from_secs(20);
 
 #[derive(Debug)]
 enum Pin {

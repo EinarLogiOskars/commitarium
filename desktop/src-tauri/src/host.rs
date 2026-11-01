@@ -14,6 +14,8 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
+use commitarium_host::bridge::Bridge;
+use commitarium_host::device_keys::PairedHost;
 use commitarium_host::events::Frames;
 use commitarium_host::server::{Launch, Ready};
 use commitarium_host::{docker, preview, profiles};
@@ -32,10 +34,14 @@ const LOGIN_LOST: &str = "Commitarium's background service restarted during this
                           Start the login again.";
 
 /// How the main window reaches its host.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Serialize)]
 pub struct HostConnection {
     url: String,
     token: String,
+    /// In remote mode, the coordinator's address through the bridge.
+    coordinator_url: Option<String>,
+    #[serde(skip)]
+    bridge: Option<Bridge>,
 }
 
 struct Running {
@@ -51,11 +57,25 @@ pub struct Host {
     /// Set once the host is stopped for good, so a page still polling cannot
     /// bring it back while the app exits or an update replaces its file.
     closing: Arc<AtomicBool>,
+    /// Set at launch in remote mode. No local host runs then, and the host's
+    /// work belongs to the server, so quitting leaves it all alone.
+    remote: Arc<Mutex<Option<Result<HostConnection, String>>>>,
 }
 
 impl Host {
+    fn remote(&self) -> Option<Result<HostConnection, String>> {
+        self.remote.lock().ok()?.clone()
+    }
+
+    fn is_remote(&self) -> bool {
+        self.remote().is_some()
+    }
+
     /// The running host, starting it again if it has gone.
     fn connection(&self, app: &AppHandle) -> Result<HostConnection, String> {
+        if let Some(remote) = self.remote() {
+            return remote;
+        }
         if self.closing.load(Ordering::Acquire) {
             return Err("the app is closing".to_string());
         }
@@ -78,6 +98,9 @@ impl Host {
 
     /// The host if it is running. Asking never starts one.
     fn running(&self) -> Option<HostConnection> {
+        if let Some(remote) = self.remote() {
+            return remote.ok();
+        }
         let mut running = self.running.lock().ok()?;
         let host = running.as_mut()?;
         matches!(host.child.try_wait(), Ok(None)).then(|| host.connection.clone())
@@ -102,12 +125,38 @@ impl Host {
     }
 }
 
-/// Starts the host at launch. If it fails, the first call tries again and
-/// reports why.
+/// Starts the host at launch, or the bridge to a paired server. If it fails,
+/// the first call tries again and reports why, and a failed bridge never falls
+/// back to a local host.
 pub(crate) fn launch(app: &AppHandle) {
+    if let Ok(Some(server)) = crate::remote::active_host(app) {
+        let connected = tauri::async_runtime::block_on(connect_bridge(app, &server));
+        let host = app.state::<Host>();
+        if let Ok(mut remote) = host.remote.lock() {
+            *remote = Some(connected);
+        }
+        return;
+    }
     if let Err(error) = app.state::<Host>().connection(app) {
         eprintln!("[host] {error}");
     }
+}
+
+async fn connect_bridge(app: &AppHandle, server: &PairedHost) -> Result<HostConnection, String> {
+    let token = token()?;
+    let bridge = crate::remote::open_bridge(server, token.clone(), allowed_origins(app)).await?;
+    grant_main_window(app, &bridge.base_url())?;
+    Ok(HostConnection {
+        url: bridge.host_url(),
+        token,
+        coordinator_url: Some(bridge.coordinator_url()),
+        bridge: Some(bridge),
+    })
+}
+
+/// Whether this launch uses a paired server.
+pub(crate) fn is_remote(app: &AppHandle) -> bool {
+    app.state::<Host>().is_remote()
 }
 
 /// Answers one call on a running host. There is no overall timeout, because
@@ -133,7 +182,11 @@ async fn request(
     let response = request.send().await.map_err(lost)?;
     let status = response.status();
     let answer = response.text().await.map_err(lost)?;
-    read_answer(status, &answer)
+    let mut answer = read_answer(status, &answer)?;
+    if let (Some(bridge), true) = (&connection.bridge, path.starts_with("/v1/previews")) {
+        bridge.localize_previews(&mut answer).await;
+    }
+    Ok(answer)
 }
 
 /// The value of a success, and the work's own message on a failure.
@@ -192,6 +245,9 @@ async fn post_if_running(connection: &HostConnection, path: &str) -> Result<Valu
 /// when it was last started, or will when the app next is.
 pub(crate) fn wind_down(app: &AppHandle) {
     let host = app.state::<Host>().inner().clone();
+    if host.is_remote() {
+        return;
+    }
     if let Some(connection) = host.running() {
         wait_for(async {
             let _ = post_if_running(&connection, "/v1/previews/stop-all").await;
@@ -205,6 +261,9 @@ pub(crate) fn wind_down(app: &AppHandle) {
 /// Stopping the stack needs nothing of the host's, so that still happens with
 /// the host gone, by a plain Docker call.
 pub(crate) fn stop_logins_and_stack(app: &AppHandle) {
+    if is_remote(app) {
+        return;
+    }
     let stopped = app.state::<Host>().running().is_some_and(|connection| {
         wait_for(async {
             let _ = post_if_running(&connection, "/v1/profiles/shutdown").await;
@@ -221,6 +280,9 @@ pub(crate) fn stop_logins_and_stack(app: &AppHandle) {
 /// always been on this path.
 pub(crate) fn stop_for_update(app: &AppHandle) {
     let host = app.state::<Host>().inner().clone();
+    if host.is_remote() {
+        return;
+    }
     if let Some(connection) = host.running() {
         let _ = wait_for(post_if_running(&connection, "/v1/profiles/shutdown"));
     }
@@ -361,7 +423,10 @@ async fn relay(
     let mut frames = Frames::default();
     while let Some(piece) = stream.chunk().await? {
         for (name, data) in frames.push(&piece) {
-            if let Ok(payload) = serde_json::from_str::<Value>(&data) {
+            if let Ok(mut payload) = serde_json::from_str::<Value>(&data) {
+                if let (Some(bridge), preview::STATUS_EVENT) = (&connection.bridge, name.as_str()) {
+                    bridge.localize_previews(&mut payload).await;
+                }
                 live.note(&name, &payload);
                 let _ = app.emit(&name, payload);
             }
@@ -415,6 +480,8 @@ fn start(origins: Vec<String>, data_dir: PathBuf) -> Result<Running, String> {
         connection: HostConnection {
             url: format!("http://127.0.0.1:{}", ready.port),
             token: launch.token,
+            coordinator_url: None,
+            bridge: None,
         },
     })
 }
@@ -505,6 +572,8 @@ mod tests {
         HostConnection {
             url: format!("http://127.0.0.1:{port}"),
             token: "token".into(),
+            coordinator_url: None,
+            bridge: None,
         }
     }
 
@@ -539,6 +608,8 @@ mod tests {
         let host = HostConnection {
             url: "http://127.0.0.1:9".into(),
             token: "token".into(),
+            coordinator_url: None,
+            bridge: None,
         };
         let answer = tauri::async_runtime::block_on(post_if_running(&host, "/v1/stack/up"));
         assert!(answer.unwrap_err().starts_with("could not reach the host"));

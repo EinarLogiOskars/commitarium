@@ -1,6 +1,7 @@
 import type { BootPhase } from "../boot/useBoot";
 import type { DockerProbe } from "../ipc";
-import { openExternal } from "../ipc";
+import { openExternal, restartApp, chooseThisComputer } from "../ipc";
+import { connectedServer } from "../connection";
 import "./BootScreen.css";
 
 /**
@@ -27,7 +28,14 @@ export function BootScreen({
   const failed = phase === "failed";
   const needsAction = dockerDown || failed;
 
+  const server = connectedServer();
   const actionMessage = (() => {
+    if (server) {
+      if (!probe) return `Commitarium can't reach your server at ${server}.`;
+      return failed
+        ? "Your server couldn't start its services."
+        : "Docker isn't running on your server. Start it there, then re-check.";
+    }
     if (failed) return "Commitarium couldn't start its local services.";
     if (probe && !probe.docker_installed) {
       return "Docker isn't installed. Install Docker Desktop to run Commitarium.";
@@ -54,20 +62,27 @@ export function BootScreen({
                 </p>
               )}
               <div className="boot__actions">
-                {probe?.docker_launchable && !probe.docker_running && (
+                {server && (
+                  <button onClick={() => void chooseThisComputer().then(restartApp)}>
+                    Use this computer instead
+                  </button>
+                )}
+                {!server && probe?.docker_launchable && !probe.docker_running && (
                   <button className="primary" onClick={onLaunchDocker}>
                     Launch Docker
                   </button>
                 )}
                 <button
                   className={
-                    probe?.docker_launchable && !probe.docker_running ? undefined : "primary"
+                    !server && probe?.docker_launchable && !probe.docker_running
+                      ? undefined
+                      : "primary"
                   }
                   onClick={onRetry}
                 >
                   Re-check
                 </button>
-                {probe && !probe.docker_installed && (
+                {!server && probe && !probe.docker_installed && (
                   <button onClick={() => void openExternal(probe.install_url)}>
                     Install Docker
                   </button>

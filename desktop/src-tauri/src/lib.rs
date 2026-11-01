@@ -14,6 +14,7 @@ mod preview;
 mod preview_check;
 mod process;
 mod profiles;
+mod remote;
 mod snapshot;
 mod store;
 mod updater;
@@ -128,6 +129,9 @@ pub fn run() {
             handoff::project::publish_project_upstream_branch,
             handoff::upstream::preview_upstream_branch,
             handoff::upstream::publish_upstream_branch,
+            remote::connection_mode,
+            remote::use_this_computer,
+            remote::connect_to_server,
             preview::start_preview,
             preview::stop_preview,
             preview::reset_preview_data,
@@ -148,6 +152,7 @@ pub fn run() {
             tauri::RunEvent::ExitRequested { api, .. }
                 if desktop_services::exit_behavior(app)
                     == desktop_services::ExitBehavior::StopStack
+                    && !host::is_remote(app)
                     && !updater::is_restarting(app) =>
             {
                 let coordinator = app.state::<desktop_services::ExitCoordinator>();

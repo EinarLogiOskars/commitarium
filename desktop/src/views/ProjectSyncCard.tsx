@@ -1,3 +1,5 @@
+import { NotOnAServer } from "./NotOnAServer";
+import { connectedServer } from "../connection";
 import { useCallback, useEffect, useState } from "react";
 import {
   createProjectRemote,
@@ -27,7 +29,7 @@ const POLL_MS = 5000;
 // default branch (all merged orders), as one clean 3-way commit — not per-order.
 // Shows how far behind the local repo / each remote is, and syncs the whole
 // project state at once.
-export function ProjectSyncCard({
+function ProjectSyncCardOnThisComputer({
   projectId,
   projectName,
 }: {
@@ -995,4 +997,9 @@ function upstreamHint(
     default:
       return null;
   }
+}
+
+export function ProjectSyncCard(props: React.ComponentProps<typeof ProjectSyncCardOnThisComputer>) {
+  if (connectedServer()) return <NotOnAServer what="Syncing with a local folder" />;
+  return <ProjectSyncCardOnThisComputer {...props} />;
 }

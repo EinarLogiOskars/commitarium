@@ -60,6 +60,63 @@ const hostGet = async <T>(path: string): Promise<T> => {
   return body as T;
 };
 
+const hostPost = async <T>(path: string, payload?: unknown): Promise<T> => {
+  const { url, token } = await invoke<{ url: string; token: string }>("host_connection");
+  const response = await fetch(url + path, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify(payload ?? null),
+  });
+  const body = await response.json();
+  if (!response.ok) throw new Error(body.error ?? `host error ${response.status}`);
+  return body as T;
+};
+
+// --- Remote mode (ADR-040) ---
+
+export interface ConnectionMode {
+  /** Null on a first launch, which asks. */
+  mode: "local" | "remote" | null;
+  server: string | null;
+}
+
+export const connectionMode = (): Promise<ConnectionMode> => invoke("connection_mode");
+export const chooseThisComputer = (): Promise<void> => invoke("use_this_computer");
+/** Pairs with the server in a line from `commitarium-host pair`. */
+export const connectToServer = (line: string): Promise<void> =>
+  invoke("connect_to_server", { line });
+export const bridgeConnection = (): Promise<{ coordinator_url: string | null; token: string }> =>
+  invoke("host_connection");
+
+export interface HostVersion {
+  version: string;
+  api_version: number;
+}
+export interface HostUpdate {
+  current: string;
+  latest: string;
+  available: boolean;
+}
+export interface PairedDevice {
+  fingerprint: string;
+  name: string;
+  role: string;
+  paired_at: number;
+}
+export interface PairingOpened {
+  code: string;
+  port: number;
+  seconds: number;
+}
+
+export const hostVersion = (): Promise<HostVersion> => hostGet("/v1/version");
+export const hostUpdate = (): Promise<HostUpdate> => hostGet("/v1/host/update");
+export const installHostUpdate = (): Promise<null> => hostPost("/v1/host/update");
+export const pairedDevices = (): Promise<PairedDevice[]> => hostGet("/v1/devices");
+export const openPairing = (): Promise<PairingOpened> => hostPost("/v1/pairing/open");
+export const revokeDevice = (device: string): Promise<null> =>
+  hostPost("/v1/devices/revoke", { device });
+
 export const stackStatus = (): Promise<ServiceStatus[]> => hostGet("/v1/stack/status");
 export const dockerProbe = (): Promise<DockerProbe> => hostGet("/v1/docker/probe");
 export const diskSpaceProbe = (): Promise<DiskSpaceProbe> => hostGet("/v1/disk/space");
