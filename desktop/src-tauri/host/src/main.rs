@@ -10,6 +10,7 @@ use std::sync::Arc;
 use std::thread;
 
 use commitarium_host::events::Bus;
+use commitarium_host::jobs;
 use commitarium_host::server::{self, Access, Launch, Ready, Shared};
 
 fn main() {
@@ -38,6 +39,7 @@ fn run() -> Result<(), String> {
         .port();
     let shared = Arc::new(Shared::new(launch.data_dir.clone(), Bus::default()));
     shared.begin_background_work();
+    jobs::watch(shared.clone());
     let access = Access::new(launch, port);
     let serving = shared.clone();
     thread::spawn(move || server::serve(http, access, serving));

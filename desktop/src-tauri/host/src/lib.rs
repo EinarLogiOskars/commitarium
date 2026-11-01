@@ -9,6 +9,7 @@ pub mod disk;
 pub mod docker;
 pub mod environment;
 pub mod events;
+pub mod jobs;
 pub mod preview;
 pub mod preview_check;
 pub mod preview_compose;

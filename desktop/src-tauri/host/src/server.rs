@@ -93,7 +93,7 @@ impl Shared {
         });
     }
 
-    fn wait_for_sweep(&self) {
+    pub(crate) fn wait_for_sweep(&self) {
         drop(block_on(self.swept.read()));
     }
 

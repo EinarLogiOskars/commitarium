@@ -84,6 +84,8 @@ impl Sandbox {
             .env("HOME", path)
             .env("TMPDIR", &temp)
             .env("FAKE_DOCKER_CALLS", &calls)
+            // A closed port, so a running stack's jobs are left alone.
+            .env("COMMITARIUM_COORDINATOR_PORT", "1")
             .env("COMMITARIUM_COMPOSE_FILE", &compose)
             .env(
                 "COMMITARIUM_AGENTS_COMPOSE_FILE",

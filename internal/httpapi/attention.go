@@ -32,7 +32,7 @@ type attentionItem struct {
 	RunID                string `json:"run_id,omitempty"`
 	EnvironmentRequestID string `json:"environment_request_id,omitempty"`
 	ValidationJobID      string `json:"validation_job_id,omitempty"`
-	// AutoRun asks the desktop to run a pending validation job itself: the
+	// AutoRun asks the host to run a pending validation job itself: the
 	// run merges automatically once its gates pass.
 	AutoRun   bool      `json:"auto_run,omitempty"`
 	Title     string    `json:"title"`
