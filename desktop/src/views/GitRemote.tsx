@@ -51,8 +51,7 @@ export function GitRemote({ projectId, compact }: { projectId: string; compact?:
   };
 
   if (linked === undefined) return <p className="muted shell-card__text">Checking…</p>;
-  if (linked === null)
-    return <LinkForm projectId={projectId} compact={compact} onLinked={load} />;
+  if (linked === null) return <LinkForm projectId={projectId} compact={compact} onLinked={load} />;
 
   const comparison = linked.comparison;
   const name = linked.url.replace(/^https:\/\//, "").replace(/\.git$/, "");
@@ -71,7 +70,10 @@ export function GitRemote({ projectId, compact }: { projectId: string; compact?:
 
   return (
     <div className="shell-card__text">
-      <button className="shell-card__link" onClick={() => void openExternal(linked.url.replace(/\.git$/, ""))}>
+      <button
+        className="shell-card__link"
+        onClick={() => void openExternal(linked.url.replace(/\.git$/, ""))}
+      >
         {name} ↗
       </button>
       <p className="muted">{standing(linked)}</p>
@@ -94,7 +96,11 @@ export function GitRemote({ projectId, compact }: { projectId: string; compact?:
           </button>
         )}
         {comparison?.state === "diverged" && (
-          <button className="shell-card__link" disabled={busy !== null} onClick={() => void askMayka()}>
+          <button
+            className="shell-card__link"
+            disabled={busy !== null}
+            onClick={() => void askMayka()}
+          >
             Ask Mayka to merge them
           </button>
         )}
