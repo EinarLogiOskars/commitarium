@@ -1,6 +1,6 @@
 # Server Mode, Complete: Implementation Plan (0.10.0)
 
-**Status:** agreed 2026-11-02. S1 built and tested on a server except restore; S2 built, its Forgejo calls checked against a real server; S1 to S5 built; waiting for the user's test, then 0.10.0. Finishes what
+**Status:** agreed 2026-11-02. S1 built and tested on a server except restore; S2 reworked into a linked repository synced both ways, after the push mirror proved able to overwrite the remote; S1 to S5 built; waiting for the user's test, then 0.10.0. Finishes what
 [REMOTE_HOST_PLAN.md](REMOTE_HOST_PLAN.md) left for after its milestone, so a
 server can be the only place a user's work lives. Released together as 0.10.0;
 company sign-in follows as 0.11.0.
@@ -13,7 +13,7 @@ backups, importing a folder, syncing with a local folder, and the audit viewer.
 | Step | What | Done when |
 |---|---|---|
 | S1 | Backups on a server | A server backs itself up, keeps a few, and restores one |
-| S2 | Code to a git remote | A project on a server keeps a GitHub (or other) copy up to date |
+| S2 | A linked repository | A project on a server brings in and pushes to a GitHub (or other) repository, never forced |
 | S3 | Import by repository URL | A server imports a project from a git URL |
 | S4 | The audit viewer on a server | It opens from a paired device |
 | S5 | A warning before an app's address changes | Changing it says the old address stops working |
@@ -34,16 +34,28 @@ backups, importing a folder, syncing with a local folder, and the audit viewer.
   later steps. Settings says plainly that backups on the server do not survive
   losing the server.
 
-## S2: Code to a git remote
+## S2: A linked repository
 
-- Forgejo pushes the project's repository to the remote itself, through a
-  **push mirror**: on every push, and on an interval. The coordinator sets it
-  up through Forgejo's API, with the remote's URL and an access token the
-  user creates for that repository. The token stays in Forgejo.
-- This works the same on this computer, and doubles as an off-server copy of
-  the code.
-- The Sync card on a server shows the mirror: its remote, last push, and any
-  error, with Set up and Remove.
+- A project links to one repository on GitHub or another git host, with an
+  access token the user creates for it. The coordinator keeps the link and
+  the token in its credentials volume, out of agents' reach and out of
+  backups. A public repository links without a token but can then only bring
+  commits in.
+- **Bring in.** The coordinator fetches both sides. When only the linked
+  repository moved, its commits land on the project branch `linked/<branch>`
+  and main fast-forwards to them through a pull request the merge gate
+  approves, since main takes no push. When both moved, the commits wait on
+  `linked/<branch>`, and the user can ask Mayka to merge them in a work order.
+- **Push.** Main goes out only as a fast-forward. When the linked repository
+  has commits main lacks, the push is refused: bring those in first.
+- **On its own.** Optionally, every five minutes, the coordinator brings in
+  and pushes for the user, with the same rules; when both sides moved it
+  only says so.
+- The first version used Forgejo's push mirror, which force-pushes and so
+  could erase commits made on the remote. Divergence is the user's call
+  (as in two-way sync on this computer): warn, never overwrite.
+- The project rail's card on a server shows how the two sides stand, with
+  Bring in and Push; its page links, unlinks and turns syncing on its own on.
 
 ## S3: Import by repository URL
 
@@ -52,6 +64,8 @@ backups, importing a folder, syncing with a local folder, and the audit viewer.
   runs that same import. (Forgejo's own migrate was the first idea; reusing
   the folder import keeps one path that checks and sets a project up.)
 - On a server, Import shows a URL field in place of the folder picker.
+- The imported project stays linked to the repository (S2), with the same
+  token, so commits keep coming in and going out.
 
 ## S4: The audit viewer on a server
 

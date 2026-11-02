@@ -25,6 +25,7 @@ import (
 	"github.com/EinarLogiOskars/commitarium/internal/gitworkspace"
 	"github.com/EinarLogiOskars/commitarium/internal/httpapi"
 	"github.com/EinarLogiOskars/commitarium/internal/install"
+	"github.com/EinarLogiOskars/commitarium/internal/linkedrepo"
 	"github.com/EinarLogiOskars/commitarium/internal/marketplace"
 	"github.com/EinarLogiOskars/commitarium/internal/modelcatalog"
 	"github.com/EinarLogiOskars/commitarium/internal/modelguide"
@@ -737,12 +738,23 @@ func run(ctx context.Context, coordinatorConfig config) error {
 		go assistantWatcher.Run(ctx)
 	}
 
-	// Push mirrors keep a project's code on a git remote (S2).
+	// A linked repository keeps a project in step with GitHub or another
+	// git host, both ways (S2).
+	linkedRepositories, err := linkedrepo.NewService(linkedrepo.Config{
+		CredentialsRoot: coordinatorConfig.credentialsRoot,
+		ForgejoURL:      coordinatorConfig.forgejoURL, ForgejoTokenFile: coordinatorConfig.forgejoTokenFile,
+		Projects: projectService, Landing: forgejoClient,
+	})
+	if err != nil {
+		return fmt.Errorf("configure linked repositories: %w", err)
+	}
+	go linkedRepositories.KeepInStep(ctx)
 	routes := http.NewServeMux()
 	routes.Handle("/", handler)
-	httpapi.RegisterMirrorRoutes(routes, projectService, forgejoClient)
-	// A server imports by repository URL, having no folder of the user's (S3).
-	httpapi.RegisterURLImportRoute(routes, projectService, projectImporter)
+	httpapi.RegisterLinkedRepositoryRoutes(routes, linkedRepositories)
+	// A server imports by repository URL, having no folder of the user's
+	// (S3); the project stays linked to it.
+	httpapi.RegisterURLImportRoute(routes, projectService, projectImporter, linkedRepositories)
 
 	log.Print("Listening...")
 	if err := http.ListenAndServe(":8080", routes); err != nil {
