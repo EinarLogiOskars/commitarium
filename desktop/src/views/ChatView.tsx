@@ -28,7 +28,8 @@ import {
   type Conversation,
 } from "../api/assistant";
 import { ApiError } from "../api/client";
-import { openAppWindow, webviewSnapshot, webviewSnapshotSupported } from "../ipc";
+import { deploy, openAppWindow, webviewSnapshot, webviewSnapshotSupported } from "../ipc";
+import { connectedServer } from "../connection";
 import { getVision } from "../api/vision";
 import { developerModeOn } from "../devMode";
 import { getProject } from "../api/projects";
@@ -1182,6 +1183,13 @@ function ActionCard({
         const applied = conversation.actions?.find((a) => a.id === action.id);
         if (applied?.start_failed) {
           // It stays here, showing why, with Try again.
+        } else if (applied?.type === "deploy_app") {
+          // The server's host deploys: Commitarium only recorded the approval.
+          if (connectedServer())
+            void deploy(typeof scope === "string" ? scope : scope.scope).catch((e) =>
+              setError(String(e)),
+            );
+          else setError("Deploying needs a server: connect one in Settings → Server.");
         } else if (applied?.type === "create_app" && applied.project_id) {
           void openAppWindow(applied.project_id, applied.title);
         } else if (applied?.type === "plan_project" && applied.project_id) {
@@ -1251,11 +1259,13 @@ function ActionCard({
                                         ? `Look up: ${action.title}`
                                         : action.type === "build_plan"
                                           ? "Build it"
-                                          : action.type === "start_planning"
-                                            ? "Plan it first"
-                                            : action.type === "update_plan"
-                                              ? "Update the plan"
-                                              : "Switch models";
+                                          : action.type === "deploy_app"
+                                            ? "Deploy the latest version"
+                                            : action.type === "start_planning"
+                                              ? "Plan it first"
+                                              : action.type === "update_plan"
+                                                ? "Update the plan"
+                                                : "Switch models";
   const models = [
     action.lead_model &&
       `Lead ${action.lead_agent ? agentName(agents, action.lead_agent) + " · " : ""}${modelName(action.lead_model)}`,
@@ -1278,7 +1288,9 @@ function ActionCard({
             ? [`Plan this first? ${action.reason}`, APPLY_LABEL[action.type]]
             : action.type === "build_plan"
               ? [`The plan is ready: ${appliedWhat(action.title) || "build it"}`, "Build it"]
-              : [`${APPLY_LABEL[action.type]} ${what}?`, APPLY_LABEL[action.type]];
+              : action.type === "deploy_app"
+                ? ["Deploy the latest version, so visitors see it?", "Deploy"]
+                : [`${APPLY_LABEL[action.type]} ${what}?`, APPLY_LABEL[action.type]];
     return (
       <div
         className="assistant-action assistant-action--proposed"
@@ -1596,6 +1608,7 @@ const APPLY_LABEL: Record<AssistantAction["type"], string> = {
   research: "Look it up",
   update_plan: "Update",
   build_plan: "Build it",
+  deploy_app: "Deploy",
   start_planning: "Start plan mode",
 };
 

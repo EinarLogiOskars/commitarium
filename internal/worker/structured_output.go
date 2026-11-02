@@ -807,7 +807,7 @@ func ResolveStructuredOutput(
 // which Commitarium applies at once (ONE_CONVERSATION_PLAN.md phase 2).
 func assistantTurnSchema(planning bool) map[string]any {
 	text := map[string]any{"type": "string"}
-	types := []string{"create_work_order", "start_work_order", "change_models", "add_vision_item", "start_autopilot", "continue_work_order", "recover_work_order", "close_work_order", "create_app", "plan_project", "set_up_preview", "write_vision", "set_up_stack", "answer_helper", "write_brief", "design_stack", "research", "build_plan"}
+	types := []string{"create_work_order", "start_work_order", "change_models", "add_vision_item", "start_autopilot", "continue_work_order", "recover_work_order", "close_work_order", "create_app", "plan_project", "set_up_preview", "write_vision", "set_up_stack", "answer_helper", "write_brief", "design_stack", "research", "build_plan", "deploy_app"}
 	if !planning {
 		// Plan mode is suggested only in a chat that is not planning.
 		types = append(types, "start_planning")

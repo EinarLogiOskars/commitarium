@@ -336,6 +336,15 @@ struct Publish {
     name: String,
     #[serde(default)]
     access: PublishAccess,
+    /// A private app's password, when set or changed.
+    #[serde(default)]
+    password: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct SetPassword {
+    project_id: String,
+    password: String,
 }
 
 #[derive(Deserialize)]
@@ -470,13 +479,22 @@ fn respond_to_post(path: &str, body: &[u8], shared: &Shared) -> Reply {
         }),
         "/v1/publishing/publish" => with_body(body, |publish: Publish| {
             shared.on_a_server()?;
+            shared.publishing.publish(
+                &publish.project_id,
+                &publish.name,
+                publish.access,
+                publish.password.as_deref(),
+            )
+        }),
+        "/v1/publishing/password" => with_body(body, |set: SetPassword| {
+            shared.on_a_server()?;
             shared
                 .publishing
-                .publish(&publish.project_id, &publish.name, publish.access)
+                .set_app_password(&set.project_id, &set.password)
         }),
-        "/v1/publishing/password" => with_body(body, |asked: ProjectRequest| {
+        "/v1/publishing/reveal" => with_body(body, |asked: ProjectRequest| {
             shared.on_a_server()?;
-            shared.publishing.new_app_password(&asked.project_id)
+            shared.publishing.app_password(&asked.project_id)
         }),
         "/v1/publishing/unpublish" => with_body(body, |asked: ProjectRequest| {
             shared.on_a_server()?;

@@ -9,6 +9,7 @@ export type PageMode =
   | "order"
   | "settings"
   | "preview"
+  | "deployment"
   | "sync"
   | "work"
   | "graph";

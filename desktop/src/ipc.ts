@@ -72,6 +72,68 @@ const hostPost = async <T>(path: string, payload?: unknown): Promise<T> => {
   return body as T;
 };
 
+// --- Deployments and publishing (PUBLISHING_PLAN.md) ---
+
+export interface Deploy {
+  commit_id: string;
+  /** Seconds since the Unix epoch. */
+  deployed_at: number;
+}
+
+export interface Deployment {
+  project_id: string;
+  current: Deploy | null;
+  /** Newest first. */
+  history: Deploy[];
+  status: PreviewStatus | null;
+}
+
+export type Access = "private" | "public";
+
+export interface PublishedApp {
+  project_id: string;
+  name: string;
+  access: Access;
+  url: string;
+  live: boolean;
+}
+
+export interface PublishingOverview {
+  domain: string | null;
+  server_address: string | null;
+  apps: PublishedApp[];
+}
+
+export const deployments = (): Promise<Deployment[]> => hostGet("/v1/deployments");
+/** The default branch's head unless a commit is named. */
+export const deploy = (projectId: string, commitId?: string): Promise<PreviewStatus> =>
+  hostPost("/v1/deployments/deploy", { project_id: projectId, commit_id: commitId ?? null });
+export const stopDeployment = (projectId: string): Promise<void> =>
+  hostPost("/v1/deployments/stop", { project_id: projectId });
+export const publishing = (): Promise<PublishingOverview> => hostGet("/v1/publishing");
+export const setDomain = (domain: string): Promise<void> =>
+  hostPost("/v1/publishing/domain", { domain });
+/** A private app needs a password the first time; the user chooses it. */
+export const publishApp = (
+  projectId: string,
+  name: string,
+  access: Access,
+  password?: string,
+): Promise<{ url: string }> =>
+  hostPost("/v1/publishing/publish", {
+    project_id: projectId,
+    name,
+    access,
+    password: password || null,
+  });
+export const setAppPassword = (projectId: string, password: string): Promise<void> =>
+  hostPost("/v1/publishing/password", { project_id: projectId, password });
+/** Null for a password set before passwords were kept. */
+export const revealAppPassword = (projectId: string): Promise<string | null> =>
+  hostPost("/v1/publishing/reveal", { project_id: projectId });
+export const unpublishApp = (projectId: string): Promise<void> =>
+  hostPost("/v1/publishing/unpublish", { project_id: projectId });
+
 // --- Remote mode (ADR-040) ---
 
 export interface ConnectionMode {

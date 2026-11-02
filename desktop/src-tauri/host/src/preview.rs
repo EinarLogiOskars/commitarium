@@ -625,9 +625,12 @@ pub async fn delete_project_data(
 ) -> Result<(), String> {
     prune_sessions(events, manager.clone(), project_id, &[]).await?;
     let check = preview_compose::project_name(&crate::preview_check::check_compose_id(project_id))?;
+    let deployment = preview_compose::project_name(&deployment_compose_id(project_id))?;
     crate::runtime::spawn_blocking(move || {
-        for kind in ["container", "network", "volume", "image"] {
-            remove_labeled_resources(kind, &check);
+        for project in [&check, &deployment] {
+            for kind in ["container", "network", "volume", "image"] {
+                remove_labeled_resources(kind, project);
+            }
         }
     })
     .await
@@ -650,23 +653,33 @@ pub async fn prune_session_previews(
     prune_sessions(&events, manager.clone(), &project_id, &open_sessions).await
 }
 
-async fn prune_sessions(
-    events: &Events,
-    manager: PreviewManager,
-    project_id: &str,
-    open_sessions: &[String],
-) -> Result<(), String> {
+/// The Compose projects a prune keeps besides the open sessions': every
+/// project of this one is named `<project>-…`, and only sessions go.
+fn kept_projects(project_id: &str, open_sessions: &[String]) -> Result<HashSet<String>, String> {
     let mut keep: HashSet<String> = open_sessions
         .iter()
         .map(|feature_id| {
             preview_compose::project_name(&session_compose_id(project_id, feature_id))
         })
         .collect::<Result<_, _>>()?;
-    // A running preview check is not a session; deleting the project removes
-    // its leftovers itself.
+    // A running preview check is not a session, and the deployment holds what
+    // visitors saved; deleting the project removes both itself.
     keep.insert(preview_compose::project_name(
         &crate::preview_check::check_compose_id(project_id),
     )?);
+    keep.insert(preview_compose::project_name(&deployment_compose_id(
+        project_id,
+    ))?);
+    Ok(keep)
+}
+
+async fn prune_sessions(
+    events: &Events,
+    manager: PreviewManager,
+    project_id: &str,
+    open_sessions: &[String],
+) -> Result<(), String> {
+    let keep = kept_projects(project_id, open_sessions)?;
     // Running previews of closed sessions stop first.
     let prefix = format!("{project_id}#");
     let closed_keys = manager
@@ -1738,6 +1751,15 @@ pub(crate) fn bounded(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_prune_of_closed_sessions_keeps_the_deployment() {
+        let kept = kept_projects("prj_todo", &["fea_open".to_string()]).unwrap();
+        let named = |id: &str| preview_compose::project_name(id).unwrap();
+        assert!(kept.contains(&named("prj_todo-live")));
+        assert!(kept.contains(&named("prj_todo-fea_open")));
+        assert!(!kept.contains(&named("prj_todo-fea_closed")));
+    }
 
     #[test]
     fn session_previews_have_their_own_keys_and_compose_projects() {

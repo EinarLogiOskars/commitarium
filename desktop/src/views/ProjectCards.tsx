@@ -22,6 +22,7 @@ import { ASSISTANT_CHANGED, OPEN_PLAN, WRITE_PLAN } from "./chatEvents";
 import { usePlanSwitch } from "./usePlanSwitch";
 import { ActivityDot } from "./chatActivity";
 import { CompactProjectSync } from "./ProjectSyncCard";
+import { DeployCard } from "./DeployCard";
 import { Overlay } from "./Overlay";
 import { PlanOverlay } from "./PlanPage";
 import { PlanInsights } from "./PlanInsights";
@@ -104,6 +105,10 @@ export function ProjectCards({
           toolchain={data.toolchain}
           onOpenPage={() => open("preview")}
         />
+      )}
+      {/* A server deploys apps to the internet; this computer opens them in windows. */}
+      {hasRepo && connectedServer() && (
+        <DeployCard projectId={projectId} onOpenPage={() => open("deployment")} />
       )}
       {/* Sync works with a folder on this computer, so a server's projects have none. */}
       {hasRepo && !connectedServer() && (

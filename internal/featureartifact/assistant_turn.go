@@ -74,6 +74,11 @@ const (
 	// preview check of its commit passes (ADR-028). Guidance says what is
 	// failing, for its agent.
 	AssistantSetUpPreview AssistantActionType = "set_up_preview"
+	// AssistantDeployApp deploys the app's latest merged version on the
+	// server, for visitors (PUBLISHING_PLAN.md). Commitarium records it and
+	// the user's app runs the deploy once they approve it, so it is always a
+	// card, never autopilot's.
+	AssistantDeployApp AssistantActionType = "deploy_app"
 	// AssistantWriteVision has Commitarium write the project's vision on the
 	// assistant's agent from Description: what the project is for, in the
 	// user's words (ADR-020), where the assistant builds everything.
@@ -436,6 +441,7 @@ func (action AssistantAction) validate() error {
 		default:
 			return fmt.Errorf("how must be recheck, continue, message, fresh_conversation, or back_to_ready")
 		}
+	case AssistantDeployApp:
 	case AssistantSetUpPreview:
 		if len(action.Guidance) > MaxGoalBytes {
 			return fmt.Errorf("the preview's guidance is too long")

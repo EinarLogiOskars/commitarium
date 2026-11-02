@@ -505,6 +505,9 @@ func (api *API) approveConversationActionHandler(w http.ResponseWriter, r *http.
 		result, ok = api.applyRecoverWorkOrder(w, r, scope, action)
 	case featureartifact.AssistantSetUpPreview:
 		result, workOrderID, ok = api.applySetUpPreview(w, r, scope, action)
+	case featureartifact.AssistantDeployApp:
+		// The server's host deploys; the app that approved this asks it to.
+		result, ok = "Deploying the latest version for visitors.", true
 	case featureartifact.AssistantWriteVision:
 		result, helper, ok = api.applyWriteVision(w, r, scope, action)
 	case featureartifact.AssistantAnswerHelper:

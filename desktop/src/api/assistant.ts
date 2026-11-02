@@ -60,6 +60,7 @@ export type AssistantActionType =
   | "research"
   | "update_plan"
   | "build_plan"
+  | "deploy_app"
   | "start_planning";
 
 export interface AssistantAction {
