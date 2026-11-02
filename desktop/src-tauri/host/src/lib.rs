@@ -27,4 +27,5 @@ pub mod publishing;
 pub mod runtime;
 pub mod server;
 #[cfg(unix)]
+pub mod server_backups;
 pub mod service;

@@ -1,4 +1,3 @@
-import { NotOnAServer } from "./NotOnAServer";
 import { connectedServer } from "../connection";
 import { useEffect, useState } from "react";
 import { Fact } from "./Fact";
@@ -9,7 +8,11 @@ import {
   onBackupProgress,
   pickFolder,
   restoreBackup,
+  createServerBackup,
+  restoreServerBackup,
+  serverBackups,
   type BackupInspection,
+  type ServerBackup,
   type BackupResult,
 } from "../ipc";
 
@@ -35,6 +38,8 @@ function BackupSectionOnThisComputer({
   /** Set when the free-space preflight is below what a backup wants. */
   diskWarning: string | null;
   onBusyChange: (busy: boolean) => void;
+  /** Whether a work order is running: a server's backup waits for it. */
+  running?: boolean;
 }) {
   const [busy, setBusyState] = useState<Busy>(null);
   const [error, setError] = useState<string | null>(null);
@@ -182,6 +187,107 @@ function BackupSectionOnThisComputer({
 }
 
 export function BackupSection(props: React.ComponentProps<typeof BackupSectionOnThisComputer>) {
-  if (connectedServer()) return <NotOnAServer what="Backups" />;
+  if (connectedServer()) return <ServerBackupSection running={!!props.running} />;
   return <BackupSectionOnThisComputer {...props} />;
+}
+
+// A server's backups (SERVER_COMPLETE_PLAN.md, S1): kept on the server, made
+// each night and on request, the last seven kept.
+function ServerBackupSection({ running }: { running: boolean }) {
+  const [kept, setKept] = useState<ServerBackup[] | null>(null);
+  const [busy, setBusy] = useState<"creating" | "restoring" | null>(null);
+  const [step, setStep] = useState<string | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = () =>
+    void serverBackups()
+      .then(setKept)
+      .catch((e) => setError(String(e)));
+  useEffect(load, []);
+  useEffect(() => {
+    const unlisten = onBackupProgress(setStep);
+    return () => void unlisten.then((stop) => stop());
+  }, []);
+
+  const act = async (
+    kind: "creating" | "restoring",
+    work: () => Promise<unknown>,
+    done: string,
+  ) => {
+    setBusy(kind);
+    setError(null);
+    setMessage(null);
+    try {
+      await work();
+      setMessage(done);
+      load();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(null);
+      setStep(null);
+    }
+  };
+
+  const restore = (backup: ServerBackup) => {
+    if (
+      !window.confirm(
+        `Restore the backup from ${when(backup.created_at_unix_seconds)}? Everything on the server goes back to how it was then: projects, chats, agents' history and deployed apps' data. Work since then is lost.`,
+      )
+    )
+      return;
+    void act("restoring", () => restoreServerBackup(backup.name), "Restored.");
+  };
+
+  return (
+    <section className="set__section">
+      <h3 className="set__heading">Backups on this server</h3>
+      <p className="muted set__note">
+        The server backs itself up each night while no agent is working, and keeps the last seven:
+        projects, chats, agents&apos; history and deployed apps&apos; data. They are kept on the
+        server, so they do not survive losing it. Agent sign-ins are not included.
+      </p>
+      <div className="set__row">
+        <button
+          disabled={busy !== null || running}
+          onClick={() => void act("creating", createServerBackup, "Backed up.")}
+        >
+          {busy === "creating" ? "Backing up…" : "Back up now"}
+        </button>
+        {running && <span className="muted">Waits until no work order is running.</span>}
+      </div>
+      {busy && step && <p className="muted set__note">{step}</p>}
+      {message && <p className="set__note">{message}</p>}
+      {error && <p className="set__note">{error}</p>}
+      {kept && kept.length === 0 && <p className="muted set__note">No backups yet.</p>}
+      {kept?.map((backup) => (
+        <div className="set__row" key={backup.name}>
+          <span>
+            {when(backup.created_at_unix_seconds)}
+            <span className="muted">
+              {" "}
+              · {megabytes(backup.size)} · Commitarium {backup.app_version}
+            </span>
+          </span>
+          <button disabled={busy !== null || running} onClick={() => restore(backup)}>
+            {busy === "restoring" ? "Restoring…" : "Restore"}
+          </button>
+        </div>
+      ))}
+    </section>
+  );
+}
+
+function when(seconds: number): string {
+  return new Date(seconds * 1000).toLocaleString(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  });
+}
+
+function megabytes(bytes: number): string {
+  return bytes < 1_000_000_000
+    ? `${Math.max(1, Math.round(bytes / 1_000_000))} MB`
+    : `${(bytes / 1_000_000_000).toFixed(1)} GB`;
 }

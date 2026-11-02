@@ -27,6 +27,7 @@ use crate::preview::{self, PreviewManager, PreviewTarget};
 use crate::profiles::{self, ProfileManager};
 use crate::publishing::{Access as PublishAccess, Publishing};
 use crate::runtime::block_on;
+use crate::server_backups::{ServerBackups, Stack};
 use crate::{bootstrap, disk, docker, environment, preview_check};
 
 /// How often a quiet stream proves it is alive, and notices a client has gone.
@@ -65,6 +66,7 @@ pub struct Shared {
     previews: PreviewManager,
     deployments: Deployments,
     publishing: Publishing,
+    backups: ServerBackups,
     updater: Arc<CliUpdater>,
     /// Held for writing until leftovers are swept, because a sweep removes
     /// any preview, and one started during it would be taken for a leftover.
@@ -79,6 +81,7 @@ impl Shared {
         Self {
             deployments: Deployments::new(&data_dir),
             publishing: Publishing::new(&data_dir),
+            backups: ServerBackups::new(&data_dir),
             data_dir,
             events: Events::new(bus.clone()),
             bus,
@@ -115,6 +118,26 @@ impl Shared {
         self.publishing
             .clone()
             .keep_in_sync(self.deployments.clone());
+    }
+
+    /// A backup each night, on a server: the app on this computer backs up
+    /// when its user asks.
+    #[cfg(unix)]
+    pub fn keep_nightly_backups(self: &Arc<Self>) {
+        let shared = self.clone();
+        self.backups.clone().keep_nightly(move |backups| {
+            if let Err(error) = backups.create(&shared.stack()) {
+                eprintln!("[backups] the nightly backup failed: {error}");
+            }
+        });
+    }
+
+    fn stack(&self) -> Stack<'_> {
+        Stack {
+            events: self.events.clone(),
+            profiles: &self.profiles,
+            updater: &self.updater,
+        }
     }
 
     /// Publishing is for a server: an app on this computer opens in windows.
@@ -282,6 +305,7 @@ fn respond_to_get(path: &str, shared: &Shared) -> Reply {
         "/v1/disk/space" => respond_with(disk::disk_space_probe(&shared.data_dir)),
         "/v1/profiles" => respond_with(block_on(profiles::list_profiles(&shared.profiles))),
         "/v1/deployments" => respond_with(shared.deployments.list()),
+        "/v1/backups" => respond_with(shared.on_a_server().and_then(|()| shared.backups.list())),
         "/v1/publishing" => respond_with(
             shared
                 .on_a_server()
@@ -323,6 +347,11 @@ struct ApiKey {
 #[derive(Deserialize)]
 struct ProjectRequest {
     project_id: String,
+}
+
+#[derive(Deserialize)]
+struct RestoreBackup {
+    name: String,
 }
 
 #[derive(Deserialize)]
@@ -478,6 +507,15 @@ fn respond_to_post(path: &str, body: &[u8], shared: &Shared) -> Reply {
         }),
         "/v1/deployments/stop" => with_body(body, |stop: ProjectRequest| {
             block_on(shared.deployments.stop(events(), stop.project_id))
+        }),
+        "/v1/backups/create" => respond_with(
+            shared
+                .on_a_server()
+                .and_then(|()| shared.backups.create(&shared.stack())),
+        ),
+        "/v1/backups/restore" => with_body(body, |asked: RestoreBackup| {
+            shared.on_a_server()?;
+            shared.backups.restore(&shared.stack(), &asked.name)
         }),
         "/v1/publishing/domain" => with_body(body, |set: SetDomain| {
             shared.on_a_server()?;

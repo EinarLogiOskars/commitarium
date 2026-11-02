@@ -262,6 +262,22 @@ fn export_backup(
         components.push(component.name.to_string());
     }
 
+    // Deployments' data: what visitors saved (PUBLISHING_PLAN.md).
+    for volume in deployment_volumes()? {
+        let name = format!("{DEPLOYMENT_PREFIX}{volume}");
+        (ctx.progress)(&format!("{action} a deployment's data…"));
+        let filename = format!("{name}.tar.gz");
+        let archive = destination.join(&filename);
+        // Paused, its files hold still while they are copied.
+        let project = volume_project(&volume);
+        set_paused(project, true);
+        let exported = export_volume(&helper_image, &volume, &archive);
+        set_paused(project, false);
+        exported?;
+        hashes.insert(filename, sha256_file(&archive)?);
+        components.push(name);
+    }
+
     let state_dir = destination.join("app-state");
     fs::create_dir_all(&state_dir).map_err(|e| format!("create app-state backup: {e}"))?;
     let app_data = ctx.state_dir.clone();
@@ -357,6 +373,15 @@ fn apply_backup(
     helper_image: &str,
 ) -> Result<(), String> {
     for (index, name) in manifest.components.iter().enumerate() {
+        if let Some(volume) = deployment_volume(name) {
+            (ctx.progress)("Restoring a deployment's data…");
+            restore_volume(
+                helper_image,
+                &volume,
+                &source.join(format!("{name}.tar.gz")),
+            )?;
+            continue;
+        }
         let component = backup_component(name)
             .ok_or_else(|| format!("backup contains unknown component {name}"))?;
         report_component(ctx, "Restoring", name, index, manifest.components.len());
@@ -396,7 +421,7 @@ fn read_backup_manifest(source: &Path, state_files: &[&str]) -> Result<BackupMan
     }
     let mut seen = std::collections::BTreeSet::new();
     for name in &manifest.components {
-        if backup_component(name).is_none() {
+        if backup_component(name).is_none() && deployment_volume(name).is_none() {
             return Err(format!("backup contains unknown component {name}"));
         }
         if !seen.insert(name.as_str()) {
@@ -638,6 +663,163 @@ fn sha256_file(path: &Path) -> Result<String, String> {
     Ok(format!("{:x}", digest.finalize()))
 }
 
+/// A deployment volume's component name: the volume's own, prefixed.
+const DEPLOYMENT_PREFIX: &str = "deployment--";
+
+/// The deployment volume a component names, if it is one.
+fn deployment_volume(name: &str) -> Option<String> {
+    let volume = name.strip_prefix(DEPLOYMENT_PREFIX)?;
+    let valid = volume.starts_with(crate::preview::PREVIEW_TEMP_PREFIX)
+        && volume.contains("-live.")
+        && volume.len() <= 200
+        && volume
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b));
+    valid.then(|| volume.to_string())
+}
+
+/// The Compose project a deployment volume belongs to: its name before the
+/// volume's own.
+fn volume_project(volume: &str) -> &str {
+    volume
+        .rsplit_once('.')
+        .map_or(volume, |(project, _)| project)
+}
+
+/// Every deployment's data volume.
+fn deployment_volumes() -> Result<Vec<String>, String> {
+    let output = docker::docker_command()
+        .args(["volume", "ls", "--format", "{{.Name}}"])
+        .output()
+        .map_err(|e| format!("list volumes: {e}"))?;
+    if !output.status.success() {
+        return Err("could not list Docker volumes".into());
+    }
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|volume| deployment_volume(&format!("{DEPLOYMENT_PREFIX}{volume}")))
+        .collect())
+}
+
+/// The containers of a Compose project.
+fn project_containers(project: &str, running: bool) -> Vec<String> {
+    let mut command = docker::docker_command();
+    command.args(["ps", "--quiet", "--filter"]);
+    command.arg(format!("label=com.docker.compose.project={project}"));
+    if !running {
+        command.arg("--all");
+    }
+    command
+        .output()
+        .map(|output| {
+            String::from_utf8_lossy(&output.stdout)
+                .split_whitespace()
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn set_paused(project: &str, paused: bool) {
+    let containers = project_containers(project, true);
+    if containers.is_empty() {
+        return;
+    }
+    let _ = docker::docker_command()
+        .arg(if paused { "pause" } else { "unpause" })
+        .args(containers)
+        .output();
+}
+
+fn export_volume(image: &str, volume: &str, destination: &Path) -> Result<(), String> {
+    let output =
+        File::create(destination).map_err(|e| format!("create {}: {e}", destination.display()))?;
+    let status = docker::docker_command()
+        .args(["run", "--rm", "--user", "0", "-v"])
+        .arg(format!("{volume}:/data:ro"))
+        .args([
+            "--entrypoint",
+            "/bin/tar",
+            image,
+            "-C",
+            "/data",
+            "-czf",
+            "-",
+            ".",
+        ])
+        .stdout(Stdio::from(output))
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|e| format!("archive {volume}: {e}"))?;
+    if !status.status.success() {
+        return Err(format!(
+            "archive {volume}: {}",
+            String::from_utf8_lossy(&status.stderr).trim()
+        ));
+    }
+    Ok(())
+}
+
+/// Restores a deployment's volume with its app stopped, creating the volume
+/// for a deployment that has not run here yet. Unpacked first, beside the
+/// old data, as the stack's volumes are.
+fn restore_volume(image: &str, volume: &str, archive: &Path) -> Result<(), String> {
+    let project = volume_project(volume);
+    let containers = project_containers(project, true);
+    if !containers.is_empty() {
+        let _ = docker::docker_command()
+            .arg("stop")
+            .args(&containers)
+            .output();
+    }
+    let exists = docker::docker_command()
+        .args(["volume", "inspect", volume])
+        .output()
+        .is_ok_and(|output| output.status.success());
+    if !exists {
+        let name = volume.rsplit_once('.').map_or(volume, |(_, name)| name);
+        let created = docker::docker_command()
+            .args(["volume", "create", "--label"])
+            .arg(format!("com.docker.compose.project={project}"))
+            .arg("--label")
+            .arg(format!("com.docker.compose.volume={name}"))
+            .arg(volume)
+            .output()
+            .map_err(|e| format!("create {volume}: {e}"))?;
+        if !created.status.success() {
+            return Err(format!("could not create {volume}"));
+        }
+    }
+    let input = File::open(archive).map_err(|e| format!("open {}: {e}", archive.display()))?;
+    let staging = format!("/data/{RESTORE_STAGING}");
+    let script = format!(
+        "rm -rf '{staging}' && mkdir '{staging}' && /bin/tar -C '{staging}' -xzf - \
+         && find /data -mindepth 1 -maxdepth 1 ! -name '{RESTORE_STAGING}' -exec rm -rf -- {{}} + \
+         && find '{staging}' -mindepth 1 -maxdepth 1 -exec mv -- {{}} /data/ \\; \
+         && rmdir '{staging}'"
+    );
+    let output = docker::docker_command()
+        .args(["run", "--rm", "-i", "--user", "0", "-v"])
+        .arg(format!("{volume}:/data"))
+        .args(["--entrypoint", "/bin/sh", image, "-c", &script])
+        .stdin(Stdio::from(input))
+        .output()
+        .map_err(|e| format!("restore {volume}: {e}"))?;
+    if !containers.is_empty() {
+        let _ = docker::docker_command()
+            .arg("start")
+            .args(&containers)
+            .output();
+    }
+    if !output.status.success() {
+        return Err(format!(
+            "restore {volume}: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    Ok(())
+}
+
 /// What a backup holds, read and checked without restoring it.
 pub fn inspect(source: &Path, state_files: &[&str]) -> Result<BackupInspection, String> {
     let manifest = read_backup_manifest(source, state_files)?;
@@ -670,6 +852,27 @@ mod tests {
         assert!(safe_relative_path("app-state/ui-state.json").is_ok());
         assert!(safe_relative_path("../ui-state.json").is_err());
         assert!(safe_relative_path("/tmp/ui-state.json").is_err());
+    }
+
+    #[test]
+    fn deployment_volumes_are_named_and_checked() {
+        let volume = "commitarium-preview-prj_todo-live.api-data";
+        assert_eq!(
+            deployment_volume(&format!("{DEPLOYMENT_PREFIX}{volume}")).as_deref(),
+            Some(volume)
+        );
+        assert_eq!(volume_project(volume), "commitarium-preview-prj_todo-live");
+        // Not a deployment's: a preview's, another project's, or unsafe.
+        for name in [
+            "commitarium-preview-prj_todo.api-data",
+            "commitarium_coordinator-data",
+            "commitarium-preview-prj_todo-live.x;rm -rf",
+        ] {
+            assert!(
+                deployment_volume(&format!("{DEPLOYMENT_PREFIX}{name}")).is_none(),
+                "{name}"
+            );
+        }
     }
 
     #[test]
