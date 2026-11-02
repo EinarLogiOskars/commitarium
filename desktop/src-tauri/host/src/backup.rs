@@ -216,12 +216,15 @@ fn report_component(ctx: &Context, action: &str, name: &str, index: usize, total
     let what = match name {
         "coordinator" => "your records",
         "forgejo" => "repositories",
-        "workspaces" => "workspaces",
+        "workspaces" => "agents' working copies",
         "toolchains" => "toolchains and chats",
         _ => "agent history",
     };
     let position = index + 1;
-    report_backup_step(ctx, &format!("{action} {what} ({position} of {total})…"));
+    report_backup_step(
+        ctx,
+        &format!("{action} {what}, step {position} of {total}…"),
+    );
 }
 
 fn export_backup(
@@ -237,8 +240,11 @@ fn export_backup(
 
     let agents = agents::current().unwrap_or_default();
     let all = backup_components(&agents);
+    let deployments = deployment_volumes()?;
+    // Each deployment's data is a step too.
+    let total = all.len() + deployments.len();
     for (index, component) in all.iter().enumerate() {
-        report_component(ctx, action, &component.name, index, all.len());
+        report_component(ctx, action, &component.name, index, total);
         let Some(container_id) = container_id(&component.service)? else {
             if component.required {
                 return Err(format!(
@@ -263,9 +269,12 @@ fn export_backup(
     }
 
     // Deployments' data: what visitors saved (PUBLISHING_PLAN.md).
-    for volume in deployment_volumes()? {
+    for (index, volume) in deployments.into_iter().enumerate() {
         let name = format!("{DEPLOYMENT_PREFIX}{volume}");
-        (ctx.progress)(&format!("{action} a deployment's data…"));
+        let position = all.len() + index + 1;
+        (ctx.progress)(&format!(
+            "{action} a deployed app's data, step {position} of {total}…"
+        ));
         let filename = format!("{name}.tar.gz");
         let archive = destination.join(&filename);
         // Paused, its files hold still while they are copied.
