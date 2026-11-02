@@ -1,3 +1,4 @@
+import { connectedServer } from "../connection";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { getAgentsAtWork } from "../api/projects";
 import { ApiError } from "../api/client";
@@ -104,7 +105,8 @@ export function ProjectCards({
           onOpenPage={() => open("preview")}
         />
       )}
-      {hasRepo && (
+      {/* Sync works with a folder on this computer, so a server's projects have none. */}
+      {hasRepo && !connectedServer() && (
         <section className="shell-card">
           <h2 className="shell-card__head">Sync</h2>
           <CompactProjectSync projectId={projectId} chat={chat} onOpenFull={() => open("sync")} />

@@ -28,6 +28,9 @@ const BACKUP_FORMAT_VERSION: u32 = 1;
 const MAX_NOTIFICATION_IDS: usize = 2_000;
 pub const EXIT_CONFIRMATION_EVENT: &str = "exit-confirmation-requested";
 pub const EXIT_CONFIRMATION_TIMEOUT: Duration = Duration::from_secs(30);
+/// How long the window has to show the quit question before quitting goes on
+/// without it.
+const EXIT_PROMPT_PATIENCE: Duration = Duration::from_secs(3);
 
 const APP_STATE_FILES: &[&str] = &[
     SETTINGS_FILE,
@@ -234,6 +237,8 @@ pub struct ExitCoordinator {
 struct ExitCoordinatorState {
     phase: ExitPhase,
     next_request_id: u64,
+    /// The last request the window said it shows.
+    shown: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -276,6 +281,7 @@ impl Default for ExitCoordinator {
             state: Mutex::new(ExitCoordinatorState {
                 phase: ExitPhase::Idle,
                 next_request_id: 1,
+                shown: None,
             }),
         }
     }
@@ -310,6 +316,25 @@ impl ExitCoordinator {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         if matches!(state.phase, ExitPhase::Pending(_)) {
             state.phase = ExitPhase::Idle;
+            true
+        } else {
+            false
+        }
+    }
+
+    fn shown(&self) {
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        if let ExitPhase::Pending(request_id) = state.phase {
+            state.shown = Some(request_id);
+        }
+    }
+
+    /// A window that cannot show the question, such as a blank one, must not
+    /// keep the app from quitting.
+    fn unshown(&self, request_id: u64) -> bool {
+        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        if state.phase == ExitPhase::Pending(request_id) && state.shown != Some(request_id) {
+            state.phase = ExitPhase::ShuttingDown;
             true
         } else {
             false
@@ -1024,7 +1049,24 @@ pub fn cancel_exit(coordinator: State<'_, ExitCoordinator>) -> bool {
     coordinator.cancel()
 }
 
+/// The window says it shows the quit question.
+#[tauri::command]
+pub fn exit_prompt_shown(coordinator: State<'_, ExitCoordinator>) {
+    coordinator.shown();
+}
+
 pub fn schedule_exit_timeout(app: AppHandle, request_id: u64) {
+    let unanswered = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(EXIT_PROMPT_PATIENCE);
+        if unanswered
+            .state::<ExitCoordinator>()
+            .inner()
+            .unshown(request_id)
+        {
+            launch_exit_shutdown(unanswered);
+        }
+    });
     std::thread::spawn(move || {
         std::thread::sleep(EXIT_CONFIRMATION_TIMEOUT);
         if app.state::<ExitCoordinator>().inner().timeout(request_id) {
@@ -1112,6 +1154,24 @@ mod tests {
         assert!(!coordinator.timeout(request_id));
         assert!(!coordinator.confirm());
         assert_eq!(begin_exit_stop(&coordinator), ExitRequestAction::Wait);
+    }
+
+    #[test]
+    fn quitting_goes_on_when_the_window_cannot_ask() {
+        let coordinator = ExitCoordinator::default();
+        let ExitRequestAction::Prompt(blank) = begin_exit_stop(&coordinator) else {
+            panic!("expected prompt");
+        };
+        assert!(coordinator.unshown(blank));
+        assert_eq!(begin_exit_stop(&coordinator), ExitRequestAction::Wait);
+
+        let coordinator = ExitCoordinator::default();
+        let ExitRequestAction::Prompt(asked) = begin_exit_stop(&coordinator) else {
+            panic!("expected prompt");
+        };
+        coordinator.shown();
+        assert!(!coordinator.unshown(asked));
+        assert!(coordinator.confirm());
     }
 
     #[test]

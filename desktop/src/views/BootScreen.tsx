@@ -1,6 +1,6 @@
 import type { BootPhase } from "../boot/useBoot";
 import type { DockerProbe } from "../ipc";
-import { openExternal, restartApp, chooseThisComputer } from "../ipc";
+import { openExternal, chooseThisComputer } from "../ipc";
 import { connectedServer } from "../connection";
 import "./BootScreen.css";
 
@@ -63,7 +63,9 @@ export function BootScreen({
               )}
               <div className="boot__actions">
                 {server && (
-                  <button onClick={() => void chooseThisComputer().then(restartApp)}>
+                  <button
+                    onClick={() => void chooseThisComputer().then(() => window.location.reload())}
+                  >
                     Use this computer instead
                   </button>
                 )}

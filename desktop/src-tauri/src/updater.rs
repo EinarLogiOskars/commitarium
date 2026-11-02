@@ -132,9 +132,9 @@ fn coordinator_url(path: &str) -> String {
 }
 
 /// A server's work orders do not depend on this app, so they never hold up
-/// its update.
+/// its update. Local ones only run once this computer's host has started.
 async fn running_work_orders(app: &AppHandle) -> Result<Vec<RunningWorkOrder>, String> {
-    if crate::host::is_remote(app) {
+    if !crate::host::local_started(app) {
         return Ok(Vec::new());
     }
     let client = reqwest::Client::builder()

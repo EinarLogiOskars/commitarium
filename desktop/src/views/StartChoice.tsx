@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { connectToServer, restartApp, chooseThisComputer } from "../ipc";
+import { connectToServer, chooseThisComputer } from "../ipc";
 import "./BootScreen.css";
 
 export const INSTALL_COMMAND =
@@ -16,7 +16,7 @@ export function ConnectForm() {
     setError(null);
     try {
       await connectToServer(line);
-      await restartApp();
+      window.location.reload();
     } catch (e) {
       setError(String(e));
       setBusy(false);

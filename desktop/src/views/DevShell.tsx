@@ -14,6 +14,7 @@ import { listFeatures } from "../api/features";
 import { listProjects } from "../api/projects";
 import type { AttentionItem, Feature, Project, RunningWorkOrder } from "../api/types";
 import { ChatView, OPEN_ASSISTANT, OPEN_PROJECT, WORK_CHANGED } from "./ChatView";
+import { PlaceSwitch } from "./PlaceSwitch";
 import {
   ActivityDot,
   chatActivity,
@@ -623,6 +624,9 @@ export function DevShell({
         <div className="chat-side__brand">
           <span>Commitarium</span>
           <span className="pill chat-side__mode">Developer</span>
+        </div>
+        <div className="chat-side__place">
+          <PlaceSwitch />
         </div>
         <div className="chat-side__areas">{areaNav}</div>
         <button className="chat-side__item" onClick={() => void newChat(TOP)}>

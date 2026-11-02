@@ -13,6 +13,7 @@
 
 use std::thread;
 
+use commitarium_host::bridge::Bridge;
 use tauri::ipc::CapabilityBuilder;
 use tauri::{AppHandle, Manager, Url};
 
@@ -47,23 +48,41 @@ pub(crate) fn start(app: &AppHandle) {
             return;
         }
     };
-    let origin = base.as_str().trim_end_matches('/').to_string();
-    let bridge = crate::host::admit_app_pages(app, origin);
-    if let Err(error) = app.add_capability(capability(&base, bridge)) {
+    if let Err(error) = app.add_capability(capability("app-page", &base, COORDINATOR)) {
         eprintln!("[app-pages] could not grant the app windows' page its commands: {error}");
         return;
     }
     app.manage(AppPages { base });
+    for bridge in crate::host::open_bridges(app) {
+        admit_server(app, &bridge);
+    }
+}
+
+/// Lets app windows' pages reach a server's coordinator through its bridge:
+/// the capability's scope, and the bridge's check of their origin, which is
+/// only known once they are served.
+pub(crate) fn admit_server(app: &AppHandle, bridge: &Bridge) {
+    let Some(pages) = app.try_state::<AppPages>() else {
+        // Not served yet: `start` admits it.
+        return;
+    };
+    let base = pages.base.clone();
+    bridge.allow_origin(base.as_str().trim_end_matches('/').to_string());
+    let scope = format!("{}/*", bridge.coordinator_url());
+    let id = format!(
+        "app-page-{}",
+        bridge.base_url().rsplit(':').next().unwrap_or_default()
+    );
+    if let Err(error) = app.add_capability(capability(&id, &base, &scope)) {
+        eprintln!("[app-pages] could not let app windows reach a server: {error}");
+    }
 }
 
 /// The capability of an app window's page: its exact origin, port included,
 /// so the app on another port matches none of it.
-fn capability(base: &Url, bridge: Option<String>) -> CapabilityBuilder {
-    let scopes = std::iter::once(COORDINATOR.to_string())
-        .chain(bridge)
-        .map(|url| serde_json::json!({ "url": url }))
-        .collect();
-    CapabilityBuilder::new("app-page")
+fn capability(id: &str, base: &Url, scope: &str) -> CapabilityBuilder {
+    let scopes = vec![serde_json::json!({ "url": scope })];
+    CapabilityBuilder::new(id)
         .remote(origin_pattern(base))
         .local(false)
         .window("app-*")
