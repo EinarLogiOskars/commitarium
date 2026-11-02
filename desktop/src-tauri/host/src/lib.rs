@@ -22,6 +22,7 @@ pub mod preview_check;
 pub mod preview_compose;
 pub mod process;
 pub mod profiles;
+pub mod publishing;
 pub mod runtime;
 pub mod server;
 #[cfg(unix)]

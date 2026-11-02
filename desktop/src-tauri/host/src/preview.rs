@@ -156,6 +156,15 @@ impl PreviewStatus {
     pub(crate) fn commit_id(&self) -> &str {
         &self.commit_id
     }
+
+    /// The local port of the address it opens on, while it runs.
+    pub(crate) fn open_port(&self) -> Option<u16> {
+        if self.state != PreviewState::Running {
+            return None;
+        }
+        let open = self.urls.iter().find(|url| url.open)?;
+        open.url.strip_prefix("http://127.0.0.1:")?.parse().ok()
+    }
 }
 
 /// What one compose service did: its state, exit code, health, and last log
