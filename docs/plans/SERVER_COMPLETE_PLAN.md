@@ -48,9 +48,11 @@ backups, importing a folder, syncing with a local folder, and the audit viewer.
   of its own, main fast-forwards to them through a pull request the merge
   gate approves, since main takes no push. When it has, the app asks Mayka
   to merge `linked/<branch>` in a work order, which handles any conflict.
-- **Push.** Main goes to a new branch on the linked repository,
-  `commitarium/<commit>`, never to an existing one, and the app offers the
-  host's page to open a pull request from it.
+- **Push.** Main goes to a branch the user names there (offered: the last
+  one, at first `commitarium`), never to the main branch itself and never
+  forced: the branch is made or moved forward. The push form reminds the user
+  that it is a branch of its own, to merge into main there, and the app then
+  offers the host's page to open that pull request.
 - The first version used Forgejo's push mirror, which force-pushes and so
   could erase commits made on the remote; a later one compared the sides and
   could sync on its own. Divergence is the user's call (as in two-way sync on
