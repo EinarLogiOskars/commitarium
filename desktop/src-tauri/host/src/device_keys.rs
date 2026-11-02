@@ -213,7 +213,9 @@ pub async fn pair(line: &str, name: &str, device: &Identity) -> Result<PairedHos
 }
 
 fn refused() -> String {
-    "The code did not work. Make a new one on the server and try again.".to_string()
+    "The code did not work: it lasts 5 minutes and works once. On the server, run \
+     sudo commitarium-host pair for a new one."
+        .to_string()
 }
 
 async fn post<B: Serialize, A: for<'de> Deserialize<'de>>(
@@ -221,10 +223,14 @@ async fn post<B: Serialize, A: for<'de> Deserialize<'de>>(
     url: &str,
     body: &B,
 ) -> Result<A, String> {
-    let answer =
-        client.post(url).json(body).send().await.map_err(|_| {
+    // A server whose pairing has closed answers the connection, then drops it.
+    let answer = client.post(url).json(body).send().await.map_err(|error| {
+        if error.is_connect() || error.is_timeout() {
             "Could not reach the server. Check its address and firewall.".to_string()
-        })?;
+        } else {
+            refused()
+        }
+    })?;
     if !answer.status().is_success() {
         return Err(refused());
     }

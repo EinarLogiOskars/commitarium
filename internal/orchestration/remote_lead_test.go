@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -2486,7 +2487,8 @@ func TestRemoteReviewerRecoveryReattachesAndPublishesItsResponse(t *testing.T) {
 
 func newRemoteLeadExecution(t *testing.T) (*sql.DB, *execution.Service, project.Project, feature.Feature) {
 	t.Helper()
-	db, err := database.OpenSQLite(t.Context(), filepath.Join(t.TempDir(), "coordinator.db"))
+	dir := settledTempDir(t)
+	db, err := database.OpenSQLite(t.Context(), filepath.Join(dir, "coordinator.db"))
 	if err != nil {
 		t.Fatalf("open database: %v", err)
 	}
@@ -4055,4 +4057,31 @@ func TestRemoteLeadResendsASessionTurnThatNeverReachedItsWorker(t *testing.T) {
 		!strings.HasSuffix(last.Instructions, "Make the accent colour deep red.") {
 		t.Fatalf("the resent turn lost its message: %+v", last)
 	}
+}
+
+// settledTempDir is a temporary directory removed once the test's background
+// work has let go of it. A starter's goroutines outlive the test by a moment:
+// t.Context() is cancelled first, but a query already running can recreate
+// SQLite's files while t.TempDir would be removing them.
+func settledTempDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "orchestration-")
+	if err != nil {
+		t.Fatalf("make temporary directory: %v", err)
+	}
+	t.Cleanup(func() {
+		deadline := time.Now().Add(10 * time.Second)
+		for {
+			err := os.RemoveAll(dir)
+			if err == nil {
+				return
+			}
+			if time.Now().After(deadline) {
+				t.Errorf("remove temporary directory: %v", err)
+				return
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+	})
+	return dir
 }

@@ -83,6 +83,13 @@
   font-size: var(--text-base, 13px);
 }
 
+/* A command or line to copy: wraps anywhere instead of running off the card. */
+.boot__command {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+
 /* Technical detail of a failure: mono, inside a faint red outline. */
 .boot__detail--error {
   width: 100%;

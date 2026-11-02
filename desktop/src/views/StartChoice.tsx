@@ -39,7 +39,7 @@ export function ConnectForm() {
         </button>
       </div>
       <p className="boot__detail">No server set up yet? Run this on it:</p>
-      <code className="boot__detail">{INSTALL_COMMAND}</code>
+      <code className="boot__detail boot__command">{INSTALL_COMMAND}</code>
     </>
   );
 }

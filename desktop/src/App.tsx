@@ -25,6 +25,7 @@ import { Agents } from "./views/Agents";
 import { ForgejoViewer } from "./views/ForgejoViewer";
 import { UpdateModal } from "./views/UpdateModal";
 import { useDesktopUpdate } from "./update/useDesktopUpdate";
+import { markOffered, offeredVersion, shouldOffer } from "./update/offer";
 import { DEV_MODE_KEY } from "./devMode";
 import "./App.css";
 
@@ -138,6 +139,14 @@ function App() {
   useEffect(() => {
     if (updateActive) setShowUpdate(true);
   }, [updateActive]);
+  // A new version is offered once, on its own, when nothing is running.
+  const foundVersion = update.update?.version;
+  const runningCount = attention.running.length;
+  useEffect(() => {
+    if (!shouldOffer(update.status, foundVersion, runningCount, offeredVersion())) return;
+    markOffered(foundVersion!);
+    setShowUpdate(true);
+  }, [update.status, foundVersion, runningCount]);
   const updateNotice =
     update.status === "available" || update.status === "blocked" || update.status === "installing";
   const desktop = useDesktopSettings();

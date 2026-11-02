@@ -223,9 +223,23 @@ async fn a_code_expires() {
         .unwrap();
     tokio::time::sleep(Duration::from_millis(100)).await;
     let line = format!("commitarium://{}#{}", fixture.address, opened.code);
-    assert!(pair(&line, "late", &Identity::generate().unwrap())
-        .await
-        .is_err());
+    let Err(late) = pair(&line, "late", &Identity::generate().unwrap()).await else {
+        panic!("an expired code paired");
+    };
+    // It says the code is the problem, not the address.
+    assert!(late.contains("5 minutes"), "{late}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_address_with_no_server_says_so() {
+    let free = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = free.local_addr().unwrap();
+    drop(free);
+    let line = format!("commitarium://{address}#ABCD1234");
+    let Err(error) = pair(&line, "nowhere", &Identity::generate().unwrap()).await else {
+        panic!("paired with no server");
+    };
+    assert!(error.contains("Could not reach"), "{error}");
 }
 
 #[tokio::test(flavor = "multi_thread")]
