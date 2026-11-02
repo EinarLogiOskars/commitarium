@@ -737,8 +737,13 @@ func run(ctx context.Context, coordinatorConfig config) error {
 		go assistantWatcher.Run(ctx)
 	}
 
+	// Push mirrors keep a project's code on a git remote (S2).
+	routes := http.NewServeMux()
+	routes.Handle("/", handler)
+	httpapi.RegisterMirrorRoutes(routes, projectService, forgejoClient)
+
 	log.Print("Listening...")
-	if err := http.ListenAndServe(":8080", handler); err != nil {
+	if err := http.ListenAndServe(":8080", routes); err != nil {
 		return fmt.Errorf("serve coordinator API: %w", err)
 	}
 

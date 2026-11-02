@@ -67,6 +67,14 @@ and restores one. They stay on the server, so they do not survive losing it;
 a git remote (Sync) keeps a copy of the code elsewhere. Agent sign-ins and
 device keys are not in a backup.
 
+## Code on a git remote
+
+On a server, a project's code lives in that server's Forgejo. To keep a copy
+elsewhere, create an empty repository on GitHub or another git host, and an
+access token that can push to it. Then, on the project's Git remote card,
+give the repository's https address and the token. Commitarium pushes to it
+after every merge; the token stays in Forgejo.
+
 ## Reaching the server
 
 **With Tailscale.** This is the best choice for a server at home, because it

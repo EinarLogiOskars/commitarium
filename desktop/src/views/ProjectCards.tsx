@@ -23,6 +23,7 @@ import { usePlanSwitch } from "./usePlanSwitch";
 import { ActivityDot } from "./chatActivity";
 import { CompactProjectSync } from "./ProjectSyncCard";
 import { DeployCard } from "./DeployCard";
+import { GitRemote } from "./GitRemote";
 import { Overlay } from "./Overlay";
 import { PlanOverlay } from "./PlanPage";
 import { PlanInsights } from "./PlanInsights";
@@ -109,6 +110,13 @@ export function ProjectCards({
       {/* A server deploys apps to the internet; this computer opens them in windows. */}
       {hasRepo && connectedServer() && (
         <DeployCard projectId={projectId} onOpenPage={() => open("deployment")} />
+      )}
+      {/* On a server, the code's other copy is a git remote. */}
+      {hasRepo && connectedServer() && (
+        <section className="shell-card">
+          <h2 className="shell-card__head">Git remote</h2>
+          <GitRemote projectId={projectId} compact />
+        </section>
       )}
       {/* Sync works with a folder on this computer, so a server's projects have none. */}
       {hasRepo && !connectedServer() && (
