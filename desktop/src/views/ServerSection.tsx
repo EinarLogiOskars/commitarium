@@ -83,6 +83,7 @@ function ConnectedServer({ server, running }: { server: string; running: boolean
       await installHostUpdate();
       // The server restarts itself, and the app finds it again.
       setUpdate(null);
+      window.dispatchEvent(new Event(SERVER_UPDATED));
     } catch (e) {
       setError(String(e));
     }
@@ -128,7 +129,7 @@ function ConnectedServer({ server, running }: { server: string; running: boolean
             <p className="muted set__note">
               Paste this into Commitarium on the other device. It works once, for 5 minutes.
             </p>
-            <code>{line}</code>
+            <code className="boot__command">{line}</code>
           </>
         )}
       </section>
@@ -137,15 +138,23 @@ function ConnectedServer({ server, running }: { server: string; running: boolean
   );
 }
 
+const SERVER_UPDATED = "commitarium:server-updated";
+
 // Tells the user when their server has an update, wherever they are.
 export function ServerBanner({ onOpen }: { onOpen: () => void }) {
   const [latest, setLatest] = useState<string | null>(null);
 
   useEffect(() => {
     if (!connectedServer()) return;
-    void hostUpdate()
-      .then((update) => setLatest(update.available ? update.latest : null))
-      .catch(() => setLatest(null));
+    const check = () =>
+      void hostUpdate()
+        .then((update) => setLatest(update.available ? update.latest : null))
+        .catch(() => setLatest(null));
+    // Once an update starts, the banner has nothing left to say.
+    const updated = () => setLatest(null);
+    check();
+    window.addEventListener(SERVER_UPDATED, updated);
+    return () => window.removeEventListener(SERVER_UPDATED, updated);
   }, []);
 
   if (!latest) return null;

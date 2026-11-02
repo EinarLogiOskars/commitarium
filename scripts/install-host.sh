@@ -73,7 +73,8 @@ create_user() {
     getent passwd "$SERVICE_ID" >/dev/null && stop "user id $SERVICE_ID is already in use."
     getent group "$SERVICE_ID" >/dev/null && stop "group id $SERVICE_ID is already in use."
     groupadd --gid "$SERVICE_ID" "$SERVICE_USER"
-    useradd --uid "$SERVICE_ID" --gid "$SERVICE_ID" --home-dir "$DATA_DIR" \
+    # The containers' id is above the range useradd expects, which it warns about.
+    useradd -K UID_MAX="$SERVICE_ID" --uid "$SERVICE_ID" --gid "$SERVICE_ID" --home-dir "$DATA_DIR" \
       --no-create-home --shell /usr/sbin/nologin "$SERVICE_USER"
   fi
   [ "$(id -u "$SERVICE_USER")" -eq "$SERVICE_ID" ] ||

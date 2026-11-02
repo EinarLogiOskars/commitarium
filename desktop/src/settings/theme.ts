@@ -1,4 +1,4 @@
-// The app's appearance: light (the default), dark, or following the system.
+// The app's appearance: light, dark, or following the system (the default).
 // It is this machine's preference, so it lives in local storage, and it is
 // applied before the first render so the app never flashes the wrong theme.
 
@@ -13,7 +13,7 @@ export function readTheme(): Theme {
   } catch {
     // Unavailable storage keeps the default.
   }
-  return "light";
+  return "system";
 }
 
 export function applyTheme(theme: Theme) {

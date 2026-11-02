@@ -7,6 +7,7 @@ use commitarium_host::device_keys::{host_client, pair, Identity, PairedHost};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
+use std::sync::Mutex;
 use tauri::AppHandle;
 
 const FILE: &str = "connection.json";
@@ -66,7 +67,22 @@ fn save(app: &AppHandle, saved: &Saved) -> Result<(), String> {
     fs::write(path(app)?, body).map_err(|e| format!("save the connection: {e}"))
 }
 
+/// The device key, read from the keychain once per launch: each read can ask
+/// the user for their password.
 fn device_identity() -> Result<Identity, String> {
+    static READ: Mutex<Option<Identity>> = Mutex::new(None);
+    let mut read = READ
+        .lock()
+        .map_err(|_| "the device key is unavailable".to_string())?;
+    if let Some(identity) = read.as_ref() {
+        return Ok(identity.clone());
+    }
+    let identity = keychain_identity()?;
+    *read = Some(identity.clone());
+    Ok(identity)
+}
+
+fn keychain_identity() -> Result<Identity, String> {
     let entry = keyring::Entry::new(KEYCHAIN_SERVICE, KEYCHAIN_ENTRY)
         .map_err(|e| format!("open the keychain: {e}"))?;
     match entry.get_password() {
