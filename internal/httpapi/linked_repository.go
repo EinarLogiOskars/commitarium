@@ -12,15 +12,14 @@ import (
 	"github.com/EinarLogiOskars/commitarium/internal/project"
 )
 
-// LinkedRepositories keeps projects in step with a repository on GitHub or
-// another git host (SERVER_COMPLETE_PLAN.md, S2).
+// LinkedRepositories links projects to a repository on GitHub or another
+// git host, to pull from and push to (SERVER_COMPLETE_PLAN.md, S2).
 type LinkedRepositories interface {
-	Get(ctx context.Context, projectID string) (linkedrepo.View, error)
+	Get(projectID string) (linkedrepo.View, error)
 	Link(ctx context.Context, projectID, url, username, token string) error
 	Unlink(projectID string) error
-	SetAutomatic(projectID string, automatic bool) error
-	BringIn(ctx context.Context, projectID string) (linkedrepo.Comparison, error)
-	Push(ctx context.Context, projectID string) (linkedrepo.Comparison, error)
+	Pull(ctx context.Context, projectID string) (linkedrepo.Pulled, error)
+	Push(ctx context.Context, projectID string) (linkedrepo.Pushed, error)
 }
 
 type linkRequest struct {
@@ -40,24 +39,16 @@ func RegisterLinkedRepositoryRoutes(mux *http.ServeMux, linked LinkedRepositorie
 			writeError(w, http.StatusNotFound, "project_not_found", "project not found")
 		case errors.Is(err, linkedrepo.ErrInvalidLink), errors.Is(err, linkedrepo.ErrNoToken):
 			writeError(w, http.StatusBadRequest, "invalid_link", err.Error())
-		case errors.Is(err, linkedrepo.ErrTheirsAhead), errors.Is(err, forgejo.ErrNotFastForward),
-			errors.Is(err, linkedrepo.ErrNoRepository):
+		case errors.Is(err, forgejo.ErrNotFastForward), errors.Is(err, linkedrepo.ErrNoRepository):
 			writeError(w, http.StatusConflict, "not_in_step", err.Error())
 		default:
 			log.Printf("linked repository: %v", err)
 			writeError(w, http.StatusBadGateway, "sync_failed", err.Error())
 		}
 	}
-	answer := func(w http.ResponseWriter, comparison linkedrepo.Comparison, err error) {
-		if err != nil {
-			fail(w, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, comparison, "comparison")
-	}
 
 	mux.HandleFunc("GET "+path, func(w http.ResponseWriter, r *http.Request) {
-		view, err := linked.Get(r.Context(), r.PathValue("id"))
+		view, err := linked.Get(r.PathValue("id"))
 		if err != nil {
 			fail(w, err)
 			return
@@ -83,26 +74,20 @@ func RegisterLinkedRepositoryRoutes(mux *http.ServeMux, linked LinkedRepositorie
 		}
 		w.WriteHeader(http.StatusNoContent)
 	})
-	mux.HandleFunc("PUT "+path+"/automatic", func(w http.ResponseWriter, r *http.Request) {
-		var request struct {
-			Automatic bool `json:"automatic"`
-		}
-		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<10)).Decode(&request); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid_request", "the setting could not be read")
-			return
-		}
-		if err := linked.SetAutomatic(r.PathValue("id"), request.Automatic); err != nil {
+	mux.HandleFunc("POST "+path+"/pull", func(w http.ResponseWriter, r *http.Request) {
+		pulled, err := linked.Pull(r.Context(), r.PathValue("id"))
+		if err != nil {
 			fail(w, err)
 			return
 		}
-		w.WriteHeader(http.StatusNoContent)
-	})
-	mux.HandleFunc("POST "+path+"/bring-in", func(w http.ResponseWriter, r *http.Request) {
-		comparison, err := linked.BringIn(r.Context(), r.PathValue("id"))
-		answer(w, comparison, err)
+		writeJSON(w, http.StatusOK, pulled, "pull")
 	})
 	mux.HandleFunc("POST "+path+"/push", func(w http.ResponseWriter, r *http.Request) {
-		comparison, err := linked.Push(r.Context(), r.PathValue("id"))
-		answer(w, comparison, err)
+		pushed, err := linked.Push(r.Context(), r.PathValue("id"))
+		if err != nil {
+			fail(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, pushed, "push")
 	})
 }

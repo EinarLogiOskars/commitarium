@@ -1,8 +1,9 @@
-// Package linkedrepo keeps a project in step with a repository on GitHub or
-// another git host, both ways (SERVER_COMPLETE_PLAN.md, S2). Commits there
-// come in as a fast-forward of the project's main; main goes out the same
-// way. Nothing is ever forced: when both sides moved, the user decides, and
-// Mayka can merge them in a work order.
+// Package linkedrepo links a project to a repository on GitHub or another
+// git host (SERVER_COMPLETE_PLAN.md, S2). Both ways are the user's to start:
+// Pull brings the repository's commits into main, as a fast-forward, or onto
+// a branch Mayka merges when main has commits of its own. Push sends main to
+// a new branch there, for a pull request the user opens. Nothing is ever
+// forced, and nothing syncs on its own.
 package linkedrepo
 
 import (
@@ -12,7 +13,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"net/url"
 	"os"
 	"os/exec"
@@ -37,59 +37,56 @@ var (
 	ErrNoRepository = errors.New("the project has no repository yet")
 )
 
-// The states of the two sides.
+// What a pull did.
 const (
-	Same        = "same"
-	TheirsAhead = "theirs_ahead"
-	OursAhead   = "ours_ahead"
-	Diverged    = "diverged"
+	UpToDate = "up_to_date"
+	PulledIn = "pulled"
+	// NeedsMerge is a pull that left the commits on the linked branch,
+	// since main has commits of its own: Mayka merges them.
+	NeedsMerge = "needs_merge"
 )
 
 // BranchPrefix names the project branch the linked repository's commits
-// land on before they reach main, and stay on when both sides moved.
+// land on before they reach main, and stay on when main has its own.
 const BranchPrefix = "linked/"
 
-const (
-	checkEvery = 5 * time.Minute
-	// viewFresh is how long a comparison is shown before the remote is
-	// asked again.
-	viewFresh = time.Minute
-)
+// PushPrefix names the branches Push makes on the linked repository.
+const PushPrefix = "commitarium/"
 
 // Link is a project's linked repository. Its token stays in the
 // coordinator's credentials, out of agents' reach and out of backups.
 type Link struct {
-	URL       string    `json:"url"`
-	Branch    string    `json:"branch"`
-	Username  string    `json:"username,omitempty"`
-	Token     string    `json:"token,omitempty"`
-	Automatic bool      `json:"automatic"`
-	PulledAt  time.Time `json:"pulled_at,omitzero"`
-	PushedAt  time.Time `json:"pushed_at,omitzero"`
-	// LastError is what the last automatic sync ran into.
-	LastError string `json:"last_error,omitempty"`
-}
-
-// Comparison is how the two sides stand: commits each has that the other
-// lacks.
-type Comparison struct {
-	State  string `json:"state"`
-	Theirs int    `json:"theirs"`
-	Ours   int    `json:"ours"`
+	URL      string    `json:"url"`
+	Branch   string    `json:"branch"`
+	Username string    `json:"username,omitempty"`
+	Token    string    `json:"token,omitempty"`
+	PulledAt time.Time `json:"pulled_at,omitzero"`
+	PushedAt time.Time `json:"pushed_at,omitzero"`
 }
 
 // View is a link as the app shows it, without its token.
 type View struct {
-	URL          string      `json:"url"`
-	Branch       string      `json:"branch"`
-	LocalBranch  string      `json:"local_branch"`
-	HasToken     bool        `json:"has_token"`
-	Automatic    bool        `json:"automatic"`
-	PulledAt     time.Time   `json:"pulled_at,omitzero"`
-	PushedAt     time.Time   `json:"pushed_at,omitzero"`
-	LastError    string      `json:"last_error,omitempty"`
-	Comparison   *Comparison `json:"comparison,omitempty"`
-	CompareError string      `json:"compare_error,omitempty"`
+	URL         string    `json:"url"`
+	Branch      string    `json:"branch"`
+	LocalBranch string    `json:"local_branch"`
+	HasToken    bool      `json:"has_token"`
+	PulledAt    time.Time `json:"pulled_at,omitzero"`
+	PushedAt    time.Time `json:"pushed_at,omitzero"`
+}
+
+// Pulled is what a pull did, and how many commits it brought.
+type Pulled struct {
+	Outcome     string `json:"outcome"`
+	Commits     int    `json:"commits"`
+	LocalBranch string `json:"local_branch"`
+}
+
+// Pushed is the branch a push made, and where to open its pull request.
+// An empty branch means main had nothing the repository lacks.
+type Pushed struct {
+	Branch      string `json:"branch,omitempty"`
+	Commits     int    `json:"commits"`
+	PullRequest string `json:"pull_request_url,omitempty"`
 }
 
 type Projects interface {
@@ -123,17 +120,10 @@ type Service struct {
 	landing    Landing
 	git        func(ctx context.Context, dir string, env []string, args ...string) (string, error)
 
-	// mu guards the links file and the caches; work holds git work to one
-	// project at a time across all.
-	mu    sync.Mutex
-	work  sync.Mutex
-	views map[string]cachedComparison
-}
-
-type cachedComparison struct {
-	at         time.Time
-	comparison Comparison
-	err        string
+	// mu guards the links file; work holds git work to one project at a
+	// time across all.
+	mu   sync.Mutex
+	work sync.Mutex
 }
 
 func NewService(config Config) (*Service, error) {
@@ -153,40 +143,19 @@ func NewService(config Config) (*Service, error) {
 		projects:   config.Projects,
 		landing:    config.Landing,
 		git:        runGit,
-		views:      map[string]cachedComparison{},
 	}, nil
 }
 
-// Get returns the project's link, with how the two sides stand.
-func (service *Service) Get(ctx context.Context, projectID string) (View, error) {
+// Get returns the project's link.
+func (service *Service) Get(projectID string) (View, error) {
 	link, err := service.link(projectID)
 	if err != nil {
 		return View{}, err
 	}
-	view := View{
+	return View{
 		URL: link.URL, Branch: link.Branch, LocalBranch: BranchPrefix + link.Branch,
-		HasToken: link.Token != "", Automatic: link.Automatic,
-		PulledAt: link.PulledAt, PushedAt: link.PushedAt, LastError: link.LastError,
-	}
-	service.mu.Lock()
-	cached, fresh := service.views[projectID]
-	service.mu.Unlock()
-	if !fresh || time.Since(cached.at) > viewFresh {
-		cached = cachedComparison{at: time.Now()}
-		err := service.withSides(ctx, projectID, link, func(sides) error { return nil }, &cached.comparison)
-		if err != nil {
-			cached.err = err.Error()
-		}
-		service.mu.Lock()
-		service.views[projectID] = cached
-		service.mu.Unlock()
-	}
-	if cached.err != "" {
-		view.CompareError = cached.err
-	} else {
-		view.Comparison = &cached.comparison
-	}
-	return view, nil
+		HasToken: link.Token != "", PulledAt: link.PulledAt, PushedAt: link.PushedAt,
+	}, nil
 }
 
 // Link links the project to the repository at rawURL, on its default
@@ -210,7 +179,7 @@ func (service *Service) Link(ctx context.Context, projectID, rawURL, username, t
 	if link.Branch == "" {
 		return fmt.Errorf("%w: the repository has no default branch yet", ErrInvalidLink)
 	}
-	return service.update(projectID, func(links map[string]Link) {
+	return service.update(func(links map[string]Link) {
 		if old, found := links[projectID]; found && old.URL == link.URL && link.Token == "" {
 			link.Token, link.Username = old.Token, old.Username
 		}
@@ -220,137 +189,99 @@ func (service *Service) Link(ctx context.Context, projectID, rawURL, username, t
 
 // Unlink forgets the link and its token. Both repositories keep their code.
 func (service *Service) Unlink(projectID string) error {
-	return service.update(projectID, func(links map[string]Link) { delete(links, projectID) })
+	return service.update(func(links map[string]Link) { delete(links, projectID) })
 }
 
-// SetAutomatic turns syncing on its own on or off.
-func (service *Service) SetAutomatic(projectID string, automatic bool) error {
-	if _, err := service.link(projectID); err != nil {
-		return err
-	}
-	return service.update(projectID, func(links map[string]Link) {
-		link := links[projectID]
-		link.Automatic = automatic
-		links[projectID] = link
-	})
-}
-
-// BringIn brings the linked repository's new commits into main when main
-// has none of its own. Either way they land on the project's linked/
-// branch, so when both sides moved Mayka can merge them from there.
-func (service *Service) BringIn(ctx context.Context, projectID string) (Comparison, error) {
+// Pull brings the linked repository's new commits into main when main has
+// none of its own. Either way they land on the project's linked/ branch,
+// so when main has its own Mayka can merge them from there.
+func (service *Service) Pull(ctx context.Context, projectID string) (Pulled, error) {
 	link, err := service.link(projectID)
 	if err != nil {
-		return Comparison{}, err
+		return Pulled{}, err
 	}
-	var comparison Comparison
+	local := BranchPrefix + link.Branch
+	pulled := Pulled{Outcome: UpToDate, LocalBranch: local}
 	err = service.withSides(ctx, projectID, link, func(s sides) error {
-		if comparison.State != TheirsAhead && comparison.State != Diverged {
+		pulled.Commits = s.theirsOnly
+		if s.theirsOnly == 0 {
 			return nil
 		}
-		local := BranchPrefix + link.Branch
 		if _, err := service.git(ctx, s.dir, s.forgejoEnv, "push", "--force", s.forgejoURL,
 			s.theirs+":refs/heads/"+local); err != nil {
 			return fmt.Errorf("the commits could not be copied to the project: %s", gitReason(err))
 		}
-		if comparison.State == Diverged {
-			return nil
+		if s.oursOnly > 0 {
+			pulled.Outcome = NeedsMerge
+		} else {
+			err := service.landing.FastForwardBranch(ctx, s.repository.Owner, s.repository.Name,
+				s.repository.DefaultBranch, local, s.theirs,
+				fmt.Sprintf("Pull %d commit%s from %s", s.theirsOnly, plural(s.theirsOnly), link.URL))
+			if err != nil {
+				return err
+			}
+			pulled.Outcome = PulledIn
 		}
-		err := service.landing.FastForwardBranch(ctx, s.repository.Owner, s.repository.Name,
-			s.repository.DefaultBranch, local, s.theirs,
-			fmt.Sprintf("Bring in %d commit%s from %s", comparison.Theirs, plural(comparison.Theirs), link.URL))
-		if err != nil {
-			return err
-		}
-		comparison = Comparison{State: Same}
-		return service.update(projectID, func(links map[string]Link) {
+		return service.update(func(links map[string]Link) {
 			stored := links[projectID]
 			stored.PulledAt = time.Now().UTC()
 			links[projectID] = stored
 		})
-	}, &comparison)
-	return comparison, err
+	})
+	return pulled, err
 }
 
-// Push sends main's new commits to the linked repository, only ever as a
-// fast-forward: a repository with commits main lacks refuses it.
-func (service *Service) Push(ctx context.Context, projectID string) (Comparison, error) {
+// Push sends main to a new branch on the linked repository, named for its
+// commit, for a pull request there. No branch of theirs is touched.
+func (service *Service) Push(ctx context.Context, projectID string) (Pushed, error) {
 	link, err := service.link(projectID)
 	if err != nil {
-		return Comparison{}, err
+		return Pushed{}, err
 	}
 	if link.Token == "" {
-		return Comparison{}, ErrNoToken
+		return Pushed{}, ErrNoToken
 	}
-	var comparison Comparison
+	var pushed Pushed
 	err = service.withSides(ctx, projectID, link, func(s sides) error {
-		switch comparison.State {
-		case Same:
+		pushed.Commits = s.oursOnly
+		if s.oursOnly == 0 {
 			return nil
-		case TheirsAhead, Diverged:
-			return ErrTheirsAhead
 		}
-		// No --force: git refuses anything but a fast-forward, should the
-		// repository move between the fetch and the push.
+		branch := PushPrefix + s.ours[:min(8, len(s.ours))]
+		// No --force: a branch of that name already holds this commit or
+		// is someone else's.
 		if _, err := service.git(ctx, s.dir, remoteEnvironment(link), "push", link.URL,
-			s.ours+":refs/heads/"+link.Branch); err != nil {
-			if strings.Contains(err.Error(), "fetch first") || strings.Contains(err.Error(), "non-fast-forward") {
-				return ErrTheirsAhead
-			}
+			s.ours+":refs/heads/"+branch); err != nil {
 			return fmt.Errorf("the linked repository refused the push: %s", gitReason(err))
 		}
-		comparison = Comparison{State: Same}
-		return service.update(projectID, func(links map[string]Link) {
+		pushed.Branch = branch
+		pushed.PullRequest = pullRequestURL(link.URL, link.Branch, branch)
+		return service.update(func(links map[string]Link) {
 			stored := links[projectID]
 			stored.PushedAt = time.Now().UTC()
 			links[projectID] = stored
 		})
-	}, &comparison)
-	return comparison, err
+	})
+	return pushed, err
 }
 
-// KeepInStep syncs the projects set to sync on their own, every few
-// minutes, until ctx ends: their commits come in, main's go out. When both
-// moved it does nothing; the user sees that and decides.
-func (service *Service) KeepInStep(ctx context.Context) {
-	ticker := time.NewTicker(checkEvery)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-		}
-		links, err := service.load()
-		if err != nil {
-			continue
-		}
-		for projectID, link := range links {
-			if !link.Automatic {
-				continue
-			}
-			problem := ""
-			comparison, err := service.BringIn(ctx, projectID)
-			if err == nil && comparison.State == Same && link.Token != "" {
-				_, err = service.Push(ctx, projectID)
-			}
-			if err != nil {
-				problem = err.Error()
-			} else if comparison.State == Diverged {
-				problem = "Both sides have new commits; ask Mayka to merge them."
-			}
-			if problem != link.LastError {
-				if err := service.update(projectID, func(links map[string]Link) {
-					stored, found := links[projectID]
-					if found {
-						stored.LastError = problem
-						links[projectID] = stored
-					}
-				}); err != nil {
-					log.Printf("linked repository %s: %v", projectID, err)
-				}
-			}
-		}
+// pullRequestURL is the page where the host opens a pull request from
+// branch into base: GitHub's and GitLab's own, and Forgejo's and Gitea's
+// compare page for any other.
+func pullRequestURL(remoteURL, base, branch string) string {
+	parsed, err := url.Parse(strings.TrimSuffix(remoteURL, ".git"))
+	if err != nil {
+		return ""
+	}
+	web := parsed.Scheme + "://" + parsed.Host + strings.TrimSuffix(parsed.Path, "/")
+	switch parsed.Host {
+	case "github.com":
+		return web + "/compare/" + base + "..." + branch + "?expand=1"
+	case "gitlab.com":
+		return web + "/-/merge_requests/new?merge_request%5Bsource_branch%5D=" + url.QueryEscape(branch) +
+			"&merge_request%5Btarget_branch%5D=" + url.QueryEscape(base)
+	default:
+		return web + "/compare/" + base + "..." + branch
 	}
 }
 
@@ -362,13 +293,15 @@ type sides struct {
 	forgejoEnv []string
 	ours       string
 	theirs     string
+	// oursOnly and theirsOnly count the commits each side has that the
+	// other lacks.
+	oursOnly   int
+	theirsOnly int
 }
 
-// withSides fetches main and the linked branch, compares them into
-// comparison, then runs work, one project at a time.
-func (service *Service) withSides(
-	ctx context.Context, projectID string, link Link, work func(sides) error, comparison *Comparison,
-) error {
+// withSides fetches main and the linked branch, compares them, then runs
+// work, one project at a time.
+func (service *Service) withSides(ctx context.Context, projectID string, link Link, work func(sides) error) error {
 	repository, err := service.repository(ctx, projectID)
 	if err != nil {
 		return err
@@ -413,30 +346,9 @@ func (service *Service) withSides(
 	if err != nil || len(fields) != 2 {
 		return fmt.Errorf("the two sides could not be compared: %s", gitReason(err))
 	}
-	ours, _ := strconv.Atoi(fields[0])
-	theirs, _ := strconv.Atoi(fields[1])
-	*comparison = Comparison{State: state(ours, theirs), Ours: ours, Theirs: theirs}
-	err = work(s)
-	service.mu.Lock()
-	delete(service.views, projectID)
-	if err == nil {
-		service.views[projectID] = cachedComparison{at: time.Now(), comparison: *comparison}
-	}
-	service.mu.Unlock()
-	return err
-}
-
-func state(ours, theirs int) string {
-	switch {
-	case ours == 0 && theirs == 0:
-		return Same
-	case ours == 0:
-		return TheirsAhead
-	case theirs == 0:
-		return OursAhead
-	default:
-		return Diverged
-	}
+	s.oursOnly, _ = strconv.Atoi(fields[0])
+	s.theirsOnly, _ = strconv.Atoi(fields[1])
+	return work(s)
 }
 
 func (service *Service) repository(ctx context.Context, projectID string) (project.ForgejoRepository, error) {
@@ -485,7 +397,7 @@ func (service *Service) read() (map[string]Link, error) {
 }
 
 // update changes the links file atomically, kept to the coordinator alone.
-func (service *Service) update(projectID string, change func(map[string]Link)) error {
+func (service *Service) update(change func(map[string]Link)) error {
 	service.mu.Lock()
 	defer service.mu.Unlock()
 	links, err := service.read()
@@ -493,7 +405,6 @@ func (service *Service) update(projectID string, change func(map[string]Link)) e
 		return err
 	}
 	change(links)
-	delete(service.views, projectID)
 	encoded, err := json.MarshalIndent(links, "", "  ")
 	if err != nil {
 		return err
