@@ -182,14 +182,16 @@ func (api *API) applyDesignStack(
 		api.writeToolchainError(w, projectID, "design the stack for the assistant", err)
 		return "", nil, false
 	}
-	if manifest.Status == toolchain.StatusConfigured {
-		writeError(w, http.StatusConflict, "stack_exists", "the stack is set up already")
-		return "", nil, false
-	}
 	request := startToolchainAssistantRequest{Message: action.Description, Purpose: toolchain.AssistantPurposeDesignStack}
 	result := "Designing the stack."
 	if overview, err := api.projects.GetRepositoryOverview(ctx, projectID); err == nil && overview.HasCode() {
+		// A stack already set is checked against the code all the same: one
+		// detected on import can miss a part, such as a Python backend
+		// beside a Node frontend.
 		request.Purpose, result = toolchain.AssistantPurposeVerifyRepository, "Checking the stack the code uses."
+	} else if manifest.Status == toolchain.StatusConfigured {
+		writeError(w, http.StatusConflict, "stack_exists", "the stack is set up already")
+		return "", nil, false
 	} else if request.Message == "" {
 		writeError(w, http.StatusBadRequest, "stack_needs_description",
 			"describe in description what the app needs, so the stack designer can suggest a stack")

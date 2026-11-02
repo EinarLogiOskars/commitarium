@@ -223,8 +223,14 @@ func TestAcceptingABriefCardMakesTheWorkOrderReady(t *testing.T) {
 }
 
 func stackHandler(stub ConversationService, designer *toolchainAssistantStub, overview project.RepositoryOverview) http.Handler {
+	return stackHandlerWith(stub, designer, overview, toolchain.StatusNeedsSetup)
+}
+
+func stackHandlerWith(
+	stub ConversationService, designer *toolchainAssistantStub, overview project.RepositoryOverview, status toolchain.Status,
+) http.Handler {
 	projects := &recordingProjectService{getByIDResult: project.Project{ID: "prj_test"}, overviewResult: overview}
-	stacks := &recordingToolchainService{manifest: toolchain.Manifest{ProjectID: "prj_test", Status: toolchain.StatusNeedsSetup}}
+	stacks := &recordingToolchainService{manifest: toolchain.Manifest{ProjectID: "prj_test", Status: status}}
 	return NewWithWorkspaceRealWorkflowDeletionAndModels(projects, &recordingFeatureService{}, nil, nil, nil, nil, nil, nil, nil,
 		nil, nil, nil, stub, stacks, designer, testAgents())
 }
@@ -233,13 +239,18 @@ func stackHandler(stub ConversationService, designer *toolchainAssistantStub, ov
 // suggests a stack from what the app needs, or checks the stack of the code
 // an imported repository has.
 func TestDesigningAStackStartsTheStackDesigner(t *testing.T) {
+	code := project.RepositoryOverview{Tree: []project.RepositoryTreeEntry{{Path: "go.mod"}}}
 	for name, test := range map[string]struct {
 		overview project.RepositoryOverview
+		status   toolchain.Status
 		purpose  toolchain.AssistantPurpose
 		result   string
 	}{
-		"a new app": {purpose: toolchain.AssistantPurposeDesignStack, result: "Designing the stack."},
-		"an imported repository": {overview: project.RepositoryOverview{Tree: []project.RepositoryTreeEntry{{Path: "go.mod"}}},
+		"a new app": {status: toolchain.StatusNeedsSetup, purpose: toolchain.AssistantPurposeDesignStack, result: "Designing the stack."},
+		"an imported repository": {overview: code, status: toolchain.StatusNeedsSetup,
+			purpose: toolchain.AssistantPurposeVerifyRepository, result: "Checking the stack the code uses."},
+		// A stack set on import is checked against the code all the same.
+		"an imported repository with a stack": {overview: code, status: toolchain.StatusConfigured,
 			purpose: toolchain.AssistantPurposeVerifyRepository, result: "Checking the stack the code uses."},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -250,7 +261,7 @@ func TestDesigningAStackStartsTheStackDesigner(t *testing.T) {
 				}},
 			}}
 			designer := &toolchainAssistantStub{session: toolchain.AssistantSession{ID: "tcs_1", Status: toolchain.AssistantStatusRunning}}
-			approveCard(t, stackHandler(stub, designer, test.overview), `{}`)
+			approveCard(t, stackHandlerWith(stub, designer, test.overview, test.status), `{}`)
 			if designer.purpose != test.purpose || designer.agent != "codex" || designer.opening != "A meal planner with accounts." {
 				t.Fatalf("designer on %s for %s with %q", designer.agent, designer.purpose, designer.opening)
 			}
