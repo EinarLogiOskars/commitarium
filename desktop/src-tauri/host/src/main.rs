@@ -77,6 +77,7 @@ fn run_for_the_app() -> Result<(), String> {
         .port();
     let shared = Arc::new(Shared::new(launch.data_dir.clone(), Bus::default()));
     shared.begin_background_work();
+    commitarium_host::cleanup::keep_tidy(&launch.data_dir, false);
     jobs::watch(shared.clone());
     let access = Access::new(launch, port);
     let serving = shared.clone();

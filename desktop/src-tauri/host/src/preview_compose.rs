@@ -263,6 +263,8 @@ pub(crate) fn validate_and_rewrite_with(
         service.insert("cpus".into(), json!(2.0));
         service.insert("mem_limit".into(), json!("4g"));
         service.insert("pids_limit".into(), json!(512));
+        // A preview or deployment can run for weeks; its log is capped.
+        service.insert("logging".into(), docker::log_limits());
     }
 
     let open = match open {

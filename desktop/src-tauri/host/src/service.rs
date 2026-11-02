@@ -82,7 +82,7 @@ pub fn serve(data_dir: PathBuf) -> Result<(), String> {
         Launch {
             token,
             origins: Vec::new(),
-            data_dir,
+            data_dir: data_dir.clone(),
         },
         port,
     );
@@ -118,6 +118,7 @@ pub fn serve(data_dir: PathBuf) -> Result<(), String> {
     });
     shared.keep_publishing();
     shared.keep_nightly_backups();
+    crate::cleanup::keep_tidy(&data_dir, true);
 
     wait_for_stop()?;
     shared.stop_previews_and_logins();
