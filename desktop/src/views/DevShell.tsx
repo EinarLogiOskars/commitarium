@@ -797,6 +797,11 @@ export function DevShell({
             <Projects
               reachable={reachable}
               onSelect={(id) => {
+                // One just imported is not in the list yet: without this the
+                // guard for a gone project sends the chat back to the top, and
+                // the two fight over it.
+                created.current = id;
+                loadProjects();
                 expand(id);
                 select({ scope: id });
               }}
