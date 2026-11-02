@@ -23,6 +23,13 @@ func TestSetUpPreviewNeedsOnlyAReason(t *testing.T) {
 	}
 }
 
+func TestADeployNeedsOnlyAReason(t *testing.T) {
+	turn, err := AssistantTurn{Actions: []AssistantAction{{Type: AssistantDeployApp, Reason: " Asked to ship it "}}}.Normalize()
+	if err != nil || turn.Actions[0].Reason != "Asked to ship it" {
+		t.Fatalf("normalized = %+v, %v", turn, err)
+	}
+}
+
 // A new app carries the brief the assistant gathered and what it assumed,
 // trimmed and bounded.
 func TestANewAppCarriesItsBrief(t *testing.T) {

@@ -6073,6 +6073,87 @@ select:focus {
   padding: 4px 10px 8px;
   font-weight: 600;
 }
+/* The Deployment card's address form and history. */
+.deploy-address {
+  display: grid;
+  gap: 6px;
+  margin-top: 8px;
+  min-width: 0;
+}
+.deploy-address select {
+  max-width: 100%;
+}
+.deploy-address label {
+  display: grid;
+  gap: 4px;
+  font-size: var(--text-sm);
+}
+.deploy-address__name {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.deploy-address__name input {
+  min-width: 0;
+  flex: 1;
+}
+.deploy-page {
+  display: grid;
+  gap: 12px;
+  max-width: 640px;
+  padding: 24px;
+}
+.deploy-page h2 {
+  margin: 0;
+}
+.deploy-page p {
+  margin: 0;
+}
+/* Deploy's buttons are compact, with their note beside them. */
+.deploy-actions {
+  align-items: center;
+  gap: 8px;
+}
+.deploy-actions button,
+.deploy-address button,
+.deploy-version {
+  padding: 4px 12px;
+  font-size: var(--text-sm);
+}
+.deploy-links {
+  justify-content: flex-start;
+  gap: 16px;
+  margin-top: 8px;
+}
+.deploy-facts {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 2px 10px;
+  margin: 6px 0 10px;
+  font-size: var(--text-sm);
+}
+.deploy-facts dt {
+  color: var(--muted);
+}
+.deploy-facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.deploy-version {
+  width: 100%;
+  max-width: 100%;
+  margin-top: 8px;
+}
+.deploy-password {
+  margin-top: 8px;
+}
+.deploy-history {
+  margin-top: 8px;
+  font-size: var(--text-sm);
+}
+.deploy-history .row {
+  justify-content: space-between;
+}
 .boot-quiet {
   position: fixed;
   inset: 0;

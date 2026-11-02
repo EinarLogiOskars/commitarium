@@ -1,3 +1,4 @@
+import { DeploymentPage } from "./DeployCard";
 import { useCallback, useEffect, useState } from "react";
 import { WorkGraph } from "./WorkGraph";
 import { getProject } from "../api/projects";
@@ -300,6 +301,8 @@ export function ProjectPageBody({
           setup={pages.previewSetup}
         />
       );
+    case "deployment":
+      return <DeploymentPage projectId={id} name={project!.name} />;
     case "settings":
       return (
         <ProjectSettings

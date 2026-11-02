@@ -7,6 +7,9 @@ import {
   openPairing,
   pairedDevices,
   places as readPlaces,
+  publishing as readPublishing,
+  setDomain,
+  type PublishingOverview,
   forgetServer,
   renameServer,
   revokeDevice,
@@ -43,6 +46,63 @@ export function ServerSection({ running }: { running: boolean }) {
         <ConnectForm />
       </section>
     </>
+  );
+}
+
+// The server's base domain, under which deployed apps get their addresses
+// (PUBLISHING_PLAN.md). It is accepted once its wildcard record points here.
+function DomainSection() {
+  const [overview, setOverview] = useState<PublishingOverview | null>(null);
+  const [domain, setDomainText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const refresh = useCallback(() => {
+    void readPublishing()
+      .then((found) => {
+        setOverview(found);
+        setDomainText(found.domain ?? "");
+      })
+      .catch((e) => setError(String(e)));
+  }, []);
+  useEffect(refresh, [refresh]);
+
+  const save = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await setDomain(domain);
+      refresh();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const shown = domain.trim().replace(/^\*\./, "") || "example.com";
+  return (
+    <section className="set__section">
+      <h3 className="set__heading">Domain</h3>
+      <p className="muted set__note">
+        Deployed apps get an address under this domain, such as app.{shown}. At your DNS provider,
+        add an A record for <code>*.{shown}</code> with the value{" "}
+        <code>{overview?.server_address ?? "this server's address"}</code>. Names that already have
+        their own records stay where they are.
+      </p>
+      <div className="set__row">
+        <input
+          aria-label="Domain"
+          placeholder="example.com"
+          value={domain}
+          onChange={(e) => setDomainText(e.target.value)}
+        />
+        <button disabled={busy || !domain.trim()} onClick={() => void save()}>
+          {busy ? "Checking…" : overview?.domain ? "Change" : "Use this domain"}
+        </button>
+      </div>
+      {error && <p className="set__note">{error}</p>}
+    </section>
   );
 }
 
@@ -190,6 +250,8 @@ function ConnectedServer({ server, running }: { server: string; running: boolean
         )}
         <button onClick={() => void showPlace(null)}>Show this computer</button>
       </section>
+
+      <DomainSection />
 
       <section className="set__section">
         <h3 className="set__heading">Devices</h3>

@@ -1,6 +1,6 @@
 # Publishing: Implementation Plan
 
-**Status:** agreed 2026-11-02. D1 and D2 done and tested live; D3 next. Builds on
+**Status:** agreed 2026-11-02. D1 to D3 done; D4 next. Builds on
 [ADR-040](../adr/0040-split-the-host-from-the-app.md) (Distributing apps).
 
 A server can deploy an app to the internet. You keep working in the preview,
@@ -39,8 +39,10 @@ and visitors see only the version you chose to deploy.
 - **Names.** Lowercase letters, digits and hyphens, unique per server, with
   reserved ones refused. A name whose DNS points elsewhere is refused, so
   subdomains served by other machines are never taken over.
-- **Private apps** use HTTP basic auth with a generated password, stored
-  hashed. The user can change it.
+- **Private apps** use HTTP basic auth with a password the user chooses,
+  any length: how strong it is, is theirs to decide, as making an app public
+  is. Caddy checks a bcrypt hash; the password itself is kept in the host's
+  private data so the owner can look it up and share it again.
 
 ## Steps
 

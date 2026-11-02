@@ -48,8 +48,6 @@ const RESERVED: &[&str] = &[
     "ns1",
     "ns2",
 ];
-const PASSWORD_ALPHABET: &[u8] = b"abcdefghjkmnpqrstuvwxyz23456789";
-const PASSWORD_LENGTH: usize = 16;
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -64,9 +62,14 @@ pub enum Access {
 struct AppRoute {
     name: String,
     access: Access,
-    /// bcrypt, only for a private app.
+    /// bcrypt, only for a private app: what Caddy checks against.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     password_hash: Option<String>,
+    /// The password itself, so the owner can look it up and share it again
+    /// instead of changing one others use. The file is the service user's
+    /// alone, and only paired devices can ask for it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    password: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -95,12 +98,10 @@ pub struct Overview {
     apps: Vec<PublishedApp>,
 }
 
-/// What publishing an app answers: its address, and a new password once.
+/// What publishing an app answers: its address.
 #[derive(Serialize)]
 pub struct Published {
     url: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    password: Option<String>,
 }
 
 #[derive(Clone)]
@@ -179,13 +180,14 @@ impl Publishing {
         self.write(&settings)
     }
 
-    /// Gives a deployed app its address. A private app gets a new password
-    /// the first time, returned this once.
+    /// Gives a deployed app its address. A private app needs a password the
+    /// first time; after that it keeps its own unless a new one is given.
     pub fn publish(
         &self,
         project_id: &str,
         name: &str,
         access: Access,
+        password: Option<&str>,
     ) -> Result<Published, String> {
         let name = valid_name(name)?;
         let _held = self
@@ -212,23 +214,19 @@ impl Publishing {
                  another name."
             ));
         }
-        let mut password = None;
         let previous = settings
             .apps
             .get(project_id)
-            .and_then(|route| route.password_hash.clone());
-        let password_hash = match access {
-            Access::Public => None,
-            Access::Private => match previous {
-                Some(hash) => Some(hash),
-                None => {
-                    let fresh = new_password()?;
-                    let hash = bcrypt::hash(&fresh, bcrypt::DEFAULT_COST)
-                        .map_err(|e| format!("protect the password: {e}"))?;
-                    password = Some(fresh);
-                    Some(hash)
-                }
-            },
+            .and_then(|route| Some((route.password_hash.clone()?, route.password.clone())));
+        let (password_hash, password) = match (access, password, previous) {
+            (Access::Public, _, _) => (None, None),
+            (Access::Private, Some(password), _) => {
+                (Some(hashed(password)?), Some(password.to_string()))
+            }
+            (Access::Private, None, Some((hash, kept))) => (Some(hash), kept),
+            (Access::Private, None, None) => {
+                return Err("choose a password for who may open it".into())
+            }
         };
         settings.apps.insert(
             project_id.to_string(),
@@ -236,14 +234,16 @@ impl Publishing {
                 name,
                 access,
                 password_hash,
+                password,
             },
         );
         self.write(&settings)?;
-        Ok(Published { url, password })
+        Ok(Published { url })
     }
 
-    /// A new password for a private app, returned this once.
-    pub fn new_app_password(&self, project_id: &str) -> Result<String, String> {
+    /// Changes a private app's password.
+    pub fn set_app_password(&self, project_id: &str, password: &str) -> Result<(), String> {
+        let hash = hashed(password)?;
         let _held = self
             .applied
             .lock()
@@ -256,13 +256,20 @@ impl Publishing {
         if route.access != Access::Private {
             return Err("this app is public, so it has no password".into());
         }
-        let fresh = new_password()?;
-        route.password_hash = Some(
-            bcrypt::hash(&fresh, bcrypt::DEFAULT_COST)
-                .map_err(|e| format!("protect the password: {e}"))?,
-        );
-        self.write(&settings)?;
-        Ok(fresh)
+        route.password_hash = Some(hash);
+        route.password = Some(password.to_string());
+        self.write(&settings)
+    }
+
+    /// A private app's password, for its owner to share again. `None` for
+    /// one set before passwords were kept.
+    pub fn app_password(&self, project_id: &str) -> Result<Option<String>, String> {
+        let settings = self.read()?;
+        let route = settings
+            .apps
+            .get(project_id)
+            .ok_or("this app is not published")?;
+        Ok(route.password.clone())
     }
 
     pub fn unpublish(&self, project_id: &str) -> Result<(), String> {
@@ -362,13 +369,13 @@ fn valid_name(name: &str) -> Result<String, String> {
     Ok(name)
 }
 
-fn new_password() -> Result<String, String> {
-    let mut bytes = [0u8; PASSWORD_LENGTH];
-    getrandom::fill(&mut bytes).map_err(|e| format!("make a password: {e}"))?;
-    Ok(bytes
-        .iter()
-        .map(|byte| PASSWORD_ALPHABET[usize::from(*byte) % PASSWORD_ALPHABET.len()] as char)
-        .collect())
+/// A password the user chose, as bcrypt keeps it.
+fn hashed(password: &str) -> Result<String, String> {
+    // How strong it is, is the owner's call: "Anyone" is a choice too.
+    if password.is_empty() {
+        return Err("choose a password, or let anyone open it".into());
+    }
+    bcrypt::hash(password, bcrypt::DEFAULT_COST).map_err(|e| format!("protect the password: {e}"))
 }
 
 /// The address the server reaches the internet from: its public one on a
@@ -555,6 +562,7 @@ mod tests {
                 name: "todo".into(),
                 access: Access::Private,
                 password_hash: Some("$2b$12$hash".into()),
+                password: Some("tasks".into()),
             },
         );
         settings.apps.insert(
@@ -563,6 +571,7 @@ mod tests {
                 name: "blog".into(),
                 access: Access::Public,
                 password_hash: None,
+                password: None,
             },
         );
         settings
@@ -619,9 +628,11 @@ mod tests {
     }
 
     #[test]
-    fn passwords_are_long_and_plain_to_type() {
-        let password = new_password().unwrap();
-        assert_eq!(password.len(), PASSWORD_LENGTH);
-        assert!(password.bytes().all(|b| PASSWORD_ALPHABET.contains(&b)));
+    fn a_chosen_password_is_kept_only_as_a_hash() {
+        assert!(hashed("").is_err());
+        assert!(hashed("short").is_ok());
+        let hash = hashed("tasks for friends").unwrap();
+        assert!(hash.starts_with("$2"));
+        assert!(bcrypt::verify("tasks for friends", &hash).unwrap());
     }
 }

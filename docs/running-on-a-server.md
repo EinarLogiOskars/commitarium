@@ -32,6 +32,27 @@ working while you look at another, so a server's agents carry on, and this
 computer's do until you quit the app. **Connect a server…** in the same menu
 adds another. Settings > Server names a server or forgets it on this computer.
 
+## Putting apps online
+
+A server can put your apps on the internet, each at its own address.
+
+1. **Domain, once.** In Settings > Server > Domain, enter a domain you own,
+   such as `example.com`. At your DNS provider, add an A record for
+   `*.example.com` pointing to the server's address; Settings shows the
+   exact record. Names that already have their own records keep them.
+2. **Deploy.** On a project's Deployment card, **Deploy** puts the latest
+   merged version online. The deployment is separate from the preview: keep
+   working in the preview, and deploy when it is ready. Its data is its own.
+   The Deployment page deploys an earlier version, or rolls back to one
+   deployed before.
+3. **Address.** On the Deployment page, choose a name such as `todo` for
+   `todo.example.com`, and who can open it: anyone, or only with a password
+   you choose. People sign in with the address name as the username.
+
+Commitarium gets a certificate for each address by itself. Ports 80 and 443
+must be open, as well as 7443. You can also ask Mayka to deploy; she asks you
+first.
+
 ## Reaching the server
 
 **With Tailscale.** This is the best choice for a server at home, because it

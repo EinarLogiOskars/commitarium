@@ -109,3 +109,24 @@ func TestAnAppSetsItsPreviewUpWithoutTheUser(t *testing.T) {
 		}
 	}
 }
+
+// Even where the assistant builds everything, a deploy waits for the user:
+// it puts a version in front of visitors (PUBLISHING_PLAN.md).
+func TestADeployAlwaysWaitsForTheUser(t *testing.T) {
+	service, _ := newTestService(t)
+	service.config.Projects = appProjectsStub{}
+	service.config.Features = &featuresStub{}
+	stored, err := service.read("prj_test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored.Actions = append(stored.Actions, Action{ID: "act_deploy", Status: ActionProposed,
+		AssistantAction: featureartifact.AssistantAction{Type: featureartifact.AssistantDeployApp, Reason: "Asked to ship it"}})
+	if err := service.write(stored); err != nil {
+		t.Fatal(err)
+	}
+	apply, err := service.autopilotActions(t.Context(), "prj_test")
+	if err != nil || len(apply) != 0 {
+		t.Fatalf("applied %+v err=%v", apply, err)
+	}
+}
