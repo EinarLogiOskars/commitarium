@@ -275,10 +275,16 @@ export function DevShell({
     () => [...new Set([TOP, selection.scope, ...expanded])],
     [selection.scope, expanded],
   );
+  // On a server, an older list can arrive after a newer one: only the latest
+  // asked counts.
+  const projectsAsked = useRef(0);
   const loadProjects = useCallback(() => {
     if (!reachable) return;
+    const asked = ++projectsAsked.current;
     listProjects()
-      .then(setProjects)
+      .then((listed) => {
+        if (asked === projectsAsked.current) setProjects(listed);
+      })
       .catch(() => undefined);
   }, [reachable]);
   // By value, so a fresh project list with the same projects doesn't load
@@ -398,6 +404,7 @@ export function DevShell({
     setError(null);
     try {
       const moved = await makeChatProject(currentChat);
+      created.current = moved.scope;
       expand(moved.scope);
       select({ scope: moved.scope, chat: moved.chat });
       loadProjects();
@@ -816,6 +823,7 @@ export function DevShell({
             reveal={reveal}
             onRevealed={() => setReveal(undefined)}
             onMoved={(scope, chat) => {
+              created.current = scope;
               expand(scope);
               select({ scope, chat });
               loadProjects();

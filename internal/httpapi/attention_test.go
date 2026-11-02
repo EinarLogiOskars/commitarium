@@ -525,3 +525,41 @@ func TestAttentionQuietsAnInterruptedTurnThatRetries(t *testing.T) {
 		t.Fatalf("an interrupted turn that retries asked for the user: %+v", response.Items)
 	}
 }
+
+func TestAttentionKeepsAnAutomaticMergeQuietWhileItsChecksRun(t *testing.T) {
+	waitingSince := time.Date(2026, time.November, 2, 10, 0, 0, 0, time.UTC)
+	cases := []struct {
+		name       string
+		policy     project.MergePolicy
+		now        time.Time
+		kind       string
+		actionable bool
+	}{
+		{"checking", project.MergePolicyAutoAfterGates, waitingSince.Add(time.Minute), "merge_queued", false},
+		{"checking too long", project.MergePolicyAutoAfterGates, waitingSince.Add(autopilotStallAfter + time.Second), "merge_approval", true},
+		{"the user merges", project.MergePolicyRequireUserApproval, waitingSince.Add(time.Minute), "merge_approval", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			api := &API{
+				projects: &recordingProjectService{listResult: []project.Project{{ID: "prj_one", Name: "One"}}},
+				features: &recordingFeatureService{listResult: []feature.Feature{{
+					ID: "fea_one", ProjectID: "prj_one", Title: "Set the project up", State: feature.StateReadyToMerge,
+				}}},
+				execution: &recordingExecutionService{runs: []execution.Run{{
+					ID: "run_one", FeatureID: "fea_one", Status: execution.RunStatusWaitingForUser,
+					WaitKind: execution.RunWaitKindMergeGate, MergePolicy: tc.policy,
+					StartedAt: waitingSince.Add(-time.Hour), UpdatedAt: waitingSince,
+				}}},
+				now: func() time.Time { return tc.now },
+			}
+			items, _, err := api.collectAttention(t.Context())
+			if err != nil {
+				t.Fatalf("collect attention: %v", err)
+			}
+			if len(items) != 1 || items[0].Kind != tc.kind || items[0].Actionable != tc.actionable {
+				t.Fatalf("items = %+v", items)
+			}
+		})
+	}
+}

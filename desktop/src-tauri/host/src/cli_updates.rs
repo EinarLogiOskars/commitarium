@@ -468,10 +468,15 @@ fn install(container: &str, provider: Provider, version: &str) -> Result<(), Str
         .output()
         .map_err(|e| format!("install the {} CLI: {e}", provider.executable()))?;
     if !install.status.success() {
+        // A worker restarted mid-install says nothing: its exit says why.
+        let stderr = String::from_utf8_lossy(&install.stderr);
+        let reason = match stderr.trim() {
+            "" => install.status.to_string(),
+            said => said.to_string(),
+        };
         return Err(format!(
-            "installing the {} CLI failed: {}",
-            provider.executable(),
-            String::from_utf8_lossy(&install.stderr).trim()
+            "installing the {} CLI failed: {reason}",
+            provider.executable()
         ));
     }
     Ok(())

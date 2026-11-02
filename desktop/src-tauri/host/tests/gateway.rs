@@ -17,6 +17,19 @@ fn upstream() -> u16 {
     std::thread::spawn(move || {
         for request in server.incoming_requests() {
             std::thread::spawn(move || {
+                if request.url() == "/events" {
+                    use std::io::Write;
+                    let mut client = request.into_writer();
+                    let start = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\
+                                 Connection: close\r\n\r\n: connected\n\n";
+                    client.write_all(start.as_bytes()).unwrap();
+                    client.flush().unwrap();
+                    std::thread::sleep(Duration::from_millis(500));
+                    client.write_all(b"event: update\ndata: {}\n\n").unwrap();
+                    client.flush().unwrap();
+                    std::thread::sleep(Duration::from_secs(5));
+                    return;
+                }
                 if request.url() == "/stream" {
                     let (mut reader, writer) = std::io::pipe().unwrap();
                     use std::io::Write;
@@ -280,6 +293,27 @@ async fn bridged(fixture: &Fixture) -> (Bridge, reqwest::Client) {
     .unwrap();
     let local = reqwest::Client::builder().no_proxy().build().unwrap();
     (bridge, local)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_update_crosses_the_bridge_while_its_stream_stays_open() {
+    let fixture = start().await;
+    let (bridge, local) = bridged(&fixture).await;
+    let mut stream = local
+        .get(format!("{}/events", bridge.host_url()))
+        .bearer_auth("bridge-token")
+        .send()
+        .await
+        .unwrap();
+    let mut seen = String::new();
+    while !seen.contains("event: update") {
+        let piece = tokio::time::timeout(Duration::from_secs(3), stream.chunk())
+            .await
+            .expect("an update must not wait for the stream to end")
+            .unwrap()
+            .expect("the stream stays open");
+        seen.push_str(&String::from_utf8_lossy(&piece));
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]

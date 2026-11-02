@@ -1137,13 +1137,20 @@ progress {
   position: absolute;
   right: 0;
   left: 0;
+  z-index: 1;
+  display: flex;
+  justify-content: flex-end;
   height: 1px;
   background: color-mix(in srgb, var(--text) 70%, transparent);
 }
+/* Sticks to the view's right edge, so it shows however far it scrolls. */
 .work-graph__phase span {
-  position: absolute;
+  position: sticky;
   right: 24px;
-  bottom: 6px;
+  height: max-content;
+  padding: 0 4px;
+  transform: translateY(calc(-100% - 6px));
+  background: var(--bg);
   font-size: var(--text-sm);
   font-weight: 600;
   color: var(--text);
@@ -4664,6 +4671,13 @@ button.danger:not(.ghost) {
 .assistant-action--proposed .assistant-action__desc {
   flex: 1;
   min-width: 200px;
+}
+.assistant-action--stacked {
+  flex-direction: column;
+  align-items: stretch;
+}
+.assistant-action--stacked .assistant-action__desc {
+  flex: none;
 }
 .assistant-action--proposed .banner {
   flex-basis: 100%;
