@@ -738,8 +738,8 @@ func run(ctx context.Context, coordinatorConfig config) error {
 		go assistantWatcher.Run(ctx)
 	}
 
-	// A linked repository keeps a project in step with GitHub or another
-	// git host, both ways (S2).
+	// A linked repository on GitHub or another git host, which the user
+	// pulls from and pushes to (S2).
 	linkedRepositories, err := linkedrepo.NewService(linkedrepo.Config{
 		CredentialsRoot: coordinatorConfig.credentialsRoot,
 		ForgejoURL:      coordinatorConfig.forgejoURL, ForgejoTokenFile: coordinatorConfig.forgejoTokenFile,
@@ -748,7 +748,6 @@ func run(ctx context.Context, coordinatorConfig config) error {
 	if err != nil {
 		return fmt.Errorf("configure linked repositories: %w", err)
 	}
-	go linkedRepositories.KeepInStep(ctx)
 	routes := http.NewServeMux()
 	routes.Handle("/", handler)
 	httpapi.RegisterLinkedRepositoryRoutes(routes, linkedRepositories)

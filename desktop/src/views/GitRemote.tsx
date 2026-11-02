@@ -1,26 +1,25 @@
 import { useCallback, useEffect, useState } from "react";
 import {
-  bringInFromLinked,
   getLinkedRepository,
   linkRepository,
+  pullFromLinked,
   pushToLinked,
-  setSyncAutomatic,
   unlinkRepository,
   type LinkedRepository,
 } from "../api/linkedRepository";
 import { sendToAssistant } from "../api/assistant";
 import { openExternal } from "../ipc";
 
-const POLL_MS = 30000;
-
 // A project's linked repository on GitHub or another git host
-// (SERVER_COMPLETE_PLAN.md, S2): its commits come in, main's go out, never
-// forced. When both sides moved, Mayka merges them in a work order.
+// (SERVER_COMPLETE_PLAN.md, S2). Both ways are the user's to start: Pull
+// brings commits in, and Mayka merges them when main has its own; Push
+// sends main to a new branch there, for a pull request.
 export function GitRemote({ projectId, compact }: { projectId: string; compact?: boolean }) {
   const [linked, setLinked] = useState<LinkedRepository | null | undefined>(undefined);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
+  const [pullRequest, setPullRequest] = useState<string | null>(null);
 
   const load = useCallback(
     () =>
@@ -29,16 +28,13 @@ export function GitRemote({ projectId, compact }: { projectId: string; compact?:
         .catch((e) => setError(String(e))),
     [projectId],
   );
-  useEffect(() => {
-    load();
-    const timer = setInterval(load, POLL_MS);
-    return () => clearInterval(timer);
-  }, [load]);
+  useEffect(load, [load]);
 
   const act = async (what: string, work: () => Promise<string | void>) => {
     setBusy(what);
     setError(null);
     setNote(null);
+    setPullRequest(null);
     try {
       const said = await work();
       if (said) setNote(said);
@@ -53,19 +49,30 @@ export function GitRemote({ projectId, compact }: { projectId: string; compact?:
   if (linked === undefined) return <p className="muted shell-card__text">Checking…</p>;
   if (linked === null) return <LinkForm projectId={projectId} compact={compact} onLinked={load} />;
 
-  const comparison = linked.comparison;
   const name = linked.url.replace(/^https:\/\//, "").replace(/\.git$/, "");
-  const askMayka = () =>
-    act("mayka", async () => {
+  const commits = (n: number) => `${n} commit${n === 1 ? "" : "s"}`;
+  const pull = () =>
+    act("pull", async () => {
+      const pulled = await pullFromLinked(projectId);
+      if (pulled.outcome === "up_to_date") return "Nothing new there.";
+      if (pulled.outcome === "pulled") return `Pulled ${commits(pulled.commits)} into main.`;
+      // Main has commits of its own: Mayka merges the two.
       await sendToAssistant(
         projectId,
-        `The linked repository ${linked.url} and this project's main both have new commits. ` +
-          `Its commits are on the branch ${linked.local_branch} here. ` +
-          `Please open a work order that merges ${linked.local_branch} into main, ` +
+        `I pulled ${commits(pulled.commits)} from the linked repository ${linked.url}, ` +
+          `but main has commits of its own, so they are on the branch ${pulled.local_branch}. ` +
+          `Please open a work order that merges ${pulled.local_branch} into main, ` +
           `keeping the work from both sides.`,
         crypto.randomUUID(),
       );
-      return "Mayka is merging them. Push once that work order merges.";
+      return `Main has commits of its own, so Mayka is merging the ${commits(pulled.commits)} in a work order.`;
+    });
+  const push = () =>
+    act("push", async () => {
+      const pushed = await pushToLinked(projectId);
+      if (!pushed.branch) return "Nothing on main the repository lacks.";
+      if (pushed.pull_request_url) setPullRequest(pushed.pull_request_url);
+      return `Pushed ${commits(pushed.commits)} to the branch ${pushed.branch} there.`;
     });
 
   return (
@@ -76,72 +83,44 @@ export function GitRemote({ projectId, compact }: { projectId: string; compact?:
       >
         {name} ↗
       </button>
-      <p className="muted">{standing(linked)}</p>
-      {linked.last_error && <p className="sync-card__error">{linked.last_error}</p>}
+      {!compact && (
+        <p className="muted">
+          Pull brings the commits made there into main; when main has its own, Mayka merges the two
+          in a work order. Push sends main to a new branch there, for a pull request into{" "}
+          {linked.branch}. Nothing is forced, and nothing syncs on its own.
+        </p>
+      )}
       <div className="row deploy-links">
-        {(comparison?.state === "theirs_ahead" || comparison?.state === "diverged") && (
-          <button
-            className="shell-card__link"
-            disabled={busy !== null}
-            onClick={() =>
-              void act("bring-in", async () => {
-                const after = await bringInFromLinked(projectId);
-                return after.state === "diverged"
-                  ? `Main has commits of its own, so theirs wait on ${linked.local_branch}.`
-                  : "Brought in.";
-              })
-            }
-          >
-            {busy === "bring-in" ? "Bringing in…" : "Bring in"}
-          </button>
-        )}
-        {comparison?.state === "diverged" && (
-          <button
-            className="shell-card__link"
-            disabled={busy !== null}
-            onClick={() => void askMayka()}
-          >
-            Ask Mayka to merge them
-          </button>
-        )}
-        {comparison?.state === "ours_ahead" && linked.has_token && (
-          <button
-            className="shell-card__link"
-            disabled={busy !== null}
-            onClick={() =>
-              void act("push", async () => {
-                await pushToLinked(projectId);
-                return "Pushed.";
-              })
-            }
-          >
-            {busy === "push" ? "Pushing…" : "Push"}
+        <button className="shell-card__link" disabled={busy !== null} onClick={() => void pull()}>
+          {busy === "pull" ? "Pulling…" : "Pull"}
+        </button>
+        <button
+          className="shell-card__link"
+          disabled={busy !== null || !linked.has_token}
+          title={linked.has_token ? undefined : "Pushing needs an access token"}
+          onClick={() => void push()}
+        >
+          {busy === "push" ? "Pushing…" : "Push"}
+        </button>
+        {pullRequest && (
+          <button className="shell-card__link" onClick={() => void openExternal(pullRequest)}>
+            Open a pull request ↗
           </button>
         )}
       </div>
+      {note && <p className="muted">{note}</p>}
+      {error && <p className="sync-card__error">{error}</p>}
       {!compact && (
         <div className="deploy-address">
-          <label className="row muted">
-            <input
-              type="checkbox"
-              checked={linked.automatic}
-              disabled={busy !== null}
-              onChange={(e) => {
-                const automatic = e.target.checked;
-                void act("automatic", () => setSyncAutomatic(projectId, automatic));
-              }}
-            />
-            Keep in step on its own: every few minutes, bring their commits in and push main's
-          </label>
-          {!linked.has_token && (
+          {(linked.pulled_at || linked.pushed_at) && (
             <p className="muted">
-              Pushing needs an access token. Link again with one to push from here.
+              {linked.pulled_at && `Last pulled ${new Date(linked.pulled_at).toLocaleString()}. `}
+              {linked.pushed_at && `Last pushed ${new Date(linked.pushed_at).toLocaleString()}.`}
             </p>
           )}
-          <p className="muted">
-            Nothing is ever forced. When both sides have new commits, Mayka merges them in a work
-            order, and that merge goes out like any other.
-          </p>
+          {!linked.has_token && (
+            <p className="muted">Pushing needs an access token. Link again with one to push.</p>
+          )}
           <button
             className="shell-card__link"
             disabled={busy !== null}
@@ -152,8 +131,6 @@ export function GitRemote({ projectId, compact }: { projectId: string; compact?:
           </button>
         </div>
       )}
-      {note && <p className="muted">{note}</p>}
-      {error && <p className="sync-card__error">{error}</p>}
     </div>
   );
 }
@@ -191,8 +168,8 @@ function LinkForm({
     <div className="deploy-address">
       <p className="muted shell-card__text">
         {compact
-          ? "Link a repository on GitHub or another git host, to sync both ways."
-          : "Link this project to a repository on GitHub or another git host. Commits made there come in, and main goes out, so the code also lives off this server. Give an access token that can read and push; a public repository can be linked without one, but then only brings commits in."}
+          ? "Link a repository on GitHub or another git host, to pull from and push to."
+          : "Link this project to a repository on GitHub or another git host, to pull the commits made there and push main back, so the code also lives off this server. Give an access token that can read and push; a public repository can be linked without one, but then only pulls."}
       </p>
       <label className="muted">
         Repository address
@@ -234,23 +211,4 @@ function LinkForm({
       {error && <p className="sync-card__error">{error}</p>}
     </div>
   );
-}
-
-/** How the two sides stand, in a line. */
-function standing(linked: LinkedRepository): string {
-  const c = linked.comparison;
-  if (!c) return linked.compare_error ? `Could not compare: ${linked.compare_error}` : "Comparing…";
-  const commits = (n: number) => `${n} commit${n === 1 ? "" : "s"}`;
-  switch (c.state) {
-    case "same":
-      return `In step on ${linked.branch}.`;
-    case "theirs_ahead":
-      return `${commits(c.theirs)} there to bring in.`;
-    case "ours_ahead":
-      return linked.has_token
-        ? `${commits(c.ours)} on main to push.`
-        : `${commits(c.ours)} on main; pushing needs a token.`;
-    case "diverged":
-      return `Both moved: ${commits(c.theirs)} there, ${commits(c.ours)} here.`;
-  }
 }

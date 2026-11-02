@@ -1,6 +1,6 @@
 # Server Mode, Complete: Implementation Plan (0.10.0)
 
-**Status:** agreed 2026-11-02. S1 built and tested on a server except restore; S2 reworked into a linked repository synced both ways, after the push mirror proved able to overwrite the remote; S3 next. Finishes what
+**Status:** agreed 2026-11-02. S1 built and tested on a server except restore; S2 reworked into a linked repository the user pulls from and pushes to, after the push mirror proved able to overwrite the remote; S3 next. Finishes what
 [REMOTE_HOST_PLAN.md](REMOTE_HOST_PLAN.md) left for after its milestone, so a
 server can be the only place a user's work lives. Released together as 0.10.0;
 company sign-in follows as 0.11.0.
@@ -13,7 +13,7 @@ backups, importing a folder, syncing with a local folder, and the audit viewer.
 | Step | What | Done when |
 |---|---|---|
 | S1 | Backups on a server | A server backs itself up, keeps a few, and restores one |
-| S2 | A linked repository | A project on a server brings in and pushes to a GitHub (or other) repository, never forced |
+| S2 | A linked repository | A project on a server pulls from and pushes to a GitHub (or other) repository, never forced |
 | S3 | Import by repository URL | A server imports a project from a git URL |
 | S4 | The audit viewer on a server | It opens from a paired device |
 | S5 | A warning before an app's address changes | Changing it says the old address stops working |
@@ -41,21 +41,20 @@ backups, importing a folder, syncing with a local folder, and the audit viewer.
   the token in its credentials volume, out of agents' reach and out of
   backups. A public repository links without a token but can then only bring
   commits in.
-- **Bring in.** The coordinator fetches both sides. When only the linked
-  repository moved, its commits land on the project branch `linked/<branch>`
-  and main fast-forwards to them through a pull request the merge gate
-  approves, since main takes no push. When both moved, the commits wait on
-  `linked/<branch>`, and the user can ask Mayka to merge them in a work order.
-- **Push.** Main goes out only as a fast-forward. When the linked repository
-  has commits main lacks, the push is refused: bring those in first.
-- **On its own.** Optionally, every five minutes, the coordinator brings in
-  and pushes for the user, with the same rules; when both sides moved it
-  only says so.
+- Both ways are the user's to start; nothing syncs on its own, so the card
+  shows no ahead/behind count, only Pull and Push.
+- **Pull.** The coordinator fetches both sides. The linked repository's new
+  commits land on the project branch `linked/<branch>`. When main has none
+  of its own, main fast-forwards to them through a pull request the merge
+  gate approves, since main takes no push. When it has, the app asks Mayka
+  to merge `linked/<branch>` in a work order, which handles any conflict.
+- **Push.** Main goes to a new branch on the linked repository,
+  `commitarium/<commit>`, never to an existing one, and the app offers the
+  host's page to open a pull request from it.
 - The first version used Forgejo's push mirror, which force-pushes and so
-  could erase commits made on the remote. Divergence is the user's call
-  (as in two-way sync on this computer): warn, never overwrite.
-- The project rail's card on a server shows how the two sides stand, with
-  Bring in and Push; its page links, unlinks and turns syncing on its own on.
+  could erase commits made on the remote; a later one compared the sides and
+  could sync on its own. Divergence is the user's call (as in two-way sync on
+  this computer): nothing is overwritten.
 
 ## S3: Import by repository URL
 

@@ -93,7 +93,7 @@ func newWorld(t *testing.T) world {
 		t.Fatal(err)
 	}
 	// A local path stands in for an https address, which Link insists on.
-	if err := service.update("p1", func(links map[string]Link) {
+	if err := service.update(func(links map[string]Link) {
 		links["p1"] = Link{URL: remote, Branch: "main", Token: "ghp_token"}
 	}); err != nil {
 		t.Fatal(err)
@@ -114,66 +114,83 @@ func (w world) main(bare string) string {
 	return git(w.t, bare, "rev-parse", "refs/heads/main")
 }
 
-func TestNewCommitsThereComeInAsAFastForward(t *testing.T) {
+func TestPullFastForwardsMainWhenItHasNothingOfItsOwn(t *testing.T) {
 	w := newWorld(t)
-	w.commit(w.remote, "made on GitHub")
-	view, err := w.service.Get(t.Context(), "p1")
-	if err != nil || view.Comparison == nil || view.Comparison.State != TheirsAhead || view.Comparison.Theirs != 1 {
+	view, err := w.service.Get("p1")
+	if err != nil || !view.HasToken || view.LocalBranch != "linked/main" {
 		t.Fatalf("view = %+v, %v", view, err)
 	}
-	if view.HasToken != true || view.LocalBranch != "linked/main" {
-		t.Fatalf("view = %+v", view)
+	if pulled, err := w.service.Pull(t.Context(), "p1"); err != nil || pulled.Outcome != UpToDate {
+		t.Fatalf("pull with nothing new = %+v, %v", pulled, err)
 	}
-	comparison, err := w.service.BringIn(t.Context(), "p1")
-	if err != nil || comparison.State != Same {
-		t.Fatalf("bring in = %+v, %v", comparison, err)
+	w.commit(w.remote, "made on GitHub")
+	pulled, err := w.service.Pull(t.Context(), "p1")
+	if err != nil || pulled.Outcome != PulledIn || pulled.Commits != 1 {
+		t.Fatalf("pull = %+v, %v", pulled, err)
 	}
 	if w.main(w.forgejo) != w.main(w.remote) {
 		t.Fatal("main did not move to the linked repository's commit")
 	}
 	if link, _ := w.service.link("p1"); link.PulledAt.IsZero() {
-		t.Fatal("the bring-in was not noted")
+		t.Fatal("the pull was not noted")
 	}
 }
 
-func TestMainGoesOutOnlyAsAFastForward(t *testing.T) {
-	w := newWorld(t)
-	w.commit(w.forgejo, "merged work order")
-	comparison, err := w.service.Push(t.Context(), "p1")
-	if err != nil || comparison.State != Same || w.main(w.remote) != w.main(w.forgejo) {
-		t.Fatalf("push = %+v, %v", comparison, err)
-	}
-	w.commit(w.remote, "made on GitHub")
-	w.commit(w.forgejo, "another work order")
-	before := w.main(w.remote)
-	if _, err := w.service.Push(t.Context(), "p1"); !errors.Is(err, ErrTheirsAhead) {
-		t.Fatalf("push over their commits: %v", err)
-	}
-	if w.main(w.remote) != before {
-		t.Fatal("the linked repository lost a commit")
-	}
-}
-
-func TestWhenBothMovedTheirCommitsWaitOnALinkedBranch(t *testing.T) {
+func TestWhenMainHasItsOwnCommitsAPullWaitsOnALinkedBranch(t *testing.T) {
 	w := newWorld(t)
 	w.commit(w.remote, "made on GitHub")
 	w.commit(w.forgejo, "merged work order")
 	ours := w.main(w.forgejo)
-	comparison, err := w.service.BringIn(t.Context(), "p1")
-	if err != nil || comparison.State != Diverged || comparison.Ours != 1 || comparison.Theirs != 1 {
-		t.Fatalf("bring in = %+v, %v", comparison, err)
+	pulled, err := w.service.Pull(t.Context(), "p1")
+	if err != nil || pulled.Outcome != NeedsMerge || pulled.Commits != 1 {
+		t.Fatalf("pull = %+v, %v", pulled, err)
 	}
 	if w.main(w.forgejo) != ours {
-		t.Fatal("main moved although both sides had commits")
+		t.Fatal("main moved although it had commits of its own")
 	}
 	if git(t, w.forgejo, "rev-parse", "refs/heads/linked/main") != w.main(w.remote) {
 		t.Fatal("their commits are not on linked/main")
 	}
 }
 
+func TestPushMakesANewBranchThereAndTouchesNoOther(t *testing.T) {
+	w := newWorld(t)
+	if pushed, err := w.service.Push(t.Context(), "p1"); err != nil || pushed.Branch != "" {
+		t.Fatalf("push with nothing new = %+v, %v", pushed, err)
+	}
+	w.commit(w.remote, "made on GitHub")
+	w.commit(w.forgejo, "merged work order")
+	theirs := w.main(w.remote)
+	pushed, err := w.service.Push(t.Context(), "p1")
+	if err != nil || pushed.Commits != 1 || !strings.HasPrefix(pushed.Branch, PushPrefix) {
+		t.Fatalf("push = %+v, %v", pushed, err)
+	}
+	if w.main(w.remote) != theirs {
+		t.Fatal("the linked repository's main moved")
+	}
+	if git(t, w.remote, "rev-parse", "refs/heads/"+pushed.Branch) != w.main(w.forgejo) {
+		t.Fatal("main is not on the new branch")
+	}
+	if again, err := w.service.Push(t.Context(), "p1"); err != nil || again.Branch != pushed.Branch {
+		t.Fatalf("pushing the same main again = %+v, %v", again, err)
+	}
+}
+
+func TestPullRequestPagesFollowTheHost(t *testing.T) {
+	for remote, want := range map[string]string{
+		"https://github.com/you/app.git": "https://github.com/you/app/compare/main...commitarium/abc?expand=1",
+		"https://gitlab.com/you/app.git": "https://gitlab.com/you/app/-/merge_requests/new?merge_request%5Bsource_branch%5D=commitarium%2Fabc&merge_request%5Btarget_branch%5D=main",
+		"https://codeberg.org/you/app":   "https://codeberg.org/you/app/compare/main...commitarium/abc",
+	} {
+		if got := pullRequestURL(remote, "main", "commitarium/abc"); got != want {
+			t.Errorf("%s: %s", remote, got)
+		}
+	}
+}
+
 func TestPushingNeedsAToken(t *testing.T) {
 	w := newWorld(t)
-	if err := w.service.update("p1", func(links map[string]Link) {
+	if err := w.service.update(func(links map[string]Link) {
 		links["p1"] = Link{URL: w.remote, Branch: "main"}
 	}); err != nil {
 		t.Fatal(err)
@@ -192,7 +209,7 @@ func TestTheLinksFileIsTheCoordinatorsAlone(t *testing.T) {
 	if err := w.service.Unlink("p1"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := w.service.Get(t.Context(), "p1"); !errors.Is(err, ErrNotLinked) {
+	if _, err := w.service.Get("p1"); !errors.Is(err, ErrNotLinked) {
 		t.Fatalf("err = %v", err)
 	}
 }

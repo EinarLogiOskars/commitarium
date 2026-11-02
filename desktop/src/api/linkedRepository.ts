@@ -1,27 +1,31 @@
 import { ApiError, request } from "./client";
 
-/** How a project's main and its linked repository stand: commits each has
- * that the other lacks (SERVER_COMPLETE_PLAN.md, S2). */
-export interface Comparison {
-  state: "same" | "theirs_ahead" | "ours_ahead" | "diverged";
-  theirs: number;
-  ours: number;
-}
-
-/** A project's linked repository on GitHub or another git host. Its token
- * stays on the server. */
+/** A project's linked repository on GitHub or another git host
+ * (SERVER_COMPLETE_PLAN.md, S2). Its token stays on the server. */
 export interface LinkedRepository {
   url: string;
   branch: string;
-  /** The project branch their commits wait on when both sides moved. */
+  /** The project branch pulled commits wait on when main has its own. */
   local_branch: string;
   has_token: boolean;
-  automatic: boolean;
   pulled_at?: string;
   pushed_at?: string;
-  last_error?: string;
-  comparison?: Comparison;
-  compare_error?: string;
+}
+
+/** What a pull did: brought commits into main, found none, or left them on
+ * local_branch for Mayka to merge. */
+export interface Pulled {
+  outcome: "pulled" | "up_to_date" | "needs_merge";
+  commits: number;
+  local_branch: string;
+}
+
+/** The branch a push made there, and its pull request page. No branch
+ * means main had nothing new. */
+export interface Pushed {
+  branch?: string;
+  commits: number;
+  pull_request_url?: string;
 }
 
 const path = (projectId: string) =>
@@ -44,11 +48,8 @@ export const linkRepository = (
 export const unlinkRepository = (projectId: string): Promise<void> =>
   request(path(projectId), { method: "DELETE" });
 
-export const setSyncAutomatic = (projectId: string, automatic: boolean): Promise<void> =>
-  request(`${path(projectId)}/automatic`, { method: "PUT", body: { automatic } });
+export const pullFromLinked = (projectId: string): Promise<Pulled> =>
+  request(`${path(projectId)}/pull`, { method: "POST" });
 
-export const bringInFromLinked = (projectId: string): Promise<Comparison> =>
-  request(`${path(projectId)}/bring-in`, { method: "POST" });
-
-export const pushToLinked = (projectId: string): Promise<Comparison> =>
+export const pushToLinked = (projectId: string): Promise<Pushed> =>
   request(`${path(projectId)}/push`, { method: "POST" });
