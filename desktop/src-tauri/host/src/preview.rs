@@ -32,6 +32,13 @@ pub enum PreviewTarget {
     Session {
         feature_id: String,
     },
+    /// The app's deployment: a frozen copy of one commit of the default
+    /// branch, the head when none is named, with data of its own
+    /// (PUBLISHING_PLAN.md).
+    Deployment {
+        #[serde(default)]
+        commit_id: Option<String>,
+    },
 }
 
 /// Where a preview's sources come from.
@@ -63,6 +70,18 @@ fn preview_key(project_id: &str, feature_id: Option<&str>) -> Result<String, Str
             Ok(format!("{project_id}#{feature_id}"))
         }
     }
+}
+
+/// The registry key of a project's deployment.
+pub(crate) fn deployment_key(project_id: &str) -> Result<String, String> {
+    validate_identifier("project ID", project_id)?;
+    Ok(format!("{project_id}@live"))
+}
+
+/// The Compose project of a deployment. It never changes, so the
+/// deployment's data carries over from one deploy to the next.
+fn deployment_compose_id(project_id: &str) -> String {
+    format!("{project_id}-live")
 }
 
 /// The Compose project of a session's preview, apart from the default
@@ -131,6 +150,12 @@ pub struct PreviewStatus {
     /// containers were created (ADR-028).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     services: Vec<ServiceEvidence>,
+}
+
+impl PreviewStatus {
+    pub(crate) fn commit_id(&self) -> &str {
+        &self.commit_id
+    }
 }
 
 /// What one compose service did: its state, exit code, health, and last log
@@ -411,11 +436,15 @@ pub async fn start_preview(
     project_id: String,
     target: PreviewTarget,
 ) -> Result<PreviewStatus, String> {
-    let feature_id = match &target {
-        PreviewTarget::Canonical => None,
-        PreviewTarget::Session { feature_id } => Some(feature_id.clone()),
+    let (feature_id, pinned) = match &target {
+        PreviewTarget::Canonical => (None, None),
+        PreviewTarget::Session { feature_id } => (Some(feature_id.clone()), None),
+        PreviewTarget::Deployment { commit_id } => (None, Some(commit_id.clone())),
     };
-    let key = preview_key(&project_id, feature_id.as_deref())?;
+    let key = match &pinned {
+        Some(_) => deployment_key(&project_id)?,
+        None => preview_key(&project_id, feature_id.as_deref())?,
+    };
     let client = reqwest::Client::new();
     let manifest: ToolchainManifest = coordinator_json(
         client
@@ -450,13 +479,22 @@ pub async fn start_preview(
                 "project handoff",
             )
             .await?;
+            let mut handoff = handoff;
             validate_handoff(&handoff, &project_id)?;
+            let compose_id = match &pinned {
+                None => project_id.clone(),
+                Some(commit) => {
+                    if let Some(commit) = commit {
+                        if !safe_commit(commit) {
+                            return Err("the version to deploy is invalid".into());
+                        }
+                        handoff.source.head_commit_id = commit.clone();
+                    }
+                    deployment_compose_id(&project_id)
+                }
+            };
             let commit_id = handoff.source.head_commit_id.clone();
-            (
-                PreviewSource::Canonical(handoff),
-                commit_id,
-                project_id.clone(),
-            )
+            (PreviewSource::Canonical(handoff), commit_id, compose_id)
         }
         Some(feature_id) => {
             let workspace: SessionWorkspace = coordinator_json(
@@ -543,6 +581,24 @@ pub async fn stop_preview(
 ) -> Result<(), String> {
     let key = preview_key(&project_id, feature_id.as_deref())?;
     stop_project(&events, manager.clone(), &key).await
+}
+
+/// Stops a project's deployment, keeping its data for the next deploy.
+pub async fn stop_deployment(
+    events: Events,
+    manager: &PreviewManager,
+    project_id: String,
+) -> Result<(), String> {
+    let key = deployment_key(&project_id)?;
+    stop_project(&events, manager.clone(), &key).await
+}
+
+/// A deployment's state, or `None` when it is not running.
+pub(crate) fn deployment_status(
+    manager: &PreviewManager,
+    project_id: &str,
+) -> Result<Option<PreviewStatus>, String> {
+    manager.status(&deployment_key(project_id)?)
 }
 
 pub async fn reset_preview_data(

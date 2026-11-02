@@ -21,6 +21,7 @@ use tokio::sync::RwLock;
 use zeroize::Zeroizing;
 
 use crate::cli_updates::{self, CliUpdater};
+use crate::deployments::Deployments;
 use crate::events::{Bus, Events};
 use crate::preview::{self, PreviewManager, PreviewTarget};
 use crate::profiles::{self, ProfileManager};
@@ -61,6 +62,7 @@ pub struct Shared {
     events: Events,
     profiles: ProfileManager,
     previews: PreviewManager,
+    deployments: Deployments,
     updater: Arc<CliUpdater>,
     /// Held for writing until leftovers are swept, because a sweep removes
     /// any preview, and one started during it would be taken for a leftover.
@@ -73,6 +75,7 @@ pub struct Shared {
 impl Shared {
     pub fn new(data_dir: PathBuf, bus: Bus) -> Self {
         Self {
+            deployments: Deployments::new(&data_dir),
             data_dir,
             events: Events::new(bus.clone()),
             bus,
@@ -88,6 +91,19 @@ impl Shared {
     #[cfg(unix)]
     pub fn previews(&self) -> PreviewManager {
         self.previews.clone()
+    }
+
+    #[cfg(unix)]
+    pub fn deployments(&self) -> Deployments {
+        self.deployments.clone()
+    }
+
+    /// Starts again what was deployed, once leftovers are swept. Only a
+    /// server keeps its deployments: an app on this computer has none.
+    #[cfg(unix)]
+    pub fn restore_deployments(&self) {
+        self.wait_for_sweep();
+        block_on(self.deployments.restore(self.events.clone()));
     }
 
     #[cfg(unix)]
@@ -245,6 +261,7 @@ fn respond_to_get(path: &str, shared: &Shared) -> Reply {
         "/v1/docker/probe" => respond_with(Ok(docker::docker_probe())),
         "/v1/disk/space" => respond_with(disk::disk_space_probe(&shared.data_dir)),
         "/v1/profiles" => respond_with(block_on(profiles::list_profiles(&shared.profiles))),
+        "/v1/deployments" => respond_with(shared.deployments.list()),
         "/v1/agents/cli-status" => respond_with(Ok(cli_updates::agent_cli_status(&shared.updater))),
         "/v1/forgejo/viewer" => respond_with(block_on(bootstrap::get_forgejo_viewer_status())),
         #[cfg(unix)]
@@ -281,6 +298,14 @@ struct ApiKey {
 #[derive(Deserialize)]
 struct ProjectRequest {
     project_id: String,
+}
+
+#[derive(Deserialize)]
+struct Deploy {
+    project_id: String,
+    /// The head of the default branch when absent.
+    #[serde(default)]
+    commit_id: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -390,7 +415,21 @@ fn respond_to_post(path: &str, body: &[u8], shared: &Shared) -> Reply {
             respond_with(Ok(()))
         }
 
+        "/v1/deployments/deploy" => with_body(body, |deploy: Deploy| {
+            shared.wait_for_sweep();
+            block_on(
+                shared
+                    .deployments
+                    .deploy(events(), deploy.project_id, deploy.commit_id),
+            )
+        }),
+        "/v1/deployments/stop" => with_body(body, |stop: ProjectRequest| {
+            block_on(shared.deployments.stop(events(), stop.project_id))
+        }),
         "/v1/previews/start" => with_body(body, |start: StartPreview| {
+            if matches!(start.target, PreviewTarget::Deployment { .. }) {
+                return Err("deploy through /v1/deployments/deploy".to_string());
+            }
             shared.wait_for_sweep();
             block_on(preview::start_preview(
                 events(),

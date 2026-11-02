@@ -6,6 +6,7 @@ pub mod bootstrap;
 pub mod bridge;
 pub mod cleanup;
 pub mod cli_updates;
+pub mod deployments;
 pub mod device_keys;
 pub mod disk;
 pub mod docker;

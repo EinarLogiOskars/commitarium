@@ -111,10 +111,15 @@ pub fn serve(data_dir: PathBuf) -> Result<(), String> {
     });
 
     let starting = shared.clone();
-    thread::spawn(move || starting.keep_trying_to_start_stack());
+    thread::spawn(move || {
+        starting.keep_trying_to_start_stack();
+        // A deployment needs the coordinator for its source.
+        starting.restore_deployments();
+    });
 
     wait_for_stop()?;
     shared.stop_previews_and_logins();
+    shared.deployments().stop_all();
     Ok(())
 }
 

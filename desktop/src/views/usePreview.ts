@@ -54,6 +54,8 @@ export function usePreview(projectId: string, featureId?: string, appName?: stri
       },
     );
     const unlisten = onPreviewStatusChanged((s) => {
+      // A deployment shares the event, not the preview.
+      if (s.target.kind === "deployment") return;
       const sessionId = s.target.kind === "session" ? s.target.feature_id : undefined;
       if (live && s.projectId === projectId && sessionId === featureId) setStatus(s);
     });

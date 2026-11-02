@@ -1,0 +1,57 @@
+# Publishing: Implementation Plan
+
+**Status:** agreed 2026-11-02, D1 next. Builds on
+[ADR-040](../adr/0040-split-the-host-from-the-app.md) (Distributing apps).
+
+A server can deploy an app to the internet. You keep working in the preview,
+and visitors see only the version you chose to deploy.
+
+## What the user gets
+
+- A base domain per server, in Settings > Server, for example `einarlogi.is`
+  with one wildcard DNS record `*.einarlogi.is` pointing at the server.
+- **Deploy** on an app: the latest main, or an earlier merged version. Each
+  app gets an address such as `todo.einarlogi.is`, private by password (the
+  default) or public.
+- A history of deploys, each with what it contains, and **Roll back**.
+- Mayka can deploy only with the user's approval each time.
+- No publishing on this computer: apps keep opening in Commitarium windows.
+
+## Decisions
+
+- **Preview and deployment are separate.** The preview follows main as
+  today. A deployment is a frozen copy of one commit, run as its own Docker
+  project with its own data, kept running and started again when the server
+  boots.
+- **It runs the app's preview setup** from the frozen copy, which builds any
+  images the setup builds. A production setup, written by an agent and
+  checked like the preview's, is a later step: Deploy will prefer it.
+- **Data stays across deploys.** The deployment's Docker project keeps one
+  name, so its volumes carry over. A new version therefore replaces the old
+  one in place: visitors see the "updating" page while it starts. A
+  seamless swap needs shared volumes and is a later step.
+- **Caddy is the only public door**, on ports 80 and 443, in a container.
+  Its admin API is a socket in the host's private data directory, never a
+  port. It routes only deployed apps and gets a certificate per name.
+  Unknown names get a plain "No app here" page.
+- **Names.** Lowercase letters, digits and hyphens, unique per server, with
+  reserved ones refused. A name whose DNS points elsewhere is refused, so
+  subdomains served by other machines are never taken over.
+- **Private apps** use HTTP basic auth with a generated password, stored
+  hashed. The user can change it.
+
+## Steps
+
+| Step | What | Done when |
+|---|---|---|
+| D1 | Deployments on the host: deploy a commit, stop, list with history, roll back; restart on boot; own data | A deployment runs beside its preview and survives a server restart |
+| D2 | Caddy, base domain with DNS check, a route per deployment, password or public, the two plain pages | `todo.einarlogi.is` serves the deployed app over HTTPS |
+| D3 | Deploy UI on app cards and settings, domain in Settings > Server, Mayka's deploy action with approval | A deploy from the app, start to finish |
+| D4 | Prove isolation: a deployed app reaches no coordinator, Forgejo, host or other app; live test on the user's server | The test passes on a real server |
+
+## Later
+
+- A production setup per app, used by Deploy when present.
+- Seamless swaps with shared volumes.
+- The bare domain, such as `einarlogi.is` itself.
+- Deploy on every merge, as a per-app choice.

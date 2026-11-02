@@ -579,7 +579,11 @@ export const previewProjectUpstreamBranch = (
 
 // The default branch head, or a session's working copy with its uncommitted
 // changes (ADR-019).
-export type PreviewTarget = { kind: "canonical" } | { kind: "session"; feature_id: string };
+export type PreviewTarget =
+  | { kind: "canonical" }
+  | { kind: "session"; feature_id: string }
+  /** An app's deployment (PUBLISHING_PLAN.md), never a preview. */
+  | { kind: "deployment"; commit_id?: string | null };
 
 export type PreviewState = "starting" | "running" | "failed" | "stopped";
 
