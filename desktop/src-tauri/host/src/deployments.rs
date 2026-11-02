@@ -143,6 +143,20 @@ impl Deployments {
             .collect()
     }
 
+    /// The local port of each running deployment, by project.
+    pub fn running_ports(&self) -> BTreeMap<String, u16> {
+        let Ok(records) = self.read() else {
+            return BTreeMap::new();
+        };
+        records
+            .into_keys()
+            .filter_map(|project_id| {
+                let status = preview::deployment_status(&self.manager, &project_id).ok()??;
+                Some((project_id, status.open_port()?))
+            })
+            .collect()
+    }
+
     /// Starts again what was deployed, for a host that has just started.
     pub async fn restore(&self, events: Events) {
         let Ok(records) = self.read() else {

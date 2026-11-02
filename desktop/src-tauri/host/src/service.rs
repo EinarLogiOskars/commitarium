@@ -116,6 +116,7 @@ pub fn serve(data_dir: PathBuf) -> Result<(), String> {
         // A deployment needs the coordinator for its source.
         starting.restore_deployments();
     });
+    shared.keep_publishing();
 
     wait_for_stop()?;
     shared.stop_previews_and_logins();

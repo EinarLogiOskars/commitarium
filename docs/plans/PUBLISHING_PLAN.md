@@ -1,6 +1,6 @@
 # Publishing: Implementation Plan
 
-**Status:** agreed 2026-11-02, D1 next. Builds on
+**Status:** agreed 2026-11-02. D1 and D2 done and tested live; D3 next. Builds on
 [ADR-040](../adr/0040-split-the-host-from-the-app.md) (Distributing apps).
 
 A server can deploy an app to the internet. You keep working in the preview,
@@ -31,9 +31,11 @@ and visitors see only the version you chose to deploy.
   one in place: visitors see the "updating" page while it starts. A
   seamless swap needs shared volumes and is a later step.
 - **Caddy is the only public door**, on ports 80 and 443, in a container.
-  Its admin API is a socket in the host's private data directory, never a
-  port. It routes only deployed apps and gets a certificate per name.
-  Unknown names get a plain "No app here" page.
+  Its admin API is a socket inside its container, never a port, and the
+  host loads the whole configuration through `docker exec`. It routes only
+  published apps and gets a certificate per name. Unknown names get a plain
+  "No app here" page over HTTP; over HTTPS they have no certificate, because
+  one per name anyone types would hit Let's Encrypt's limits.
 - **Names.** Lowercase letters, digits and hyphens, unique per server, with
   reserved ones refused. A name whose DNS points elsewhere is refused, so
   subdomains served by other machines are never taken over.

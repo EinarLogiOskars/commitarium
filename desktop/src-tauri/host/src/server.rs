@@ -25,6 +25,7 @@ use crate::deployments::Deployments;
 use crate::events::{Bus, Events};
 use crate::preview::{self, PreviewManager, PreviewTarget};
 use crate::profiles::{self, ProfileManager};
+use crate::publishing::{Access as PublishAccess, Publishing};
 use crate::runtime::block_on;
 use crate::{bootstrap, disk, docker, environment, preview_check};
 
@@ -63,6 +64,7 @@ pub struct Shared {
     profiles: ProfileManager,
     previews: PreviewManager,
     deployments: Deployments,
+    publishing: Publishing,
     updater: Arc<CliUpdater>,
     /// Held for writing until leftovers are swept, because a sweep removes
     /// any preview, and one started during it would be taken for a leftover.
@@ -76,6 +78,7 @@ impl Shared {
     pub fn new(data_dir: PathBuf, bus: Bus) -> Self {
         Self {
             deployments: Deployments::new(&data_dir),
+            publishing: Publishing::new(&data_dir),
             data_dir,
             events: Events::new(bus.clone()),
             bus,
@@ -104,6 +107,23 @@ impl Shared {
     pub fn restore_deployments(&self) {
         self.wait_for_sweep();
         block_on(self.deployments.restore(self.events.clone()));
+    }
+
+    /// Keeps Caddy in step with what is published, on a server.
+    #[cfg(unix)]
+    pub fn keep_publishing(&self) {
+        self.publishing
+            .clone()
+            .keep_in_sync(self.deployments.clone());
+    }
+
+    /// Publishing is for a server: an app on this computer opens in windows.
+    fn on_a_server(&self) -> Result<(), String> {
+        #[cfg(unix)]
+        if self.gateway.get().is_some() {
+            return Ok(());
+        }
+        Err("publishing works on a server only".to_string())
     }
 
     #[cfg(unix)]
@@ -262,6 +282,11 @@ fn respond_to_get(path: &str, shared: &Shared) -> Reply {
         "/v1/disk/space" => respond_with(disk::disk_space_probe(&shared.data_dir)),
         "/v1/profiles" => respond_with(block_on(profiles::list_profiles(&shared.profiles))),
         "/v1/deployments" => respond_with(shared.deployments.list()),
+        "/v1/publishing" => respond_with(
+            shared
+                .on_a_server()
+                .and_then(|()| shared.publishing.overview(&shared.deployments)),
+        ),
         "/v1/agents/cli-status" => respond_with(Ok(cli_updates::agent_cli_status(&shared.updater))),
         "/v1/forgejo/viewer" => respond_with(block_on(bootstrap::get_forgejo_viewer_status())),
         #[cfg(unix)]
@@ -298,6 +323,19 @@ struct ApiKey {
 #[derive(Deserialize)]
 struct ProjectRequest {
     project_id: String,
+}
+
+#[derive(Deserialize)]
+struct SetDomain {
+    domain: String,
+}
+
+#[derive(Deserialize)]
+struct Publish {
+    project_id: String,
+    name: String,
+    #[serde(default)]
+    access: PublishAccess,
 }
 
 #[derive(Deserialize)]
@@ -425,6 +463,24 @@ fn respond_to_post(path: &str, body: &[u8], shared: &Shared) -> Reply {
         }),
         "/v1/deployments/stop" => with_body(body, |stop: ProjectRequest| {
             block_on(shared.deployments.stop(events(), stop.project_id))
+        }),
+        "/v1/publishing/domain" => with_body(body, |set: SetDomain| {
+            shared.on_a_server()?;
+            shared.publishing.set_domain(&set.domain)
+        }),
+        "/v1/publishing/publish" => with_body(body, |publish: Publish| {
+            shared.on_a_server()?;
+            shared
+                .publishing
+                .publish(&publish.project_id, &publish.name, publish.access)
+        }),
+        "/v1/publishing/password" => with_body(body, |asked: ProjectRequest| {
+            shared.on_a_server()?;
+            shared.publishing.new_app_password(&asked.project_id)
+        }),
+        "/v1/publishing/unpublish" => with_body(body, |asked: ProjectRequest| {
+            shared.on_a_server()?;
+            shared.publishing.unpublish(&asked.project_id)
         }),
         "/v1/previews/start" => with_body(body, |start: StartPreview| {
             if matches!(start.target, PreviewTarget::Deployment { .. }) {
