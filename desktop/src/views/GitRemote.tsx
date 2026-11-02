@@ -13,13 +13,15 @@ import { openExternal } from "../ipc";
 // A project's linked repository on GitHub or another git host
 // (SERVER_COMPLETE_PLAN.md, S2). Both ways are the user's to start: Pull
 // brings commits in, and Mayka merges them when main has its own; Push
-// sends main to a new branch there, for a pull request.
+// sends main to a branch the user names there, for a pull request.
 export function GitRemote({ projectId, compact }: { projectId: string; compact?: boolean }) {
   const [linked, setLinked] = useState<LinkedRepository | null | undefined>(undefined);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [pullRequest, setPullRequest] = useState<string | null>(null);
+  // The branch being named, while the push form is open.
+  const [pushBranch, setPushBranch] = useState<string | null>(null);
 
   const load = useCallback(
     () =>
@@ -67,12 +69,16 @@ export function GitRemote({ projectId, compact }: { projectId: string; compact?:
       );
       return `Main has commits of its own, so Mayka is merging the ${commits(pulled.commits)} in a work order.`;
     });
-  const push = () =>
+  const push = (branch: string) =>
     act("push", async () => {
-      const pushed = await pushToLinked(projectId);
-      if (!pushed.branch) return "Nothing on main the repository lacks.";
+      const pushed = await pushToLinked(projectId, branch);
+      setPushBranch(null);
+      if (pushed.commits === 0) return "Nothing on main the repository lacks.";
       if (pushed.pull_request_url) setPullRequest(pushed.pull_request_url);
-      return `Pushed ${commits(pushed.commits)} to the branch ${pushed.branch} there.`;
+      return (
+        `Pushed ${commits(pushed.commits)} to ${pushed.branch} there. ` +
+        `It is a branch of its own: merge it into ${linked.branch} there to finish.`
+      );
     });
 
   return (
@@ -86,7 +92,7 @@ export function GitRemote({ projectId, compact }: { projectId: string; compact?:
       {!compact && (
         <p className="muted">
           Pull brings the commits made there into main; when main has its own, Mayka merges the two
-          in a work order. Push sends main to a new branch there, for a pull request into{" "}
+          in a work order. Push sends main to a branch you name there, for a pull request into{" "}
           {linked.branch}. Nothing is forced, and nothing syncs on its own.
         </p>
       )}
@@ -98,9 +104,9 @@ export function GitRemote({ projectId, compact }: { projectId: string; compact?:
           className="shell-card__link"
           disabled={busy !== null || !linked.has_token}
           title={linked.has_token ? undefined : "Pushing needs an access token"}
-          onClick={() => void push()}
+          onClick={() => setPushBranch(pushBranch === null ? linked.push_branch : null)}
         >
-          {busy === "push" ? "Pushing…" : "Push"}
+          Push
         </button>
         {pullRequest && (
           <button className="shell-card__link" onClick={() => void openExternal(pullRequest)}>
@@ -108,6 +114,30 @@ export function GitRemote({ projectId, compact }: { projectId: string; compact?:
           </button>
         )}
       </div>
+      {pushBranch !== null && (
+        <div className="deploy-address">
+          <label className="muted">
+            Branch there
+            <input
+              value={pushBranch}
+              autoCapitalize="off"
+              autoCorrect="off"
+              spellCheck={false}
+              onChange={(e) => setPushBranch(e.target.value)}
+            />
+          </label>
+          <p className="muted">
+            Main goes to this branch, not to {linked.branch}. Remember to merge it into{" "}
+            {linked.branch} there, through a pull request, to get it all the way.
+          </p>
+          <button
+            disabled={busy !== null || !pushBranch.trim() || pushBranch.trim() === linked.branch}
+            onClick={() => void push(pushBranch.trim())}
+          >
+            {busy === "push" ? "Pushing…" : `Push to ${pushBranch.trim() || "…"}`}
+          </button>
+        </div>
+      )}
       {note && <p className="muted">{note}</p>}
       {error && <p className="sync-card__error">{error}</p>}
       {!compact && (

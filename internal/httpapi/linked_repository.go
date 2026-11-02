@@ -19,7 +19,7 @@ type LinkedRepositories interface {
 	Link(ctx context.Context, projectID, url, username, token string) error
 	Unlink(projectID string) error
 	Pull(ctx context.Context, projectID string) (linkedrepo.Pulled, error)
-	Push(ctx context.Context, projectID string) (linkedrepo.Pushed, error)
+	Push(ctx context.Context, projectID, branch string) (linkedrepo.Pushed, error)
 }
 
 type linkRequest struct {
@@ -37,7 +37,8 @@ func RegisterLinkedRepositoryRoutes(mux *http.ServeMux, linked LinkedRepositorie
 			writeError(w, http.StatusNotFound, "not_linked", err.Error())
 		case errors.Is(err, project.ErrNotFound):
 			writeError(w, http.StatusNotFound, "project_not_found", "project not found")
-		case errors.Is(err, linkedrepo.ErrInvalidLink), errors.Is(err, linkedrepo.ErrNoToken):
+		case errors.Is(err, linkedrepo.ErrInvalidLink), errors.Is(err, linkedrepo.ErrNoToken),
+			errors.Is(err, linkedrepo.ErrInvalidBranch):
 			writeError(w, http.StatusBadRequest, "invalid_link", err.Error())
 		case errors.Is(err, forgejo.ErrNotFastForward), errors.Is(err, linkedrepo.ErrNoRepository):
 			writeError(w, http.StatusConflict, "not_in_step", err.Error())
@@ -83,7 +84,14 @@ func RegisterLinkedRepositoryRoutes(mux *http.ServeMux, linked LinkedRepositorie
 		writeJSON(w, http.StatusOK, pulled, "pull")
 	})
 	mux.HandleFunc("POST "+path+"/push", func(w http.ResponseWriter, r *http.Request) {
-		pushed, err := linked.Push(r.Context(), r.PathValue("id"))
+		var request struct {
+			Branch string `json:"branch"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<10)).Decode(&request); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_request", "the push could not be read")
+			return
+		}
+		pushed, err := linked.Push(r.Context(), r.PathValue("id"), request.Branch)
 		if err != nil {
 			fail(w, err)
 			return
