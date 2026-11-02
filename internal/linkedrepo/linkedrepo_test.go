@@ -153,26 +153,48 @@ func TestWhenMainHasItsOwnCommitsAPullWaitsOnALinkedBranch(t *testing.T) {
 	}
 }
 
-func TestPushMakesANewBranchThereAndTouchesNoOther(t *testing.T) {
+func TestPushGoesToTheBranchTheUserNamesAndNeverToMain(t *testing.T) {
 	w := newWorld(t)
-	if pushed, err := w.service.Push(t.Context(), "p1"); err != nil || pushed.Branch != "" {
+	if view, _ := w.service.Get("p1"); view.PushBranch != DefaultPushBranch {
+		t.Fatalf("offered branch = %q", view.PushBranch)
+	}
+	if pushed, err := w.service.Push(t.Context(), "p1", "feature"); err != nil || pushed.Commits != 0 {
 		t.Fatalf("push with nothing new = %+v, %v", pushed, err)
+	}
+	for _, bad := range []string{"main", "", "-x", "a..b", "with space"} {
+		if _, err := w.service.Push(t.Context(), "p1", bad); !errors.Is(err, ErrInvalidBranch) {
+			t.Errorf("%q: %v", bad, err)
+		}
 	}
 	w.commit(w.remote, "made on GitHub")
 	w.commit(w.forgejo, "merged work order")
 	theirs := w.main(w.remote)
-	pushed, err := w.service.Push(t.Context(), "p1")
-	if err != nil || pushed.Commits != 1 || !strings.HasPrefix(pushed.Branch, PushPrefix) {
+	pushed, err := w.service.Push(t.Context(), "p1", "from-server")
+	if err != nil || pushed.Commits != 1 || pushed.Branch != "from-server" {
 		t.Fatalf("push = %+v, %v", pushed, err)
 	}
 	if w.main(w.remote) != theirs {
 		t.Fatal("the linked repository's main moved")
 	}
-	if git(t, w.remote, "rev-parse", "refs/heads/"+pushed.Branch) != w.main(w.forgejo) {
-		t.Fatal("main is not on the new branch")
+	if git(t, w.remote, "rev-parse", "refs/heads/from-server") != w.main(w.forgejo) {
+		t.Fatal("main is not on the branch")
 	}
-	if again, err := w.service.Push(t.Context(), "p1"); err != nil || again.Branch != pushed.Branch {
-		t.Fatalf("pushing the same main again = %+v, %v", again, err)
+	if view, _ := w.service.Get("p1"); view.PushBranch != "from-server" {
+		t.Fatalf("offered branch = %q", view.PushBranch)
+	}
+	// The branch moves forward with main's next commit.
+	w.commit(w.forgejo, "next work order")
+	if _, err := w.service.Push(t.Context(), "p1", "from-server"); err != nil ||
+		git(t, w.remote, "rev-parse", "refs/heads/from-server") != w.main(w.forgejo) {
+		t.Fatalf("second push: %v", err)
+	}
+	// A branch there with commits main lacks is never overwritten.
+	if _, err := w.service.Push(t.Context(), "p1", "main-copy"); err != nil {
+		t.Fatal(err)
+	}
+	git(t, w.remote, "update-ref", "refs/heads/main-copy", theirs)
+	if _, err := w.service.Push(t.Context(), "p1", "main-copy"); !errors.Is(err, ErrInvalidBranch) {
+		t.Fatalf("push over their commits: %v", err)
 	}
 }
 
@@ -195,7 +217,7 @@ func TestPushingNeedsAToken(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := w.service.Push(t.Context(), "p1"); !errors.Is(err, ErrNoToken) {
+	if _, err := w.service.Push(t.Context(), "p1", "x"); !errors.Is(err, ErrNoToken) {
 		t.Fatalf("err = %v", err)
 	}
 }

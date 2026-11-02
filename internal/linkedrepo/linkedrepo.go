@@ -2,12 +2,13 @@
 // git host (SERVER_COMPLETE_PLAN.md, S2). Both ways are the user's to start:
 // Pull brings the repository's commits into main, as a fast-forward, or onto
 // a branch Mayka merges when main has commits of its own. Push sends main to
-// a new branch there, for a pull request the user opens. Nothing is ever
+// a branch the user names there, for a pull request the user opens. Nothing is ever
 // forced, and nothing syncs on its own.
 package linkedrepo
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -31,10 +32,10 @@ var (
 	// one that could not be reached with the token given.
 	ErrInvalidLink = errors.New("invalid linked repository")
 	ErrNoToken     = errors.New("pushing needs an access token")
-	// ErrTheirsAhead is a push refused because the linked repository has
-	// commits main lacks: those come in first.
-	ErrTheirsAhead  = errors.New("the linked repository has new commits; bring those in first")
-	ErrNoRepository = errors.New("the project has no repository yet")
+	// ErrInvalidBranch is a push branch git would not take, main itself, or
+	// one there with commits main lacks.
+	ErrInvalidBranch = errors.New("invalid branch")
+	ErrNoRepository  = errors.New("the project has no repository yet")
 )
 
 // What a pull did.
@@ -50,8 +51,8 @@ const (
 // land on before they reach main, and stay on when main has its own.
 const BranchPrefix = "linked/"
 
-// PushPrefix names the branches Push makes on the linked repository.
-const PushPrefix = "commitarium/"
+// DefaultPushBranch is the branch Push offers before the user has named one.
+const DefaultPushBranch = "commitarium"
 
 // Link is a project's linked repository. Its token stays in the
 // coordinator's credentials, out of agents' reach and out of backups.
@@ -62,6 +63,8 @@ type Link struct {
 	Token    string    `json:"token,omitempty"`
 	PulledAt time.Time `json:"pulled_at,omitzero"`
 	PushedAt time.Time `json:"pushed_at,omitzero"`
+	// PushBranch is the branch the user last pushed to.
+	PushBranch string `json:"push_branch,omitempty"`
 }
 
 // View is a link as the app shows it, without its token.
@@ -72,6 +75,8 @@ type View struct {
 	HasToken    bool      `json:"has_token"`
 	PulledAt    time.Time `json:"pulled_at,omitzero"`
 	PushedAt    time.Time `json:"pushed_at,omitzero"`
+	// PushBranch is the branch Push offers: the last one, or a default.
+	PushBranch string `json:"push_branch"`
 }
 
 // Pulled is what a pull did, and how many commits it brought.
@@ -81,10 +86,10 @@ type Pulled struct {
 	LocalBranch string `json:"local_branch"`
 }
 
-// Pushed is the branch a push made, and where to open its pull request.
-// An empty branch means main had nothing the repository lacks.
+// Pushed is the branch a push went to, and where to open its pull request.
+// No commits means main had nothing the repository lacks.
 type Pushed struct {
-	Branch      string `json:"branch,omitempty"`
+	Branch      string `json:"branch"`
 	Commits     int    `json:"commits"`
 	PullRequest string `json:"pull_request_url,omitempty"`
 }
@@ -155,6 +160,7 @@ func (service *Service) Get(projectID string) (View, error) {
 	return View{
 		URL: link.URL, Branch: link.Branch, LocalBranch: BranchPrefix + link.Branch,
 		HasToken: link.Token != "", PulledAt: link.PulledAt, PushedAt: link.PushedAt,
+		PushBranch: cmp.Or(link.PushBranch, DefaultPushBranch),
 	}, nil
 }
 
@@ -231,9 +237,11 @@ func (service *Service) Pull(ctx context.Context, projectID string) (Pulled, err
 	return pulled, err
 }
 
-// Push sends main to a new branch on the linked repository, named for its
-// commit, for a pull request there. No branch of theirs is touched.
-func (service *Service) Push(ctx context.Context, projectID string) (Pushed, error) {
+// Push sends main to the branch the user names on the linked repository,
+// for a pull request into its main there. The branch is made, or moved
+// forward; never forced, and never the main branch itself, which changes
+// only through that pull request.
+func (service *Service) Push(ctx context.Context, projectID, branch string) (Pushed, error) {
 	link, err := service.link(projectID)
 	if err != nil {
 		return Pushed{}, err
@@ -241,24 +249,35 @@ func (service *Service) Push(ctx context.Context, projectID string) (Pushed, err
 	if link.Token == "" {
 		return Pushed{}, ErrNoToken
 	}
-	var pushed Pushed
+	branch = strings.TrimSpace(branch)
+	if branch == link.Branch {
+		return Pushed{}, fmt.Errorf("%w: push to a branch of its own; %s changes through a pull request",
+			ErrInvalidBranch, link.Branch)
+	}
+	if _, err := service.git(ctx, "", nil, "check-ref-format", "--branch", branch); err != nil ||
+		branch == "" || strings.HasPrefix(branch, "-") {
+		return Pushed{}, fmt.Errorf("%w: %q is not a branch name git takes", ErrInvalidBranch, branch)
+	}
+	pushed := Pushed{Branch: branch}
 	err = service.withSides(ctx, projectID, link, func(s sides) error {
 		pushed.Commits = s.oursOnly
 		if s.oursOnly == 0 {
 			return nil
 		}
-		branch := PushPrefix + s.ours[:min(8, len(s.ours))]
-		// No --force: a branch of that name already holds this commit or
-		// is someone else's.
+		// No --force: a branch there with commits main lacks refuses it.
 		if _, err := service.git(ctx, s.dir, remoteEnvironment(link), "push", link.URL,
 			s.ours+":refs/heads/"+branch); err != nil {
+			if strings.Contains(err.Error(), "fetch first") || strings.Contains(err.Error(), "non-fast-forward") {
+				return fmt.Errorf("%w: the branch %s there has commits main lacks; choose another name",
+					ErrInvalidBranch, branch)
+			}
 			return fmt.Errorf("the linked repository refused the push: %s", gitReason(err))
 		}
-		pushed.Branch = branch
 		pushed.PullRequest = pullRequestURL(link.URL, link.Branch, branch)
 		return service.update(func(links map[string]Link) {
 			stored := links[projectID]
 			stored.PushedAt = time.Now().UTC()
+			stored.PushBranch = branch
 			links[projectID] = stored
 		})
 	})
