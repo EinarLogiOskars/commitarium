@@ -598,7 +598,10 @@ mod tests {
         assert_eq!(config["admin"]["listen"], CADDY_ADMIN);
         // A password challenge is no stopped app.
         let errors = &config["apps"]["http"]["servers"]["public"]["errors"]["routes"][0];
-        assert_eq!(errors["match"][0]["expression"], "{http.error.status_code} >= 502");
+        assert_eq!(
+            errors["match"][0]["expression"],
+            "{http.error.status_code} >= 502"
+        );
     }
 
     #[test]
