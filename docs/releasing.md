@@ -112,6 +112,11 @@ or Claude lead/reviewer profiles.
 - a Windows x86-64 NSIS installer;
 - a Linux x86-64 AppImage.
 
+For servers it attaches the host program, `commitarium-host-linux-x86_64` and
+`commitarium-host-linux-aarch64`, each with a `.sha256` and an updater `.sig`,
+and `install-host.sh`, which the install line downloads from the latest
+release. A server updates its host from these files when its user chooses to.
+
 It also uploads each platform's signed updater payload and a `latest.json`
 manifest. A final workflow job downloads that manifest from the draft and
 checks its version, signatures, secure download URLs, and coverage for Apple
