@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-forgejo-address"
+description = "Enables the forgejo_address command without any pre-configured scope."
+commands.allow = ["forgejo_address"]
+
+[[permission]]
+identifier = "deny-forgejo-address"
+description = "Denies the forgejo_address command without any pre-configured scope."
+commands.deny = ["forgejo_address"]

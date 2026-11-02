@@ -257,6 +257,9 @@ fn reqwest_client(pin: Pin, device: Option<&Identity>) -> Result<reqwest::Client
     };
     reqwest::Client::builder()
         .no_proxy()
+        // The bridge hands a redirect back as it came: followed here, one
+        // naming the server's own address would reach this computer.
+        .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(CONNECT_PATIENCE)
         .tcp_keepalive(KEEP_ALIVE)
         .http1_only()

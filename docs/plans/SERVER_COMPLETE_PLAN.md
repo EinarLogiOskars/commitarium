@@ -1,6 +1,6 @@
 # Server Mode, Complete: Implementation Plan (0.10.0)
 
-**Status:** agreed 2026-11-02. S1 built and tested on a server except restore; S2 built, its Forgejo calls checked against a real server; S3 built; S4 next. Finishes what
+**Status:** agreed 2026-11-02. S1 built and tested on a server except restore; S2 built, its Forgejo calls checked against a real server; S3 and S4 built; S5 next. Finishes what
 [REMOTE_HOST_PLAN.md](REMOTE_HOST_PLAN.md) left for after its milestone, so a
 server can be the only place a user's work lives. Released together as 0.10.0;
 company sign-in follows as 0.11.0.
@@ -57,10 +57,14 @@ backups, importing a folder, syncing with a local folder, and the audit viewer.
 
 - The audit viewer is Forgejo's own pages, read-only, with the viewer
   account. On a server Forgejo listens on loopback only. The bridge gets a
-  second loopback port for Forgejo alone, opened in the browser with a
-  one-time link, so the browser holds no device key.
-- Forgejo builds links from its own address, so its root URL must match what
-  the browser sees: the step settles how, before building.
+  second loopback port for Forgejo alone, which the browser opens. Like
+  Forgejo on this computer, that port is open to local processes and asks for
+  Forgejo's own login; no token is added, so it reads only.
+- Forgejo names itself `http://localhost:3001` in its redirects, so the
+  bridge rewrites those to its port, and the app points Forgejo links there
+  on a server. The device's connection never follows a redirect itself:
+  followed on the device, one naming the server's own address would reach
+  this computer instead.
 
 ## S5: A warning before an app's address changes
 

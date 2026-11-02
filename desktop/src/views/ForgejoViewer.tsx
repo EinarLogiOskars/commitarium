@@ -1,5 +1,3 @@
-import { NotOnAServer } from "./NotOnAServer";
-import { connectedServer } from "../connection";
 import { useEffect, useState } from "react";
 import {
   configureForgejoViewer,
@@ -117,7 +115,5 @@ function ForgejoViewerOnThisComputer({ onClose }: { onClose: () => void }) {
   );
 }
 
-export function ForgejoViewer(props: React.ComponentProps<typeof ForgejoViewerOnThisComputer>) {
-  if (connectedServer()) return <NotOnAServer what="The audit viewer" />;
-  return <ForgejoViewerOnThisComputer {...props} />;
-}
+// On a server too: its pages reach the browser through the bridge (S4).
+export const ForgejoViewer = ForgejoViewerOnThisComputer;

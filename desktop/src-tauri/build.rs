@@ -16,6 +16,7 @@ const COMMANDS: &[&str] = &[
     "stack_down",
     "stack_update",
     "host_connection",
+    "forgejo_address",
     "coordinator_connection",
     "connection_mode",
     "use_this_computer",

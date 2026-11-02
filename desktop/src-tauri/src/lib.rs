@@ -94,6 +94,7 @@ pub fn run() {
             docker::stack_down,
             docker::stack_update,
             host::host_connection,
+            host::forgejo_address,
             bootstrap::get_forgejo_viewer_status,
             bootstrap::configure_forgejo_viewer,
             environment::provision_environment_request,

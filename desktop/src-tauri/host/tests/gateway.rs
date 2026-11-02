@@ -17,6 +17,18 @@ fn upstream() -> u16 {
     std::thread::spawn(move || {
         for request in server.incoming_requests() {
             std::thread::spawn(move || {
+                if request.url() == "/user/login-redirect" {
+                    let _ = request.respond(
+                        tiny_http::Response::empty(303).with_header(
+                            tiny_http::Header::from_bytes(
+                                &b"Location"[..],
+                                &b"http://localhost:3001/user/login"[..],
+                            )
+                            .unwrap(),
+                        ),
+                    );
+                    return;
+                }
                 if request.url() == "/events" {
                     use std::io::Write;
                     let mut client = request.into_writer();
@@ -307,6 +319,41 @@ async fn bridged(fixture: &Fixture) -> (Bridge, reqwest::Client) {
     .unwrap();
     let local = reqwest::Client::builder().no_proxy().build().unwrap();
     (bridge, local)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_servers_forgejo_opens_in_the_browser_through_the_bridge() {
+    let fixture = start().await;
+    let (bridge, _) = bridged(&fixture).await;
+    let forgejo = bridge.forgejo_url().await.unwrap();
+    assert_eq!(bridge.forgejo_url().await.unwrap(), forgejo, "one port");
+    // A browser holds no token, and Forgejo gets none.
+    let browser = reqwest::Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap();
+    let page = browser
+        .get(format!("{forgejo}/explore/repos"))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(page.starts_with("/explore/repos "), "{page}");
+    assert!(!page.contains("authorization="), "{page}");
+    // Its redirects name this port, not Forgejo's address on the server.
+    let moved = browser
+        .get(format!("{forgejo}/user/login-redirect"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(moved.status(), 303);
+    assert_eq!(
+        moved.headers()["location"].to_str().unwrap(),
+        format!("{forgejo}/user/login")
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
