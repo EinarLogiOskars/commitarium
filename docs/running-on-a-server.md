@@ -64,22 +64,29 @@ A server backs itself up each night while no agent is working, and keeps the
 last seven, in `backups/` in its data directory: projects, chats, agents'
 history and deployed apps' data. Settings > Backup lists them, makes one now,
 and restores one. They stay on the server, so they do not survive losing it;
-a git remote (Sync) keeps a copy of the code elsewhere. Agent sign-ins and
+a linked repository keeps a copy of the code elsewhere. Agent sign-ins and
 device keys are not in a backup.
 
 ## Importing a project
 
 On a server, Import project asks for the repository's https address, such as
 `https://github.com/you/app.git`, and an access token for a private one.
-Commitarium copies it onto the server; the original stays as it is.
+Commitarium copies it onto the server and links the project to it, so the
+two stay in step (see below); the original stays as it is.
 
-## Code on a git remote
+## A linked repository
 
-On a server, a project's code lives in that server's Forgejo. To keep a copy
-elsewhere, create an empty repository on GitHub or another git host, and an
-access token that can push to it. Then, on the project's Git remote card,
-give the repository's https address and the token. Commitarium pushes to it
-after every merge; the token stays in Forgejo.
+On a server, a project's code lives in that server's Forgejo. Link it to a
+repository on GitHub or another git host to keep a copy elsewhere and work
+on it from both places. On the project's Linked repository card, give the
+repository's https address and an access token that can read and push to
+it; the token stays on the server. A public repository can be linked without
+a token, but then commits only come in.
+
+**Bring in** takes the commits made there. **Push** sends main's. Nothing is
+ever forced: when both sides have new commits, theirs wait on the branch
+`linked/<branch>`, and Mayka can merge them in a work order. Turn on syncing
+on its own to have the server do both every few minutes.
 
 ## Reaching the server
 

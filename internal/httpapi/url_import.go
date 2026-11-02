@@ -29,10 +29,16 @@ type importFromURLRequest struct {
 	DialogueLimits *dialogueLimitsRequest `json:"dialogue_limits"`
 }
 
+// Linker links an imported project to the repository it came from (S2).
+type Linker interface {
+	Link(ctx context.Context, projectID, url, username, token string) error
+}
+
 // RegisterURLImportRoute adds PUT /api/v1/project-imports/{importID}/url:
 // the repository is cloned, bundled and imported as a folder's would be, so
-// a server, which has no folder of the user's, imports too.
-func RegisterURLImportRoute(mux *http.ServeMux, importer ProjectImporter, bundler URLBundler) {
+// a server, which has no folder of the user's, imports too. The project
+// stays linked to the repository.
+func RegisterURLImportRoute(mux *http.ServeMux, importer ProjectImporter, bundler URLBundler, linker Linker) {
 	mux.HandleFunc("PUT /api/v1/project-imports/{importID}/url", func(w http.ResponseWriter, r *http.Request) {
 		var request importFromURLRequest
 		decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10))
@@ -75,6 +81,12 @@ func RegisterURLImportRoute(mux *http.ServeMux, importer ProjectImporter, bundle
 		if err != nil {
 			writeImportError(w, r, err)
 			return
+		}
+		// The import stands without the link, which the project page can
+		// make again.
+		if err := linker.Link(r.Context(), imported.ID, request.URL,
+			strings.TrimSpace(request.Username), strings.TrimSpace(request.Token)); err != nil {
+			log.Printf("link imported project %s: %v", imported.ID, err)
 		}
 		w.Header().Set("Location", "/api/v1/projects/"+imported.ID)
 		status := http.StatusOK

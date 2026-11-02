@@ -111,10 +111,10 @@ export function ProjectCards({
       {hasRepo && connectedServer() && (
         <DeployCard projectId={projectId} onOpenPage={() => open("deployment")} />
       )}
-      {/* On a server, the code's other copy is a git remote. */}
+      {/* On a server, the code syncs with a linked repository. */}
       {hasRepo && connectedServer() && (
         <section className="shell-card">
-          <h2 className="shell-card__head">Git remote</h2>
+          <h2 className="shell-card__head">Linked repository</h2>
           <GitRemote projectId={projectId} compact />
         </section>
       )}
