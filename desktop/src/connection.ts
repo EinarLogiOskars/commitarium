@@ -1,5 +1,5 @@
-// Which server this launch uses, if any (ADR-040). Set once before the app
-// shows, because changing it restarts the app.
+// Which server the window shows, if any (ADR-040). Set once before the app
+// shows: switching reloads the window.
 let server: string | null = null;
 
 export const setServer = (address: string | null) => {

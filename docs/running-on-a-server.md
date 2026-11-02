@@ -24,6 +24,14 @@ once, for 5 minutes. To make a new one:
 sudo commitarium-host pair
 ```
 
+## This computer and your servers
+
+The menu under Commitarium's name shows where you are: **This computer** or one
+of your servers. Choose another to switch; only the window reloads. Each keeps
+working while you look at another, so a server's agents carry on, and this
+computer's do until you quit the app. **Connect a server…** in the same menu
+adds another. Settings > Server names a server or forgets it on this computer.
+
 ## Reaching the server
 
 **With Tailscale.** This is the best choice for a server at home, because it

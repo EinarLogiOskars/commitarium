@@ -6,12 +6,15 @@ import {
   installHostUpdate,
   openPairing,
   pairedDevices,
-  restartApp,
+  places as readPlaces,
+  forgetServer,
+  renameServer,
   revokeDevice,
-  chooseThisComputer,
   type HostUpdate,
   type PairedDevice,
+  type Places,
 } from "../ipc";
+import { showPlace } from "./PlaceSwitch";
 import { ConnectForm } from "./StartChoice";
 
 /** This app's API version: raise it with `API_VERSION` in the host. */
@@ -24,22 +27,97 @@ function versionProblem(api: number): string | null {
     : "This app is too old for your server. Update the app.";
 }
 
-// The server's state and what can be done to it, in Settings.
+// The servers this device knows, and the shown one's state, in Settings.
 export function ServerSection({ running }: { running: boolean }) {
   const server = connectedServer();
-  if (!server) {
-    return (
+  return (
+    <>
+      {server && <ConnectedServer server={server} running={running} />}
+      <Servers />
       <section className="set__section">
-        <h3 className="set__heading">Connect to a server</h3>
+        <h3 className="set__heading">Connect a server</h3>
         <p className="muted set__note">
-          Commitarium runs on this computer. It can run on a server of yours instead, and your work
-          carries on when this computer is off.
+          Commitarium can run on a server of yours too, and its work carries on when this computer
+          is off. This computer keeps working beside it.
         </p>
         <ConnectForm />
       </section>
-    );
-  }
-  return <ConnectedServer server={server} running={running} />;
+    </>
+  );
+}
+
+// Every paired server: show it, name it, or forget it on this device.
+function Servers() {
+  const [known, setKnown] = useState<Places | null>(null);
+  const [naming, setNaming] = useState<string | null>(null);
+  const [name, setName] = useState("");
+  const [error, setError] = useState<string | null>(null);
+
+  const refresh = useCallback(() => {
+    void readPlaces()
+      .then(setKnown)
+      .catch((e) => setError(String(e)));
+  }, []);
+  useEffect(refresh, [refresh]);
+
+  if (!known || known.servers.length === 0) return null;
+  const act = (work: Promise<unknown>) => work.then(refresh).catch((e) => setError(String(e)));
+  const save = (fingerprint: string) => {
+    setNaming(null);
+    act(renameServer(fingerprint, name));
+  };
+  const forget = (fingerprint: string, label: string) => {
+    if (!window.confirm(`Forget ${label} on this computer? Pairing it again needs a new code.`))
+      return;
+    const shown = known.active === fingerprint;
+    void forgetServer(fingerprint)
+      .then(() => (shown ? window.location.reload() : refresh()))
+      .catch((e) => setError(String(e)));
+  };
+
+  return (
+    <section className="set__section">
+      <h3 className="set__heading">Servers</h3>
+      {known.servers.map((server) => (
+        <div className="set__row" key={server.fingerprint}>
+          {naming === server.fingerprint ? (
+            <input
+              autoFocus
+              aria-label="Server name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") save(server.fingerprint);
+                if (e.key === "Escape") setNaming(null);
+              }}
+              onBlur={() => save(server.fingerprint)}
+            />
+          ) : (
+            <span title={server.address}>
+              {server.name}
+              {known.active === server.fingerprint && <span className="muted"> · shown</span>}
+            </span>
+          )}
+          {known.active !== server.fingerprint && (
+            <button onClick={() => void showPlace(server.fingerprint)}>Show</button>
+          )}
+          <button
+            className="ghost"
+            onClick={() => {
+              setName(server.name === server.address ? "" : server.name);
+              setNaming(server.fingerprint);
+            }}
+          >
+            Rename
+          </button>
+          <button className="ghost" onClick={() => forget(server.fingerprint, server.name)}>
+            Forget
+          </button>
+        </div>
+      ))}
+      {error && <p className="set__note">{error}</p>}
+    </section>
+  );
 }
 
 function ConnectedServer({ server, running }: { server: string; running: boolean }) {
@@ -110,9 +188,7 @@ function ConnectedServer({ server, running }: { server: string; running: boolean
         {update && !update.available && (
           <p className="muted set__note">Server is up to date ({update.current}).</p>
         )}
-        <button onClick={() => void chooseThisComputer().then(restartApp)}>
-          Use this computer instead
-        </button>
+        <button onClick={() => void showPlace(null)}>Show this computer</button>
       </section>
 
       <section className="set__section">

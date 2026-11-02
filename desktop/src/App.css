@@ -6073,6 +6073,47 @@ select:focus {
   padding: 4px 10px 8px;
   font-weight: 600;
 }
+.boot-quiet {
+  position: fixed;
+  inset: 0;
+  background: var(--bg);
+}
+.chat-side__place {
+  padding: 0 10px 8px;
+}
+/* Which side the window shows: small, with an icon, and tinted on a server so
+   it is plain at a glance which one this is. */
+.place-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 2px 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--muted);
+}
+.place-switch--server {
+  border-color: color-mix(in srgb, var(--blue) 45%, transparent);
+  background: var(--blue-soft);
+  color: var(--text);
+}
+.place-switch__select {
+  min-width: 0;
+  flex: 1;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font-size: var(--text-sm);
+}
+.chat-side__place .place-switch {
+  display: flex;
+}
+.place-switch__error {
+  color: var(--bad);
+  font-size: var(--text-sm);
+}
 .chat-side__mode {
   margin-left: auto;
   padding: 2px 8px;

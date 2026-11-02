@@ -4,7 +4,9 @@ import {
   launchDockerDesktop,
   onStackProgress,
   stackStart,
+  stackStatus,
   type DockerProbe,
+  type ServiceStatus,
 } from "../ipc";
 import { connectedServer } from "../connection";
 
@@ -26,6 +28,37 @@ const FINISH_MESSAGE = "Ready — opening Commitarium…";
 const CHECKING = () => (connectedServer() ? "Connecting to your server…" : "Checking Docker…");
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+const CORE_SERVICES = ["coordinator", "forgejo", "simulated-codex-worker"];
+
+export function coreServicesUp(statuses: ServiceStatus[]): boolean {
+  return CORE_SERVICES.every((name) =>
+    statuses.some((status) => status.service === name && status.state === "running"),
+  );
+}
+
+// Set just before the window reloads for a switch (PlaceSwitch.tsx). The side
+// switched to is usually up already, so its checks pass at once and the splash
+// is not held: a switch should feel like one.
+const SWITCHED_KEY = "commitarium.switched";
+
+export function markSwitched() {
+  try {
+    sessionStorage.setItem(SWITCHED_KEY, "1");
+  } catch {
+    // Without storage a switch shows the full splash.
+  }
+}
+
+function takeSwitched(): boolean {
+  try {
+    const switched = sessionStorage.getItem(SWITCHED_KEY) === "1";
+    sessionStorage.removeItem(SWITCHED_KEY);
+    return switched;
+  } catch {
+    return false;
+  }
+}
 
 /**
  * Startup gate: probe Docker, bring the stack up if needed, and hold a loading
@@ -51,9 +84,13 @@ export function useBoot() {
     setRequest((current) => ({ id: current.id + 1, launchDocker: true }));
   }, []);
 
+  const [switched] = useState(takeSwitched);
+
   useEffect(() => {
     let cancelled = false;
     const startedAt = Date.now();
+    const minVisible = switched ? 0 : MIN_VISIBLE_MS;
+    const finishHold = switched ? 0 : FINISH_HOLD_MS;
     let progressCap = 8;
     setProgress(0);
 
@@ -73,11 +110,24 @@ export function useBoot() {
     }, PROGRESS_TICK_MS);
 
     const holdMinVisible = async () => {
-      const remaining = MIN_VISIBLE_MS - (Date.now() - startedAt);
+      const remaining = minVisible - (Date.now() - startedAt);
       if (remaining > 0) await wait(remaining);
     };
 
     const run = async () => {
+      // A side switched to is usually running already: if its services are
+      // up, there is nothing to start or show.
+      if (switched && request.id === 0) {
+        const up = await stackStatus()
+          .then(coreServicesUp)
+          .catch(() => false);
+        if (cancelled) return;
+        if (up) {
+          clearInterval(creep);
+          setPhase("ready");
+          return;
+        }
+      }
       if (request.launchDocker) {
         setPhase("launching-docker");
         setDetail("Opening Docker Desktop…");
@@ -174,7 +224,7 @@ export function useBoot() {
       setProgress(100);
       setDetail(FINISH_MESSAGE);
       setPhase("finishing");
-      await wait(FINISH_HOLD_MS);
+      await wait(finishHold);
       if (cancelled) return;
       setPhase("ready");
     };
@@ -184,7 +234,7 @@ export function useBoot() {
       cancelled = true;
       clearInterval(creep);
     };
-  }, [request]);
+  }, [request, switched]);
 
-  return { phase, detail, probe, progress, warning, retry, launchDocker };
+  return { phase, detail, probe, progress, warning, retry, launchDocker, switched };
 }

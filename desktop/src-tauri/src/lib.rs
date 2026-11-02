@@ -102,6 +102,7 @@ pub fn run() {
             desktop_services::save_desktop_settings,
             desktop_services::confirm_exit,
             desktop_services::cancel_exit,
+            desktop_services::exit_prompt_shown,
             desktop_services::notify_attention,
             desktop_services::create_backup,
             desktop_services::inspect_backup,
@@ -133,6 +134,10 @@ pub fn run() {
             remote::connection_mode,
             remote::use_this_computer,
             remote::connect_to_server,
+            remote::use_server,
+            remote::places,
+            remote::rename_server,
+            remote::forget_server,
             preview::start_preview,
             preview::stop_preview,
             preview::reset_preview_data,
@@ -153,7 +158,7 @@ pub fn run() {
             tauri::RunEvent::ExitRequested { api, .. }
                 if desktop_services::exit_behavior(app)
                     == desktop_services::ExitBehavior::StopStack
-                    && !host::is_remote(app)
+                    && host::local_started(app)
                     && !updater::is_restarting(app) =>
             {
                 let coordinator = app.state::<desktop_services::ExitCoordinator>();

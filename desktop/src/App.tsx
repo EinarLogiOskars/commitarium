@@ -5,7 +5,7 @@ import { useNotifier } from "./attention/useNotifier";
 import { useDesktopSettings } from "./settings/useDesktopSettings";
 import { useBoot } from "./boot/useBoot";
 import { BootScreen } from "./views/BootScreen";
-import { onExitConfirmationRequested, restartApp } from "./ipc";
+import { exitPromptShown, onExitConfirmationRequested, restartApp } from "./ipc";
 import { AppSettings } from "./views/AppSettings";
 import { ExitConfirm } from "./views/ExitConfirm";
 import { Inbox } from "./views/Inbox";
@@ -24,6 +24,7 @@ import { DevShell } from "./views/DevShell";
 import { Agents } from "./views/Agents";
 import { ForgejoViewer } from "./views/ForgejoViewer";
 import { UpdateModal } from "./views/UpdateModal";
+import { PlaceSwitch, usePlaceName } from "./views/PlaceSwitch";
 import { useDesktopUpdate } from "./update/useDesktopUpdate";
 import { markOffered, offeredVersion, shouldOffer } from "./update/offer";
 import { DEV_MODE_KEY } from "./devMode";
@@ -58,6 +59,7 @@ function readArea(): Area {
 
 function App() {
   const boot = useBoot();
+  const placeName = usePlaceName();
   const [dismissedWarning, setDismissedWarning] = useState<string | null>(null);
   const [reachable, setReachable] = useState(false);
   const [entered, setEntered] = useState(false);
@@ -175,6 +177,7 @@ function App() {
     const listener = onExitConfirmationRequested((payload) => {
       refreshAttention();
       setExitPrompt({ timeoutMs: payload.timeout_ms });
+      void exitPromptShown();
     });
     return () => void listener.then((unlisten) => unlisten());
   }, [refreshAttention]);
@@ -202,7 +205,7 @@ function App() {
   const pillInner = (
     <>
       <span className={`dot dot--${reachable ? "ok" : "bad"}`} />
-      coordinator {reachable ? "reachable" : "unreachable"}
+      {placeName} · {reachable ? "reachable" : "unreachable"}
     </>
   );
   // On the system screen the pill is a plain status badge. In the workspace it
@@ -226,6 +229,9 @@ function App() {
   // Startup gate: hold the loading screen until Docker + the coordinator are up.
   // A down/missing Docker daemon drops it early into an actionable status view.
   if (boot.phase !== "ready") {
+    // Just after a switch the first check usually opens the side at once, so
+    // the splash would only flash: the plain background stands in for it.
+    if (boot.switched && boot.phase === "probing") return <div className="boot-quiet" />;
     return (
       <>
         <BootScreen
@@ -391,6 +397,7 @@ function App() {
       {!projectId && !chatShell && (
         <header className="topbar">
           <span className="topbar__brand">Commitarium</span>
+          <PlaceSwitch />
           <span className="view-switch" role="tablist">
             {(devMode
               ? (["apps", "marketplace", "projects"] as const)

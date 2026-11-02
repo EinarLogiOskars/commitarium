@@ -31,6 +31,8 @@ const RELISTEN_AFTER: Duration = Duration::from_secs(1);
 /// The host speaks at least every 15 seconds, so this much silence means a
 /// connection the network dropped without saying so.
 const SILENCE_LIMIT: Duration = Duration::from_secs(45);
+/// How often a stream checks that its host is still the one shown.
+const SWITCH_CHECK: Duration = Duration::from_secs(1);
 const PREVIEW_LOST: &str = "Commitarium's background service restarted, so this preview stopped. \
                             Start it again.";
 const LOGIN_LOST: &str = "Commitarium's background service restarted during this login. \
@@ -65,31 +67,48 @@ struct Running {
     connection: HostConnection,
 }
 
+/// This computer's host and the paired servers, side by side (ADR-040). The
+/// window shows one of them, the active one, and switching only changes which.
+/// Each starts the first time it is shown and keeps going until the app quits:
+/// the local host's work stops then, a server's never depends on the app.
 #[derive(Clone, Default)]
 pub struct Host {
     running: Arc<Mutex<Option<Running>>>,
     /// Set once the host is stopped for good, so a page still polling cannot
     /// bring it back while the app exits or an update replaces its file.
     closing: Arc<AtomicBool>,
-    /// Set at launch in remote mode. No local host runs then, and the host's
-    /// work belongs to the server, so quitting leaves it all alone.
-    remote: Arc<Mutex<Option<Result<HostConnection, String>>>>,
+    /// The bridges to servers opened so far, by the server's fingerprint.
+    servers: Arc<Mutex<BTreeMap<String, Result<HostConnection, String>>>>,
+    /// The server the window shows, or `None` for this computer.
+    active: Arc<Mutex<Option<String>>>,
 }
 
 impl Host {
+    fn active(&self) -> Option<String> {
+        self.active.lock().ok()?.clone()
+    }
+
+    /// The shown server's bridge, when a server is shown.
     fn remote(&self) -> Option<Result<HostConnection, String>> {
-        self.remote.lock().ok()?.clone()
+        let active = self.active()?;
+        let servers = self.servers.lock().ok()?;
+        Some(
+            servers
+                .get(&active)
+                .cloned()
+                .unwrap_or_else(|| Err("not connected to this server yet".to_string())),
+        )
     }
 
-    fn is_remote(&self) -> bool {
-        self.remote().is_some()
-    }
-
-    /// The running host, starting it again if it has gone.
+    /// The shown host, starting this computer's again if it has gone.
     fn connection(&self, app: &AppHandle) -> Result<HostConnection, String> {
         if let Some(remote) = self.remote() {
             return remote;
         }
+        self.local_connection(app)
+    }
+
+    fn local_connection(&self, app: &AppHandle) -> Result<HostConnection, String> {
         if self.closing.load(Ordering::Acquire) {
             return Err("the app is closing".to_string());
         }
@@ -110,11 +129,16 @@ impl Host {
         Ok(connection)
     }
 
-    /// The host if it is running. Asking never starts one.
+    /// The shown host if it is running. Asking never starts one.
     fn running(&self) -> Option<HostConnection> {
         if let Some(remote) = self.remote() {
             return remote.ok();
         }
+        self.local_running()
+    }
+
+    /// This computer's host if it is running, whichever is shown.
+    fn local_running(&self) -> Option<HostConnection> {
         let mut running = self.running.lock().ok()?;
         let host = running.as_mut()?;
         matches!(host.child.try_wait(), Ok(None)).then(|| host.connection.clone())
@@ -139,21 +163,74 @@ impl Host {
     }
 }
 
-/// Starts the host at launch, or the bridge to a paired server. If it fails,
-/// the first call tries again and reports why, and a failed bridge never falls
-/// back to a local host.
+/// Starts what the app last showed: this computer's host, or the bridge to a
+/// paired server. If it fails, the first call reports why, and a failed bridge
+/// never falls back to the local host.
 pub(crate) fn launch(app: &AppHandle) {
     if let Ok(Some(server)) = crate::remote::active_host(app) {
-        let connected = tauri::async_runtime::block_on(connect_bridge(app, &server));
-        let host = app.state::<Host>();
-        if let Ok(mut remote) = host.remote.lock() {
-            *remote = Some(connected);
-        }
+        tauri::async_runtime::block_on(show_server(app, &server));
         return;
     }
     if let Err(error) = app.state::<Host>().connection(app) {
         eprintln!("[host] {error}");
     }
+}
+
+/// Shows a server, opening its bridge the first time. A failed bridge stays
+/// shown with its reason, and showing it again tries again.
+pub(crate) async fn show_server(app: &AppHandle, server: &PairedHost) {
+    let host = app.state::<Host>().inner().clone();
+    let open = host
+        .servers
+        .lock()
+        .map(|servers| matches!(servers.get(&server.fingerprint), Some(Ok(_))))
+        .unwrap_or(false);
+    if !open {
+        let connected = connect_bridge(app, server).await;
+        if let Ok(connection) = &connected {
+            if let Some(bridge) = &connection.bridge {
+                crate::app_pages::admit_server(app, bridge);
+            }
+        }
+        if let Ok(mut servers) = host.servers.lock() {
+            servers.insert(server.fingerprint.clone(), connected);
+        }
+    }
+    if let Ok(mut active) = host.active.lock() {
+        *active = Some(server.fingerprint.clone());
+    };
+}
+
+/// Shows this computer. Its host starts when the window first asks for it.
+pub(crate) fn show_this_computer(app: &AppHandle) {
+    if let Ok(mut active) = app.state::<Host>().active.lock() {
+        *active = None;
+    }
+}
+
+/// Drops a forgotten server's bridge.
+pub(crate) fn close_server(app: &AppHandle, fingerprint: &str) {
+    let host = app.state::<Host>();
+    if let Ok(mut servers) = host.servers.lock() {
+        servers.remove(fingerprint);
+    }
+    if host.active().as_deref() == Some(fingerprint) {
+        show_this_computer(app);
+    }
+}
+
+/// Every bridge open so far, for app windows' pages served after they opened.
+pub(crate) fn open_bridges(app: &AppHandle) -> Vec<Bridge> {
+    app.state::<Host>()
+        .servers
+        .lock()
+        .map(|servers| {
+            servers
+                .values()
+                .filter_map(|server| server.as_ref().ok()?.bridge.clone())
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 async fn connect_bridge(app: &AppHandle, server: &PairedHost) -> Result<HostConnection, String> {
@@ -175,9 +252,10 @@ async fn connect_bridge(app: &AppHandle, server: &PairedHost) -> Result<HostConn
     })
 }
 
-/// Whether this launch uses a paired server.
-pub(crate) fn is_remote(app: &AppHandle) -> bool {
-    app.state::<Host>().is_remote()
+/// Whether this computer's host is running: only then is there local work for
+/// quitting or an update to wait for.
+pub(crate) fn local_started(app: &AppHandle) -> bool {
+    app.state::<Host>().local_running().is_some()
 }
 
 /// Answers one call on a running host. There is no overall timeout, because
@@ -266,10 +344,7 @@ async fn post_if_running(connection: &HostConnection, path: &str) -> Result<Valu
 /// when it was last started, or will when the app next is.
 pub(crate) fn wind_down(app: &AppHandle) {
     let host = app.state::<Host>().inner().clone();
-    if host.is_remote() {
-        return;
-    }
-    if let Some(connection) = host.running() {
+    if let Some(connection) = host.local_running() {
         wait_for(async {
             let _ = post_if_running(&connection, "/v1/previews/stop-all").await;
             let _ = post_if_running(&connection, "/v1/profiles/shutdown").await;
@@ -282,15 +357,18 @@ pub(crate) fn wind_down(app: &AppHandle) {
 /// Stopping the stack needs nothing of the host's, so that still happens with
 /// the host gone, by a plain Docker call.
 pub(crate) fn stop_logins_and_stack(app: &AppHandle) {
-    if is_remote(app) {
+    if !local_started(app) {
         return;
     }
-    let stopped = app.state::<Host>().running().is_some_and(|connection| {
-        wait_for(async {
-            let _ = post_if_running(&connection, "/v1/profiles/shutdown").await;
-            post_if_running(&connection, "/v1/stack/down").await.is_ok()
-        })
-    });
+    let stopped = app
+        .state::<Host>()
+        .local_running()
+        .is_some_and(|connection| {
+            wait_for(async {
+                let _ = post_if_running(&connection, "/v1/profiles/shutdown").await;
+                post_if_running(&connection, "/v1/stack/down").await.is_ok()
+            })
+        });
     if !stopped {
         let _ = docker::stack_down_blocking();
     }
@@ -301,10 +379,7 @@ pub(crate) fn stop_logins_and_stack(app: &AppHandle) {
 /// always been on this path.
 pub(crate) fn stop_for_update(app: &AppHandle) {
     let host = app.state::<Host>().inner().clone();
-    if host.is_remote() {
-        return;
-    }
-    if let Some(connection) = host.running() {
+    if let Some(connection) = host.local_running() {
         let _ = wait_for(post_if_running(&connection, "/v1/profiles/shutdown"));
     }
     host.stop();
@@ -397,7 +472,9 @@ pub(crate) fn relay_events(app: AppHandle) {
             return;
         };
         let mut live = LiveWork::default();
-        let mut followed: Option<String> = None;
+        // The shown host's address and token: a new token at the same address
+        // is that host started again, a new address is a switch.
+        let mut followed: Option<(String, String)> = None;
         loop {
             let running = app.state::<Host>().running();
             let connection = match (running, &followed) {
@@ -405,10 +482,15 @@ pub(crate) fn relay_events(app: AppHandle) {
                 (running, _) => running,
             };
             if let Some(connection) = connection {
-                if followed.is_some_and(|token| token != connection.token) {
-                    report_lost_work(&app, &connection, &mut live).await;
+                match &followed {
+                    Some((url, token)) if *url == connection.url && *token != connection.token => {
+                        report_lost_work(&app, &connection, &mut live).await;
+                    }
+                    // The other side's work is not lost, only not shown.
+                    Some((url, _)) if *url != connection.url => live = LiveWork::default(),
+                    _ => {}
                 }
-                followed = Some(connection.token.clone());
+                followed = Some((connection.url.clone(), connection.token.clone()));
                 let _ = relay(&app, &client, &connection, &mut live).await;
             }
             tokio::time::sleep(RELISTEN_AFTER).await;
@@ -444,8 +526,20 @@ async fn relay(
     if connection.bridge.is_some() {
         catch_up_on_logins(app, connection, live).await;
     }
+    let host = app.state::<Host>().inner().clone();
+    let shown = host.active();
     let mut frames = Frames::default();
-    while let Ok(piece) = tokio::time::timeout(SILENCE_LIMIT, stream.chunk()).await {
+    let mut quiet = Duration::ZERO;
+    // Checked each second, so a switch moves the stream to the new host at once.
+    while host.active() == shown {
+        let Ok(piece) = tokio::time::timeout(SWITCH_CHECK, stream.chunk()).await else {
+            quiet += SWITCH_CHECK;
+            if quiet >= SILENCE_LIMIT {
+                break;
+            }
+            continue;
+        };
+        quiet = Duration::ZERO;
         let Some(piece) = piece? else {
             break;
         };
@@ -602,15 +696,6 @@ fn grant_main_window(app: &AppHandle, url: &str) -> Result<(), String> {
             ),
     )
     .map_err(|e| format!("reach the host: {e}"))
-}
-
-/// In remote mode, what the app windows' pages may reach, for their capability
-/// and the bridge's check. Their origin is only known once they are served.
-pub(crate) fn admit_app_pages(app: &AppHandle, origin: String) -> Option<String> {
-    let bridge = app.state::<Host>().running()?.bridge?;
-    let scope = format!("{}/*", bridge.coordinator_url());
-    bridge.allow_origin(origin);
-    Some(scope)
 }
 
 /// `None` on this computer, where an app window finds the coordinator itself.

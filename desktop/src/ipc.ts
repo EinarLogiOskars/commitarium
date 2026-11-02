@@ -85,6 +85,30 @@ export const chooseThisComputer = (): Promise<void> => invoke("use_this_computer
 /** Pairs with the server in a line from `commitarium-host pair`. */
 export const connectToServer = (line: string): Promise<void> =>
   invoke("connect_to_server", { line });
+/** Shows a paired server; the window reloads after. */
+export const showServer = (fingerprint: string): Promise<void> =>
+  invoke("use_server", { fingerprint });
+
+export interface PairedServer {
+  fingerprint: string;
+  address: string;
+  /** The user's name for it, else its address. */
+  name: string;
+}
+
+/** This computer and the paired servers; `active` is null for this computer. */
+export interface Places {
+  servers: PairedServer[];
+  active: string | null;
+}
+
+export const places = (): Promise<Places> => invoke("places");
+/** An empty name goes back to the address. */
+export const renameServer = (fingerprint: string, name: string): Promise<void> =>
+  invoke("rename_server", { fingerprint, name });
+export const forgetServer = (fingerprint: string): Promise<void> =>
+  invoke("forget_server", { fingerprint });
+
 export const bridgeConnection = (): Promise<{ coordinator_url: string | null; token: string }> =>
   invoke("host_connection");
 
@@ -194,6 +218,9 @@ export const saveDesktopSettings = (settings: DesktopSettings): Promise<DesktopS
   invoke("save_desktop_settings", { settings });
 export const confirmExit = (): Promise<boolean> => invoke("confirm_exit");
 export const cancelExit = (): Promise<boolean> => invoke("cancel_exit");
+/** Tells the app the quit question is on screen; without it, quitting goes on. */
+export const exitPromptShown = (): Promise<void> => invoke("exit_prompt_shown");
+
 export const onExitConfirmationRequested = (
   handler: (payload: ExitConfirmationRequested) => void,
 ): Promise<UnlistenFn> =>

@@ -251,7 +251,9 @@ when something is not available.
 - Connecting takes the pasted line. It also shows the install command to copy,
   for people with no server set up yet.
 - Settings shows the server, its update, paired devices with Add device and
-  revoke, and a way back to this computer. Changing server restarts the app.
+  revoke, and a way back to this computer. Changing server restarted the app
+  at first; since 2026-11-02 a switcher shows any side without a restart
+  (ADR-040, Sides).
   Pairing another server is how to switch.
 - `COORDINATOR_BASE` and the host's address come from the connection, which is
   the bridge in remote mode. Tauri's HTTP permission stays on loopback, because

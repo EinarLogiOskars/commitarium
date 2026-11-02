@@ -30,6 +30,16 @@ to other people, without giving those people the assistant or the agents.
   over HTTP on loopback. **Remote mode** talks to a paired host elsewhere.
   Client-only use needs no third install: the app points at a remote host and
   does not start its own.
+- **Sides, amended 2026-11-02.** The app holds this computer's host and any
+  number of paired servers side by side, and the window shows one of them.
+  A switcher changes which, and only the window reloads: the app does not
+  restart. Each side starts the first time it is shown and keeps working
+  while another is shown, until the app quits: quitting and updates stop
+  only this computer's work, and never touch a server's. App windows and
+  previews stay with the side that opened them. The inbox and notifications
+  follow the shown side. A side not set up yet is set up when chosen: this
+  computer starts its stack, a new server is paired. The app opens on the
+  side last shown.
 
 **Pairing and device keys.**
 

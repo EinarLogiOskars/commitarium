@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { connectedServer } from "../connection";
 import { coordinatorFreshness, rebuildCoordinator } from "../ipc";
 
 const CHECK_INTERVAL_MS = 5 * 60_000;
@@ -8,11 +9,14 @@ type Status = "hidden" | "stale" | "rebuilding" | "waiting";
 
 // Running from source, says when the coordinator was built before the newest
 // commit to its sources (a pull without rebuilding it), and rebuilds it.
+// Only this computer's coordinator is built from these sources: a server runs
+// a release and is updated from Settings.
 export function CoordinatorBanner() {
   const [status, setStatus] = useState<Status>("hidden");
   const [error, setError] = useState<string | null>(null);
 
   const check = useCallback(async () => {
+    if (connectedServer()) return;
     try {
       const freshness = await coordinatorFreshness();
       setStatus((current) =>
