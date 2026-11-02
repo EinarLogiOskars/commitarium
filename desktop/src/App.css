@@ -6147,6 +6147,16 @@ select:focus {
 .deploy-password {
   margin-top: 8px;
 }
+.deploy-access {
+  display: grid;
+  gap: 4px;
+  margin-top: 8px;
+  font-size: var(--text-sm);
+}
+.deploy-access select {
+  justify-self: start;
+  padding: 4px 8px;
+}
 .deploy-history {
   margin-top: 8px;
   font-size: var(--text-sm);

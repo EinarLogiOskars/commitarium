@@ -128,6 +128,9 @@ export const publishApp = (
   });
 export const setAppPassword = (projectId: string, password: string): Promise<void> =>
   hostPost("/v1/publishing/password", { project_id: projectId, password });
+/** Making an app private again uses the password it had. */
+export const setAppAccess = (projectId: string, access: Access): Promise<void> =>
+  hostPost("/v1/publishing/access", { project_id: projectId, access });
 /** Null for a password set before passwords were kept. */
 export const revealAppPassword = (projectId: string): Promise<string | null> =>
   hostPost("/v1/publishing/reveal", { project_id: projectId });

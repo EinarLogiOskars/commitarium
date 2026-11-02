@@ -4,6 +4,7 @@ import {
   deploy,
   deployments as readDeployments,
   revealAppPassword,
+  setAppAccess,
   setAppPassword,
   openExternal,
   publishApp,
@@ -347,16 +348,36 @@ function Address({
     );
   }
   if (published) {
+    // A password set while the app is open to anyone also makes it private.
     const save = () =>
+      void act(async () => {
+        await setAppPassword(projectId, password);
+        if (published.access === "public") await setAppAccess(projectId, "private");
+        setChanging(false);
+        setChanged(true);
+        setPassword("");
+      });
+    const choose = (next: Access) =>
       void act(() =>
-        setAppPassword(projectId, password).then(() => {
-          setChanging(false);
-          setChanged(true);
-          setPassword("");
+        setAppAccess(projectId, next).catch((e) => {
+          // Never had a password: ask for one, then make it private.
+          if (next === "private") setChanging(true);
+          else throw e;
         }),
       );
     return (
       <>
+        <label className="muted deploy-access">
+          Who can open it
+          <select
+            value={published.access}
+            disabled={busy}
+            onChange={(e) => choose(e.target.value as Access)}
+          >
+            <option value="public">Anyone, no password</option>
+            <option value="private">Only with a password</option>
+          </select>
+        </label>
         {published.access === "private" && (
           <p className="muted shell-card__text">
             People sign in with the username <strong>{published.name}</strong> and the password you
@@ -453,10 +474,13 @@ function Address({
           <span className="muted">.{domain}</span>
         </span>
       </label>
-      <select value={access} onChange={(e) => setAccess(e.target.value as Access)}>
-        <option value="private">Only with a password</option>
-        <option value="public">Anyone</option>
-      </select>
+      <label className="muted deploy-access">
+        Who can open it
+        <select value={access} onChange={(e) => setAccess(e.target.value as Access)}>
+          <option value="private">Only with a password</option>
+          <option value="public">Anyone, no password</option>
+        </select>
+      </label>
       {access === "private" && (
         <label className="muted">
           Password, to share with the people you want
