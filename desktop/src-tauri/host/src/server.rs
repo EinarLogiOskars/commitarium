@@ -126,10 +126,17 @@ impl Shared {
     pub fn keep_nightly_backups(self: &Arc<Self>) {
         let shared = self.clone();
         self.backups.clone().keep_nightly(move |backups| {
-            if let Err(error) = backups.create(&shared.stack()) {
+            if let Err(error) = shared.backed_up(backups.create(&shared.stack())) {
                 eprintln!("[backups] the nightly backup failed: {error}");
             }
         });
+    }
+
+    /// A backup or restore stops the stack, and deployed apps with it: they
+    /// start again from what was deployed, as when the host starts.
+    fn backed_up<T>(&self, result: Result<T, String>) -> Result<T, String> {
+        self.restore_deployments();
+        result
     }
 
     fn stack(&self) -> Stack<'_> {
@@ -511,11 +518,11 @@ fn respond_to_post(path: &str, body: &[u8], shared: &Shared) -> Reply {
         "/v1/backups/create" => respond_with(
             shared
                 .on_a_server()
-                .and_then(|()| shared.backups.create(&shared.stack())),
+                .and_then(|()| shared.backed_up(shared.backups.create(&shared.stack()))),
         ),
         "/v1/backups/restore" => with_body(body, |asked: RestoreBackup| {
             shared.on_a_server()?;
-            shared.backups.restore(&shared.stack(), &asked.name)
+            shared.backed_up(shared.backups.restore(&shared.stack(), &asked.name))
         }),
         "/v1/publishing/domain" => with_body(body, |set: SetDomain| {
             shared.on_a_server()?;
