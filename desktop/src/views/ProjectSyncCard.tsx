@@ -1003,7 +1003,7 @@ export function ProjectSyncCard(props: React.ComponentProps<typeof ProjectSyncCa
   if (connectedServer())
     return (
       <section className="deploy-page">
-        <h2>Git remote</h2>
+        <h2>Linked repository</h2>
         <GitRemote projectId={props.projectId} />
       </section>
     );
