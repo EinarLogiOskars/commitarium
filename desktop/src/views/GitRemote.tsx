@@ -53,11 +53,13 @@ export function GitRemote({ projectId, compact }: { projectId: string; compact?:
 
   const name = linked.url.replace(/^https:\/\//, "").replace(/\.git$/, "");
   const commits = (n: number) => `${n} commit${n === 1 ? "" : "s"}`;
+  const host = hostName(linked.url);
   const pull = () =>
     act("pull", async () => {
       const pulled = await pullFromLinked(projectId);
-      if (pulled.outcome === "up_to_date") return "Nothing new there.";
-      if (pulled.outcome === "pulled") return `Pulled ${commits(pulled.commits)} into main.`;
+      if (pulled.outcome === "up_to_date") return `Nothing new on ${host}.`;
+      if (pulled.outcome === "pulled")
+        return `Pulled ${commits(pulled.commits)} into the project's main branch.`;
       // Main has commits of its own: Mayka merges the two.
       await sendToAssistant(
         projectId,
@@ -67,17 +69,18 @@ export function GitRemote({ projectId, compact }: { projectId: string; compact?:
           `keeping the work from both sides.`,
         crypto.randomUUID(),
       );
-      return `Main has commits of its own, so Mayka is merging the ${commits(pulled.commits)} in a work order.`;
+      return `The project's main branch has commits of its own, so Mayka is merging the ${commits(pulled.commits)} in a work order.`;
     });
   const push = (branch: string) =>
     act("push", async () => {
       const pushed = await pushToLinked(projectId, branch);
       setPushBranch(null);
-      if (pushed.commits === 0) return "Nothing on main the repository lacks.";
+      if (pushed.commits === 0)
+        return `${host} already has everything on the project's main branch.`;
       if (pushed.pull_request_url) setPullRequest(pushed.pull_request_url);
       return (
-        `Pushed ${commits(pushed.commits)} to ${pushed.branch} there. ` +
-        `It is a branch of its own: merge it into ${linked.branch} there to finish.`
+        `Pushed ${commits(pushed.commits)} to ${pushed.branch} on ${host}. ` +
+        `To finish, merge ${pushed.branch} into ${linked.branch} on ${host}.`
       );
     });
 
@@ -91,9 +94,11 @@ export function GitRemote({ projectId, compact }: { projectId: string; compact?:
       </button>
       {!compact && (
         <p className="muted">
-          Pull brings the commits made there into main; when main has its own, Mayka merges the two
-          in a work order. Push sends main to a branch you name there, for a pull request into{" "}
-          {linked.branch}. Nothing is forced, and nothing syncs on its own.
+          Pull brings the commits made on {host} into the project&apos;s main branch; when it has
+          commits of its own, Mayka merges the two in a work order. Push sends the project&apos;s
+          main branch to a branch you name on {host}; from there you merge it into {linked.branch}{" "}
+          on {host} yourself, through a pull request. Nothing is forced, and nothing syncs on its
+          own.
         </p>
       )}
       <div className="row deploy-links">
@@ -117,7 +122,7 @@ export function GitRemote({ projectId, compact }: { projectId: string; compact?:
       {pushBranch !== null && (
         <div className="deploy-address">
           <label className="muted">
-            Branch there
+            Branch on {host}
             <input
               value={pushBranch}
               autoCapitalize="off"
@@ -127,8 +132,9 @@ export function GitRemote({ projectId, compact }: { projectId: string; compact?:
             />
           </label>
           <p className="muted">
-            Main goes to this branch, not to {linked.branch}. Remember to merge it into{" "}
-            {linked.branch} there, through a pull request, to get it all the way.
+            Your project&apos;s main branch in Commitarium is pushed to this branch on {host}. It
+            does not reach {linked.branch} on {host} by itself: merge it there yourself, through a
+            pull request.
           </p>
           <button
             disabled={busy !== null || !pushBranch.trim() || pushBranch.trim() === linked.branch}
@@ -240,5 +246,13 @@ function LinkForm({
       </button>
       {error && <p className="sync-card__error">{error}</p>}
     </div>
+  );
+}
+
+/** The git host's name as people say it, or its address. */
+function hostName(url: string): string {
+  const host = url.replace(/^https:\/\//, "").split("/")[0];
+  return (
+    { "github.com": "GitHub", "gitlab.com": "GitLab", "codeberg.org": "Codeberg" }[host] ?? host
   );
 }
