@@ -487,17 +487,24 @@ pub async fn delete_project(
     if project_id.trim().is_empty() || idempotency_key.trim().is_empty() {
         return Err("project ID and Idempotency-Key are required".into());
     }
-    let mut url =
-        reqwest::Url::parse(COORDINATOR_BASE).map_err(|e| format!("coordinator URL: {e}"))?;
+    // The project lives where the app is: on a server, its coordinator is
+    // reached through the bridge.
+    let (base, token) = crate::host::coordinator(&app).await?;
+    let mut url = reqwest::Url::parse(&base).map_err(|e| format!("coordinator URL: {e}"))?;
     url.path_segments_mut()
         .map_err(|_| "coordinator URL cannot accept a project path".to_string())?
+        .pop_if_empty()
         .extend(["api", "v1", "projects", project_id.trim()]);
     if force.unwrap_or(false) {
         url.query_pairs_mut().append_pair("force", "true");
     }
-    let response = reqwest::Client::new()
+    let mut request = reqwest::Client::new()
         .delete(url)
-        .header("Idempotency-Key", idempotency_key.trim())
+        .header("Idempotency-Key", idempotency_key.trim());
+    if let Some(token) = token {
+        request = request.bearer_auth(token);
+    }
+    let response = request
         .send()
         .await
         .map_err(|e| format!("delete project through coordinator: {e}"))?;

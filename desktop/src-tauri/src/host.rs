@@ -308,6 +308,16 @@ async fn connected(app: &AppHandle) -> Result<HostConnection, String> {
         .map_err(|_| "could not reach the host".to_string())?
 }
 
+/// The coordinator of what the app shows, with the bearer token it takes:
+/// through the bridge on a server, here on this computer without one.
+pub(crate) async fn coordinator(app: &AppHandle) -> Result<(String, Option<String>), String> {
+    let connection = connected(app).await?;
+    Ok(match connection.coordinator_url {
+        Some(url) => (url, connection.coordinator_token),
+        None => ("http://127.0.0.1:8080".into(), None),
+    })
+}
+
 /// A read on the host, starting it again if it has gone.
 pub(crate) async fn get(app: &AppHandle, path: &str) -> Result<Value, String> {
     request(&connected(app).await?, Method::GET, path, None).await
