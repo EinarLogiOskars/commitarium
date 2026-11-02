@@ -84,9 +84,9 @@ it; the token stays on the server. A public repository can be linked without
 a token, but then only pulls.
 
 **Pull** brings the commits made there into main. When main has commits of
-its own, Mayka merges the two in a work order. **Push** sends main to a new
-branch there, named `commitarium/<commit>`, and offers to open a pull request
-from it. Nothing is ever forced, and nothing syncs until you ask.
+its own, Mayka merges the two in a work order. **Push** sends main to a branch
+you name there, never to its main, and offers to open a pull request from it:
+merge that to get your work all the way to main there. Nothing is ever forced, and nothing syncs until you ask.
 
 ## Reaching the server
 

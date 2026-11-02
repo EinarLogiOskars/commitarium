@@ -10,6 +10,8 @@ export interface LinkedRepository {
   has_token: boolean;
   pulled_at?: string;
   pushed_at?: string;
+  /** The branch Push offers: the last one pushed to, or a default. */
+  push_branch: string;
 }
 
 /** What a pull did: brought commits into main, found none, or left them on
@@ -20,10 +22,10 @@ export interface Pulled {
   local_branch: string;
 }
 
-/** The branch a push made there, and its pull request page. No branch
- * means main had nothing new. */
+/** The branch a push went to there, and its pull request page. No
+ * commits means main had nothing new. */
 export interface Pushed {
-  branch?: string;
+  branch: string;
   commits: number;
   pull_request_url?: string;
 }
@@ -51,5 +53,5 @@ export const unlinkRepository = (projectId: string): Promise<void> =>
 export const pullFromLinked = (projectId: string): Promise<Pulled> =>
   request(`${path(projectId)}/pull`, { method: "POST" });
 
-export const pushToLinked = (projectId: string): Promise<Pushed> =>
-  request(`${path(projectId)}/push`, { method: "POST" });
+export const pushToLinked = (projectId: string, branch: string): Promise<Pushed> =>
+  request(`${path(projectId)}/push`, { method: "POST", body: { branch } });
