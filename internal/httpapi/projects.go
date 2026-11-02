@@ -189,6 +189,9 @@ func (api *API) importProjectHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Location", "/api/v1/projects/"+imported.ID)
 	w.Header().Set("Content-Type", "application/json")
 	if created {
+		api.lookFirstAfterImport(r.Context(), imported.ID)
+	}
+	if created {
 		w.WriteHeader(http.StatusCreated)
 	}
 	if err := json.NewEncoder(w).Encode(newProjectResponse(imported)); err != nil {

@@ -1,4 +1,5 @@
 import { SCREENSHOT_PROMPT, captureScreenshot, nextPaint } from "./screenshot";
+import { BuildForMeCard, FIRST_LOOK_NOTE } from "./BuildForMeCard";
 import { AttachmentChips, SentAttachments, useAttachments } from "./Attachments";
 import { ComposerBox } from "./Composer";
 import {
@@ -699,7 +700,11 @@ export function ChatView({
   // The chat's rows in order: messages and cards as they are, and the quiet
   // lines between them deduplicated and folded into runs (quietLines.ts).
   const chatEntries: QuietEntry<ReactElement>[] = [];
+  // The first look at an imported project ends with a card that offers
+  // Build for me, under Mayka's reply to it, while she assists.
+  let firstLookPending = false;
   for (const message of conversation?.messages ?? []) {
+    if (message.role === "event" && message.text === FIRST_LOOK_NOTE) firstLookPending = true;
     if (message.role === "event") {
       if (foldedEvent(message.text, groupedTitles)) continue;
       if (conversation?.failure?.message_id === message.id) {
@@ -758,6 +763,14 @@ export function ChatView({
     }
     // A helper's result comes back as a card under its event line.
     chatEntries.push(...turnEntries(message.id));
+    if (firstLookPending && message.role === "assistant") {
+      firstLookPending = false;
+      if (mode === "assists" && scope !== "commitarium") {
+        chatEntries.push({
+          block: <BuildForMeCard key={`${message.id}:build-for-me`} projectId={scope} />,
+        });
+      }
+    }
   }
   // Mayka has what she needs and the draft is still to write.
   const latest = conversation?.messages[conversation.messages.length - 1];
