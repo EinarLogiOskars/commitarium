@@ -370,9 +370,9 @@ function ImportFromURL({
       <div className="modal__card" onClick={(e) => e.stopPropagation()}>
         <h2>Import a project</h2>
         <p className="muted">
-          Commitarium copies the repository onto your server and keeps the two in step: commits
-          made there come in, and main goes out. Give an access token that can read and push; a
-          public repository imports without one, but then commits only come in.
+          Commitarium copies the repository onto your server and keeps the two in step: commits made
+          there come in, and main goes out. Give an access token that can read and push; a public
+          repository imports without one, but then commits only come in.
         </p>
         {error && <div className="banner banner--error">{error}</div>}
         <div className="deploy-address">
