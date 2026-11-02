@@ -81,12 +81,12 @@ repository on GitHub or another git host to keep a copy elsewhere and work
 on it from both places. On the project's Linked repository card, give the
 repository's https address and an access token that can read and push to
 it; the token stays on the server. A public repository can be linked without
-a token, but then commits only come in.
+a token, but then only pulls.
 
-**Bring in** takes the commits made there. **Push** sends main's. Nothing is
-ever forced: when both sides have new commits, theirs wait on the branch
-`linked/<branch>`, and Mayka can merge them in a work order. Turn on syncing
-on its own to have the server do both every few minutes.
+**Pull** brings the commits made there into main. When main has commits of
+its own, Mayka merges the two in a work order. **Push** sends main to a new
+branch there, named `commitarium/<commit>`, and offers to open a pull request
+from it. Nothing is ever forced, and nothing syncs until you ask.
 
 ## Reaching the server
 
