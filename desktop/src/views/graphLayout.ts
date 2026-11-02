@@ -75,11 +75,22 @@ export function graphColumns(nodes: GraphInput[]): GraphColumn[] {
     columns[at].push(node);
   }
 
+  // Work of two phases that ran together splits into a row per phase, the
+  // earlier phase first, so each phase keeps its own line.
+  const split = columns.flatMap((column) => {
+    const byPhase = new Map<number, GraphInput[]>();
+    for (const n of column) {
+      const phase = n.phase ?? -Infinity;
+      byPhase.set(phase, [...(byPhase.get(phase) ?? []), n]);
+    }
+    return [...byPhase.entries()].sort(([a], [b]) => a - b).map(([, nodes]) => nodes);
+  });
+
   // A phase opens once, when the work first reaches it. Work from an earlier
   // phase done later stays where it ran, and its label says where it belongs.
   const result: GraphColumn[] = [];
   let reached = -Infinity;
-  for (const column of columns.filter((c) => c.length > 0)) {
+  for (const column of split.filter((c) => c.length > 0)) {
     const phases = column.flatMap((n) => (n.phase === undefined ? [] : [n.phase]));
     const highest = phases.length ? Math.max(...phases) : undefined;
     const opens = highest !== undefined && highest > reached ? highest : undefined;

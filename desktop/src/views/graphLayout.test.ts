@@ -73,12 +73,14 @@ describe("phases", () => {
     expect(columns.map((c) => c.opens)).toEqual([0, 1, undefined, undefined, 2]);
   });
 
-  it("open at the highest in a row", () => {
+  it("split work of two phases that ran together into a row each", () => {
     const columns = graphColumns([
       node("a", { start: 0, end: 5, phase: 0 }),
       node("b", { start: 1, end: 5, phase: 1 }),
+      node("c", { start: 2, end: 5, phase: 0 }),
     ]);
-    expect(columns.map((c) => c.opens)).toEqual([1]);
+    expect(columns.map((c) => c.nodes.map((n) => n.id))).toEqual([["a", "c"], ["b"]]);
+    expect(columns.map((c) => c.opens)).toEqual([0, 1]);
   });
 });
 

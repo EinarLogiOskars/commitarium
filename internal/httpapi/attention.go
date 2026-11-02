@@ -239,11 +239,42 @@ func (api *API) attentionForFeature(
 			return []attentionItem{base}, nil, nil
 		}
 	}
-	item, err := api.autopilotAttention(ctx, runWaitAttention(base, currentRun), currentRun, currentProject.App)
+	item := runWaitAttention(base, currentRun)
+	if item.Kind == "merge_approval" && currentRun.MergePolicy == project.MergePolicyAutoAfterGates {
+		// It merges by itself once its checks pass. Only checks that take
+		// far too long are the user's.
+		blockedAt, err := api.runBlockedAt(ctx, currentRun)
+		if err != nil {
+			return nil, nil, err
+		}
+		if api.clock().Before(blockedAt.Add(autopilotStallAfter)) {
+			item.Kind = "merge_queued"
+			item.Severity = "info"
+			item.Actionable = false
+			item.Title = "Checking before merging"
+		}
+		return []attentionItem{item}, nil, nil
+	}
+	quieted, err := api.autopilotAttention(ctx, item, currentRun, currentProject.App)
 	if err != nil {
 		return nil, nil, err
 	}
-	return []attentionItem{item}, nil, nil
+	return []attentionItem{quieted}, nil, nil
+}
+
+// runBlockedAt is when the run entered its current state: its updated_at
+// moves on while it waits.
+func (api *API) runBlockedAt(ctx context.Context, run execution.Run) (time.Time, error) {
+	if states, ok := api.execution.(runStateSince); ok {
+		since, err := states.RunStateSince(ctx, run.ID)
+		if err != nil {
+			return time.Time{}, err
+		}
+		if !since.IsZero() {
+			return since, nil
+		}
+	}
+	return run.UpdatedAt, nil
 }
 
 // autopilotStallAfter is how long autopilot handles a blocker quietly
@@ -296,16 +327,9 @@ func (api *API) autopilotAttention(
 		item.Kind != string(execution.RunWaitKindRoundCap)) {
 		return item, nil
 	}
-	// When the run blocked: its updated_at moves on while it waits.
-	blockedAt := run.UpdatedAt
-	if states, ok := api.execution.(runStateSince); ok {
-		since, err := states.RunStateSince(ctx, run.ID)
-		if err != nil {
-			return attentionItem{}, err
-		}
-		if !since.IsZero() {
-			blockedAt = since
-		}
+	blockedAt, err := api.runBlockedAt(ctx, run)
+	if err != nil {
+		return attentionItem{}, err
 	}
 	if !api.conversations.AutopilotHandles(ctx, item.ProjectID, item.FeatureID, blockedAt) {
 		if app {

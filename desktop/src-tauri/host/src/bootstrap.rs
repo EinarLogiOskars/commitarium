@@ -505,6 +505,15 @@ pub fn prepare_transport_secrets(compose_file: &Path) -> Result<bool, String> {
     fs::create_dir_all(&directory)
         .map_err(|_| format!("could not create private directory {}", directory.display()))?;
     set_private_directory_permissions(&directory)?;
+    // Docker would create these as root, and agents could not write to them.
+    for workspaces in [
+        ".commitarium/workspaces",
+        ".commitarium/reviewer-workspaces",
+    ] {
+        let directory = root.join(workspaces);
+        fs::create_dir_all(&directory)
+            .map_err(|_| format!("could not create directory {}", directory.display()))?;
+    }
     Ok(changed)
 }
 

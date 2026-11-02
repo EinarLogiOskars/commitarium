@@ -28,6 +28,9 @@ use tauri::{AppHandle, Emitter, Manager};
 const READY_TIMEOUT: Duration = Duration::from_secs(10);
 /// How soon the app listens again after the host's stream ends.
 const RELISTEN_AFTER: Duration = Duration::from_secs(1);
+/// The host speaks at least every 15 seconds, so this much silence means a
+/// connection the network dropped without saying so.
+const SILENCE_LIMIT: Duration = Duration::from_secs(45);
 const PREVIEW_LOST: &str = "Commitarium's background service restarted, so this preview stopped. \
                             Start it again.";
 const LOGIN_LOST: &str = "Commitarium's background service restarted during this login. \
@@ -438,8 +441,14 @@ async fn relay(
         .send()
         .await?
         .error_for_status()?;
+    if connection.bridge.is_some() {
+        catch_up_on_logins(app, connection, live).await;
+    }
     let mut frames = Frames::default();
-    while let Some(piece) = stream.chunk().await? {
+    while let Ok(piece) = tokio::time::timeout(SILENCE_LIMIT, stream.chunk()).await {
+        let Some(piece) = piece? else {
+            break;
+        };
         for (name, data) in frames.push(&piece) {
             if let Ok(mut payload) = serde_json::from_str::<Value>(&data) {
                 if let (Some(bridge), preview::STATUS_EVENT) = (&connection.bridge, name.as_str()) {
@@ -451,6 +460,32 @@ async fn relay(
         }
     }
     Ok(())
+}
+
+/// A server's updates can be lost while its connection is down, and a window
+/// would wait for them, so each new connection starts from the server's state.
+async fn catch_up_on_logins(app: &AppHandle, connection: &HostConnection, live: &mut LiveWork) {
+    let Ok(profiles) = request(connection, Method::GET, "/v1/profiles", None).await else {
+        return;
+    };
+    for progress in login_progress(&profiles) {
+        live.note(profiles::PROGRESS_EVENT, &progress);
+        let _ = app.emit(profiles::PROGRESS_EVENT, progress);
+    }
+}
+
+fn login_progress(profiles: &Value) -> Vec<Value> {
+    let profiles = profiles.as_array().map(Vec::as_slice).unwrap_or_default();
+    profiles
+        .iter()
+        .map(|profile| {
+            json!({
+                "profileId": profile["id"],
+                "status": profile["status"],
+                "detail": profile["detail"],
+            })
+        })
+        .collect()
 }
 
 /// The bundler puts the host next to the app's own executable.
@@ -614,6 +649,25 @@ mod tests {
             coordinator_token: None,
             bridge: None,
         }
+    }
+
+    #[test]
+    fn a_new_connection_shows_a_login_as_it_stands_on_the_server() {
+        let profiles = json!([{
+            "id": "codex",
+            "name": "Codex",
+            "provider": "codex",
+            "status": "waiting_for_code",
+            "detail": { "deviceCode": "ABCD-12345" },
+        }]);
+        assert_eq!(
+            login_progress(&profiles),
+            vec![json!({
+                "profileId": "codex",
+                "status": "waiting_for_code",
+                "detail": { "deviceCode": "ABCD-12345" },
+            })]
+        );
     }
 
     #[test]

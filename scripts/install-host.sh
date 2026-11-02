@@ -8,6 +8,8 @@ set -eu
 REPOSITORY="EinarLogiOskars/commitarium"
 SERVICE="commitarium-host"
 SERVICE_USER="commitarium"
+# The same id the containers run as, so they can read what the service writes.
+SERVICE_ID=65532
 COMMAND="/usr/local/bin/commitarium-host"
 UNIT="/etc/systemd/system/${SERVICE}.service"
 DATA_DIR="/var/lib/commitarium"
@@ -68,8 +70,14 @@ check_docker() {
 
 create_user() {
   if ! id "$SERVICE_USER" >/dev/null 2>&1; then
-    useradd --system --home-dir "$DATA_DIR" --shell /usr/sbin/nologin "$SERVICE_USER"
+    getent passwd "$SERVICE_ID" >/dev/null && stop "user id $SERVICE_ID is already in use."
+    getent group "$SERVICE_ID" >/dev/null && stop "group id $SERVICE_ID is already in use."
+    groupadd --gid "$SERVICE_ID" "$SERVICE_USER"
+    useradd --uid "$SERVICE_ID" --gid "$SERVICE_ID" --home-dir "$DATA_DIR" \
+      --no-create-home --shell /usr/sbin/nologin "$SERVICE_USER"
   fi
+  [ "$(id -u "$SERVICE_USER")" -eq "$SERVICE_ID" ] ||
+    stop "the user $SERVICE_USER exists with another id."
   usermod -aG docker "$SERVICE_USER"
 }
 
@@ -105,6 +113,8 @@ StateDirectory=commitarium
 StateDirectoryMode=0700
 Restart=always
 RestartSec=5
+# Each device request holds connections open while it waits.
+LimitNOFILE=65536
 
 [Install]
 WantedBy=multi-user.target
@@ -114,10 +124,16 @@ UNIT_FILE
   systemctl restart "$SERVICE"
 }
 
+stack_is_ready() {
+  curl -fs -o /dev/null http://127.0.0.1:8080/health || return 1
+  running=$("$BINARY" status --data-dir "$DATA_DIR" 2>/dev/null | grep -c '"state": "running"') || return 1
+  [ "$running" -ge 3 ]
+}
+
 wait_until_ready() {
   say "Starting Commitarium. The first start downloads several GB and can take a while…"
   waited=0
-  until curl -fs -o /dev/null http://127.0.0.1:8080/health; do
+  until stack_is_ready; do
     waited=$((waited + 5))
     [ "$waited" -lt "$READY_SECONDS" ] ||
       stop "it did not start in time. See: journalctl -u $SERVICE"

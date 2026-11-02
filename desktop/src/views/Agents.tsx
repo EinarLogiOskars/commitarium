@@ -202,9 +202,24 @@ export function Agents({ onClose, focus }: { onClose: () => void; focus?: "assis
   const cardRef = useRef<HTMLDivElement | null>(null);
   const tabRefs = useRef<Partial<Record<AgentsTab, HTMLButtonElement | null>>>({});
 
+  // On a server, a list asked for before a login's update can arrive after
+  // it. The update is newer, so it wins.
+  const updates = useRef(0);
+  const updatedAt = useRef<Record<string, number>>({});
+
   const refresh = useCallback(async () => {
     try {
-      setProfiles(await listProfiles());
+      const asked = updates.current;
+      const listed = await listProfiles();
+      setProfiles((prev) =>
+        listed.map((profile) => {
+          const newer = (updatedAt.current[profile.id] ?? -1) >= asked;
+          const shown = prev?.find((x) => x.id === profile.id);
+          return newer && shown
+            ? { ...profile, status: shown.status, detail: shown.detail }
+            : profile;
+        }),
+      );
     } catch (e) {
       setError(String(e));
     }
@@ -227,6 +242,7 @@ export function Agents({ onClose, focus }: { onClose: () => void; focus?: "assis
   useEffect(() => {
     void refresh();
     const unlisten = onLoginProgress((p) => {
+      updatedAt.current[p.profileId] = updates.current++;
       setProfiles((prev) =>
         (prev ?? []).map((x) =>
           x.id === p.profileId ? { ...x, status: p.status, detail: p.detail } : x,
@@ -284,7 +300,7 @@ export function Agents({ onClose, focus }: { onClose: () => void; focus?: "assis
 
         <div className="profiles">
           {profiles === null ? (
-            <p className="muted">Loading…</p>
+            <p className="muted">Checking your agents. The first time can take a few minutes.</p>
           ) : profiles.length === 0 ? (
             <div className="agents-empty">
               <strong>Add your first agent</strong>
@@ -483,9 +499,15 @@ function AddAgent({
           <option value="codex">Codex</option>
         </select>
         <button className="primary" type="submit" disabled={busy || !name.trim()}>
-          {first ? "Add an agent" : "Add agent"}
+          {busy ? "Adding…" : first ? "Add an agent" : "Add agent"}
         </button>
       </div>
+      {busy && (
+        <p className="muted">
+          Setting up the agent. The first of each kind downloads its tools, which can take a few
+          minutes.
+        </p>
+      )}
     </form>
   );
 }

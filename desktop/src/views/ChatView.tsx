@@ -1313,8 +1313,16 @@ function ActionCard({
     );
   }
 
+  // A card with assumptions reads top to bottom, not as one cramped row.
+  const stacked =
+    (action.type === "create_app" || action.type === "plan_project") &&
+    (action.assumptions ?? []).length > 0;
   return (
-    <div className={`assistant-action assistant-action--${action.status}`}>
+    <div
+      className={`assistant-action assistant-action--${action.status} ${
+        stacked ? "assistant-action--stacked" : ""
+      }`}
+    >
       <div className="assistant-action__head">
         <strong>{heading}</strong>
         {!pending && (

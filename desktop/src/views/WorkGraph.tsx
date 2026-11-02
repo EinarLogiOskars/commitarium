@@ -30,6 +30,8 @@ import {
 } from "./graphLayout";
 
 const POLL_MS = 4000;
+// Room at each side, so the outer cards scroll clear of the edges.
+const SIDE_ROOM = 48;
 const HANDOVER_MS = 1100;
 // A scroll this soon after the wheel or a press is the user's.
 const USER_SCROLL_MS = 400;
@@ -438,7 +440,7 @@ export function WorkGraph({
           <div
             ref={canvas}
             className={`work-graph__canvas work-graph__canvas--${zoom}`}
-            style={{ minWidth: layout.width, height: layout.height }}
+            style={{ minWidth: layout.width + 2 * SIDE_ROOM, height: layout.height }}
           >
             {layout.phases.map(({ phase, y }) => (
               <div
