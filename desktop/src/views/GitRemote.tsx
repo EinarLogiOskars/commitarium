@@ -64,9 +64,11 @@ export function GitRemote({ projectId, compact }: { projectId: string; compact?:
       await sendToAssistant(
         projectId,
         `I pulled ${commits(pulled.commits)} from the linked repository ${linked.url}, ` +
-          `but main has commits of its own, so they are on the branch ${pulled.local_branch}. ` +
-          `Please open a work order that merges ${pulled.local_branch} into main, ` +
-          `keeping the work from both sides.`,
+          `but main has commits of its own, so they are on the branch ${pulled.local_branch} ` +
+          `of the project's own repository. Please open a work order that merges ` +
+          `${pulled.local_branch} into main, keeping the work from both sides. Say in it that ` +
+          `a checkout does not have that branch until it fetches it: ` +
+          `\`git fetch origin ${pulled.local_branch}:${pulled.local_branch}\`.`,
         crypto.randomUUID(),
       );
       return `The project's main branch has commits of its own, so Mayka is merging the ${commits(pulled.commits)} in a work order.`;
