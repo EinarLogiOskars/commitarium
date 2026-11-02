@@ -12,6 +12,9 @@ SERVICE_USER="commitarium"
 SERVICE_ID=65532
 COMMAND="/usr/local/bin/commitarium-host"
 UNIT="/etc/systemd/system/${SERVICE}.service"
+FIREWALL_UNIT="/etc/systemd/system/commitarium-firewall.service"
+# The cloud's metadata service: nothing a container runs may read it.
+METADATA="169.254.169.254"
 DATA_DIR="/var/lib/commitarium"
 # The service updates itself, so it owns its own program.
 BINARY="$DATA_DIR/bin/commitarium-host"
@@ -131,6 +134,34 @@ stack_is_ready() {
   [ "$running" -ge 3 ]
 }
 
+# Containers (deployed apps, agents' code) reach the internet but not the
+# cloud's metadata service, which can hold the server's setup secrets. The
+# rule lives in Docker's own chain for it, set again whenever Docker starts.
+install_firewall() {
+  command -v iptables >/dev/null 2>&1 || {
+    say "Note: iptables is missing, so containers can read this cloud's metadata service."
+    return 0
+  }
+  cat >"$FIREWALL_UNIT" <<FIREWALL_FILE
+[Unit]
+Description=Commitarium: keep containers from the metadata service
+After=docker.service
+PartOf=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh -c 'iptables -C DOCKER-USER -d $METADATA -j DROP 2>/dev/null || iptables -I DOCKER-USER -d $METADATA -j DROP'
+ExecStop=/bin/sh -c 'iptables -D DOCKER-USER -d $METADATA -j DROP 2>/dev/null || true'
+
+[Install]
+WantedBy=docker.service
+FIREWALL_FILE
+  systemctl daemon-reload
+  systemctl enable --now commitarium-firewall >/dev/null 2>&1 ||
+    say "Note: the container firewall rule could not be set; see: journalctl -u commitarium-firewall"
+}
+
 wait_until_ready() {
   say "Starting Commitarium. The first start downloads several GB and can take a while…"
   waited=0
@@ -144,8 +175,8 @@ wait_until_ready() {
 
 uninstall() {
   [ "$(id -u)" -eq 0 ] || stop "run it with sudo."
-  systemctl disable --now "$SERVICE" >/dev/null 2>&1 || true
-  rm -f "$UNIT" "$COMMAND"
+  systemctl disable --now "$SERVICE" commitarium-firewall >/dev/null 2>&1 || true
+  rm -f "$UNIT" "$FIREWALL_UNIT" "$COMMAND"
   systemctl daemon-reload
   say "The service is removed. Your stack and data are still in $DATA_DIR."
   say "To stop the stack: sudo docker compose -p commitarium down"
@@ -158,6 +189,7 @@ fi
 
 check_machine
 check_docker
+install_firewall
 create_user
 download_host
 install_service

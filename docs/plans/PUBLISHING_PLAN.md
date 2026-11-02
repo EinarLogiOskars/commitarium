@@ -1,6 +1,6 @@
 # Publishing: Implementation Plan
 
-**Status:** agreed 2026-11-02. D1 to D3 done; D4 next. Builds on
+**Status:** agreed 2026-11-02. D1 to D4 done and tested live; ships in 0.9.5. Builds on
 [ADR-040](../adr/0040-split-the-host-from-the-app.md) (Distributing apps).
 
 A server can deploy an app to the internet. You keep working in the preview,
@@ -52,6 +52,16 @@ and visitors see only the version you chose to deploy.
 | D2 | Caddy, base domain with DNS check, a route per deployment, password or public, the two plain pages | `todo.einarlogi.is` serves the deployed app over HTTPS |
 | D3 | Deploy UI on app cards and settings, domain in Settings > Server, Mayka's deploy action with approval | A deploy from the app, start to finish |
 | D4 | Prove isolation: a deployed app reaches no coordinator, Forgejo, host or other app; live test on the user's server | The test passes on a real server |
+
+## D4 results (2026-11-02, the user's ARM server)
+
+From a deployed app's network: the coordinator, Forgejo, the agent worker, the
+host API and other apps' local ports were all closed. The gateway, SSH and
+Caddy answered, as they do to anyone. The cloud's metadata service answered,
+and now does not: the installer adds a `DOCKER-USER` rule for it, kept by a
+small `commitarium-firewall` unit. `scripts/check-isolation.sh` repeats the
+check, and fails when the rule is missing. A server installed before 0.9.5
+gets the rule by running the install line again.
 
 ## Later
 

@@ -305,6 +305,8 @@ pairing instead of joining it.
 | Lost every device | `commitarium-host pair` on the server recovers access. |
 | Stolen or compromised server | Everything on it is exposed: code, agent logins, Forgejo. A VPS means trusting its provider. Device keys do not help here. |
 | Compromised worker or preview | It can reach the gateway's port through Docker's network, and is refused like any stranger. Pairing is the one route it could try while open, with the same limits. |
+| Deployed app (PUBLISHING_PLAN.md) | It runs on its own Docker network. Commitarium's ports listen on loopback, which another network cannot reach; its containers sit on a separate network; other apps' ports are loopback too. The cloud's metadata service, which can hold the server's setup secrets, is dropped for every container by a rule the installer keeps in Docker's `DOCKER-USER` chain. It reaches the gateway like any stranger. `scripts/check-isolation.sh` checks all of this on a running server. |
+| Visitor to a published app | Caddy routes only published names, to their deployment only. A private app asks for its password over HTTPS; how strong it is, is the owner's choice. Caddy's admin API is a socket inside its container. |
 | Someone on the server | The connection file and data directory are readable only by the service user and root. The `docker` group is root-equivalent, so nobody else belongs in it. |
 | Denial of service | Out of scope for a single-user host. A firewall or Tailscale is the answer. |
 

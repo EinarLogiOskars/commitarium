@@ -218,12 +218,12 @@ impl Publishing {
             .apps
             .get(project_id)
             .and_then(|route| Some((route.password_hash.clone()?, route.password.clone())));
+        // A public app keeps the password it had, so making it private again
+        // needs no new one; Caddy asks for it only while the app is private.
         let (password_hash, password) = match (access, password, previous) {
-            (Access::Public, _, _) => (None, None),
-            (Access::Private, Some(password), _) => {
-                (Some(hashed(password)?), Some(password.to_string()))
-            }
-            (Access::Private, None, Some((hash, kept))) => (Some(hash), kept),
+            (_, Some(password), _) => (Some(hashed(password)?), Some(password.to_string())),
+            (_, None, Some((hash, kept))) => (Some(hash), kept),
+            (Access::Public, None, None) => (None, None),
             (Access::Private, None, None) => {
                 return Err("choose a password for who may open it".into())
             }
@@ -253,11 +253,27 @@ impl Publishing {
             .apps
             .get_mut(project_id)
             .ok_or("this app is not published")?;
-        if route.access != Access::Private {
-            return Err("this app is public, so it has no password".into());
-        }
         route.password_hash = Some(hash);
         route.password = Some(password.to_string());
+        self.write(&settings)
+    }
+
+    /// Who can open an app: anyone, or only with its password. Making it
+    /// private again uses the password it had.
+    pub fn set_access(&self, project_id: &str, access: Access) -> Result<(), String> {
+        let _held = self
+            .applied
+            .lock()
+            .map_err(|_| "publishing is unavailable")?;
+        let mut settings = self.read()?;
+        let route = settings
+            .apps
+            .get_mut(project_id)
+            .ok_or("this app is not published")?;
+        if access == Access::Private && route.password_hash.is_none() {
+            return Err("choose a password for who may open it".into());
+        }
+        route.access = access;
         self.write(&settings)
     }
 
@@ -625,6 +641,23 @@ mod tests {
         );
         assert!(normalized_domain("localhost").is_err());
         assert!(normalized_domain("bad_domain.is").is_err());
+    }
+
+    #[test]
+    fn a_public_app_asks_for_no_password_but_keeps_it_for_later() {
+        let mut settings = settings();
+        settings.apps.get_mut("prj_todo").unwrap().access = Access::Public;
+        let running = BTreeMap::from([("prj_todo".to_string(), 32778)]);
+        let config = caddy_config(&settings, &running);
+        let todo = config["apps"]["http"]["servers"]["public"]["routes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|route| route["match"][0]["host"][0] == "todo.example.com")
+            .unwrap()
+            .clone();
+        assert_eq!(todo["handle"][0]["handler"], "reverse_proxy");
+        assert!(settings.apps["prj_todo"].password_hash.is_some());
     }
 
     #[test]

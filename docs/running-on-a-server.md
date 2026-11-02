@@ -49,6 +49,11 @@ A server can put your apps on the internet, each at its own address.
    `todo.example.com`, and who can open it: anyone, or only with a password
    you choose. People sign in with the address name as the username.
 
+A deployed app reaches none of Commitarium's own services. To check that on
+your server, run `sudo sh check-isolation.sh` from the repository's
+`scripts` folder. A server installed before 0.9.5 gets its container firewall
+rule by running the install line again.
+
 Commitarium gets a certificate for each address by itself. Ports 80 and 443
 must be open, as well as 7443. You can also ask Mayka to deploy; she asks you
 first.

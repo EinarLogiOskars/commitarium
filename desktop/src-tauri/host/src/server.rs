@@ -342,6 +342,12 @@ struct Publish {
 }
 
 #[derive(Deserialize)]
+struct SetAccess {
+    project_id: String,
+    access: PublishAccess,
+}
+
+#[derive(Deserialize)]
 struct SetPassword {
     project_id: String,
     password: String,
@@ -491,6 +497,10 @@ fn respond_to_post(path: &str, body: &[u8], shared: &Shared) -> Reply {
             shared
                 .publishing
                 .set_app_password(&set.project_id, &set.password)
+        }),
+        "/v1/publishing/access" => with_body(body, |set: SetAccess| {
+            shared.on_a_server()?;
+            shared.publishing.set_access(&set.project_id, set.access)
         }),
         "/v1/publishing/reveal" => with_body(body, |asked: ProjectRequest| {
             shared.on_a_server()?;
