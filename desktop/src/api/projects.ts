@@ -130,3 +130,25 @@ export const updateAutonomyPolicy = (
  * helpers, for the Agents card (ADR-038). */
 export const getAgentsAtWork = (id: string): Promise<{ agents: AgentAtWork[] }> =>
   request(`/api/v1/projects/${encodeURIComponent(id)}/agents-at-work`);
+
+/** Imports a repository by its https URL, with a token for a private one
+ * (SERVER_COMPLETE_PLAN.md, S3). A server has no folder of the user's. */
+export const importFromURL = (
+  name: string,
+  url: string,
+  token: string,
+  defaults: Omit<CreateProjectInput, "name">,
+): Promise<Project> => {
+  const slug =
+    name
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "") || "project";
+  const random = Array.from(crypto.getRandomValues(new Uint8Array(8)))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+  return request(`/api/v1/project-imports/${slug.slice(0, 100)}-${random}/url`, {
+    method: "PUT",
+    body: { name, url: url.trim(), token: token.trim(), ...defaults },
+  });
+};

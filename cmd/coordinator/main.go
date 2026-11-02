@@ -741,6 +741,8 @@ func run(ctx context.Context, coordinatorConfig config) error {
 	routes := http.NewServeMux()
 	routes.Handle("/", handler)
 	httpapi.RegisterMirrorRoutes(routes, projectService, forgejoClient)
+	// A server imports by repository URL, having no folder of the user's (S3).
+	httpapi.RegisterURLImportRoute(routes, projectService, projectImporter)
 
 	log.Print("Listening...")
 	if err := http.ListenAndServe(":8080", routes); err != nil {

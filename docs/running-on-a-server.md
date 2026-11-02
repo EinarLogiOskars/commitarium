@@ -67,6 +67,12 @@ and restores one. They stay on the server, so they do not survive losing it;
 a git remote (Sync) keeps a copy of the code elsewhere. Agent sign-ins and
 device keys are not in a backup.
 
+## Importing a project
+
+On a server, Import project asks for the repository's https address, such as
+`https://github.com/you/app.git`, and an access token for a private one.
+Commitarium copies it onto the server; the original stays as it is.
+
 ## Code on a git remote
 
 On a server, a project's code lives in that server's Forgejo. To keep a copy

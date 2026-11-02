@@ -183,37 +183,7 @@ func (api *API) importProjectHandler(w http.ResponseWriter, r *http.Request) {
 		DefaultBranch:  metadata.DefaultBranch,
 	}, bundle)
 	if err != nil {
-		switch {
-		case errors.Is(err, project.ErrInvalidImportID):
-			writeError(w, http.StatusBadRequest, "invalid_project_import_id", "project import ID must be a safe non-empty identifier")
-		case errors.Is(err, project.ErrNameRequired):
-			writeError(w, http.StatusBadRequest, "project_name_required", "project name is required")
-		case errors.Is(err, project.ErrInvalidRecoveryPolicy):
-			writeError(w, http.StatusBadRequest, "invalid_recovery_policy", "recovery_policy must be approval_required or automatic")
-		case errors.Is(err, project.ErrInvalidMergePolicy):
-			writeError(w, http.StatusBadRequest, "invalid_merge_policy", "merge_policy must be require_user_approval or auto_after_gates")
-		case errors.Is(err, project.ErrInvalidAutonomyPolicy):
-			writeError(w, http.StatusBadRequest, "invalid_autonomy_policy", "autonomy_policy must be review_each_phase or run_to_completion")
-		case errors.Is(err, project.ErrInvalidDialogueLimits):
-			writeError(w, http.StatusBadRequest, "invalid_dialogue_limits", "dialogue limits must be non-negative; zero means unlimited")
-		case errors.Is(err, project.ErrInvalidAgentProviders):
-			writeError(w, http.StatusBadRequest, "invalid_agent_providers", "lead and reviewer providers must be codex or claude")
-		case errors.Is(err, project.ErrInvalidAgentModels):
-			writeError(w, http.StatusBadRequest, "invalid_agent_models", "lead and reviewer models must be explicit model IDs")
-		case errors.Is(err, project.ErrInvalidDefaultBranch):
-			writeError(w, http.StatusBadRequest, "invalid_default_branch", "default_branch must be a valid Git branch name")
-		case errors.Is(err, project.ErrInvalidGitBundle):
-			writeError(w, http.StatusBadRequest, "invalid_git_bundle", "bundle must be a valid Git bundle containing the requested default branch")
-		case errors.Is(err, project.ErrImportConflict),
-			errors.Is(err, project.ErrForgejoRepositoryNotFound),
-			errors.Is(err, project.ErrForgejoRepositoryNotReady):
-			writeError(w, http.StatusConflict, "project_import_conflict", "project import ID or internal repository conflicts with different existing state")
-		case errors.Is(err, project.ErrImportUnavailable), errors.Is(err, project.ErrForgejoUnavailable):
-			writeError(w, http.StatusServiceUnavailable, "project_import_unavailable", "project import is temporarily unavailable")
-		default:
-			log.Printf("import project %q: %v", r.PathValue("importID"), err)
-			writeError(w, http.StatusInternalServerError, "internal_error", "internal server error")
-		}
+		writeImportError(w, r, err)
 		return
 	}
 	w.Header().Set("Location", "/api/v1/projects/"+imported.ID)
@@ -223,6 +193,41 @@ func (api *API) importProjectHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := json.NewEncoder(w).Encode(newProjectResponse(imported)); err != nil {
 		log.Printf("encode imported project response: %v", err)
+	}
+}
+
+// writeImportError answers a failed project import, from a folder or a URL.
+func writeImportError(w http.ResponseWriter, r *http.Request, err error) {
+	switch {
+	case errors.Is(err, project.ErrInvalidImportID):
+		writeError(w, http.StatusBadRequest, "invalid_project_import_id", "project import ID must be a safe non-empty identifier")
+	case errors.Is(err, project.ErrNameRequired):
+		writeError(w, http.StatusBadRequest, "project_name_required", "project name is required")
+	case errors.Is(err, project.ErrInvalidRecoveryPolicy):
+		writeError(w, http.StatusBadRequest, "invalid_recovery_policy", "recovery_policy must be approval_required or automatic")
+	case errors.Is(err, project.ErrInvalidMergePolicy):
+		writeError(w, http.StatusBadRequest, "invalid_merge_policy", "merge_policy must be require_user_approval or auto_after_gates")
+	case errors.Is(err, project.ErrInvalidAutonomyPolicy):
+		writeError(w, http.StatusBadRequest, "invalid_autonomy_policy", "autonomy_policy must be review_each_phase or run_to_completion")
+	case errors.Is(err, project.ErrInvalidDialogueLimits):
+		writeError(w, http.StatusBadRequest, "invalid_dialogue_limits", "dialogue limits must be non-negative; zero means unlimited")
+	case errors.Is(err, project.ErrInvalidAgentProviders):
+		writeError(w, http.StatusBadRequest, "invalid_agent_providers", "lead and reviewer providers must be codex or claude")
+	case errors.Is(err, project.ErrInvalidAgentModels):
+		writeError(w, http.StatusBadRequest, "invalid_agent_models", "lead and reviewer models must be explicit model IDs")
+	case errors.Is(err, project.ErrInvalidDefaultBranch):
+		writeError(w, http.StatusBadRequest, "invalid_default_branch", "default_branch must be a valid Git branch name")
+	case errors.Is(err, project.ErrInvalidGitBundle):
+		writeError(w, http.StatusBadRequest, "invalid_git_bundle", "bundle must be a valid Git bundle containing the requested default branch")
+	case errors.Is(err, project.ErrImportConflict),
+		errors.Is(err, project.ErrForgejoRepositoryNotFound),
+		errors.Is(err, project.ErrForgejoRepositoryNotReady):
+		writeError(w, http.StatusConflict, "project_import_conflict", "project import ID or internal repository conflicts with different existing state")
+	case errors.Is(err, project.ErrImportUnavailable), errors.Is(err, project.ErrForgejoUnavailable):
+		writeError(w, http.StatusServiceUnavailable, "project_import_unavailable", "project import is temporarily unavailable")
+	default:
+		log.Printf("import project %q: %v", r.PathValue("importID"), err)
+		writeError(w, http.StatusInternalServerError, "internal_error", "internal server error")
 	}
 }
 
