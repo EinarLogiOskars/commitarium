@@ -1,7 +1,7 @@
-import { NotOnAServer } from "./NotOnAServer";
 import { connectedServer } from "../connection";
 import { useState } from "react";
 import { openAssistantOn } from "../attention/askAssistant";
+import { importFromURL } from "../api/projects";
 import { pickFolder, inspectFolder, importProject, type FolderInfo } from "../ipc";
 import {
   detectProjectToolchain,
@@ -314,6 +314,108 @@ function formatBytes(n: number): string {
 }
 
 export function ImportProject(props: React.ComponentProps<typeof ImportProjectOnThisComputer>) {
-  if (connectedServer()) return <NotOnAServer what="Importing a folder" />;
+  if (connectedServer()) return <ImportFromURL {...props} />;
   return <ImportProjectOnThisComputer {...props} />;
+}
+
+// On a server, a project comes from its repository's address: the server has
+// no folder of the user's (SERVER_COMPLETE_PLAN.md, S3).
+function ImportFromURL({
+  onClose,
+  onImported,
+}: {
+  onClose: () => void;
+  onImported: (projectId: string) => void;
+}) {
+  const [url, setUrl] = useState("");
+  const [name, setName] = useState("");
+  const [token, setToken] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  // The repository's own name, until the user gives another.
+  const shownName =
+    name ||
+    (url
+      .trim()
+      .replace(/\.git$/, "")
+      .split("/")
+      .pop() ??
+      "");
+
+  const start = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const project = await importFromURL(
+        shownName,
+        url,
+        token,
+        projectDefaultsPayload(initialProjectDefaults()),
+      );
+      onImported(project.id);
+      openAssistantOn(
+        { kind: "stack" },
+        "Check the stack this repository uses and set it up.",
+        project.id,
+      );
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      setBusy(false);
+    }
+  };
+
+  const plain = { autoCapitalize: "off", autoCorrect: "off", spellCheck: false } as const;
+  return (
+    <div className="modal" onClick={onClose}>
+      <div className="modal__card" onClick={(e) => e.stopPropagation()}>
+        <h2>Import a project</h2>
+        <p className="muted">
+          Commitarium copies the repository onto your server and links the project to it, so you can
+          pull new commits from it and push main back. Give an access token that can read and push;
+          a public repository imports without one, but then only pulls.
+        </p>
+        {error && <div className="banner banner--error">{error}</div>}
+        <div className="deploy-address">
+          <label className="muted">
+            Repository address
+            <input
+              placeholder="https://github.com/you/app.git"
+              value={url}
+              onChange={(e) => setUrl(e.target.value)}
+              {...plain}
+            />
+          </label>
+          <label className="muted">
+            Name
+            <input
+              placeholder={shownName || "The repository's name"}
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+            />
+          </label>
+          <label className="muted">
+            Access token
+            <input
+              type="password"
+              value={token}
+              onChange={(e) => setToken(e.target.value)}
+              {...plain}
+            />
+          </label>
+        </div>
+        <div className="row modal__actions">
+          <button
+            className="primary"
+            disabled={busy || !url.trim() || !shownName}
+            onClick={() => void start()}
+          >
+            {busy ? "Importing…" : "Import"}
+          </button>
+          <button className="ghost" onClick={onClose} disabled={busy}>
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 }

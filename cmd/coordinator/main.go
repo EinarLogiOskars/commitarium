@@ -751,6 +751,9 @@ func run(ctx context.Context, coordinatorConfig config) error {
 	routes := http.NewServeMux()
 	routes.Handle("/", handler)
 	httpapi.RegisterLinkedRepositoryRoutes(routes, linkedRepositories)
+	// A server imports by repository URL, having no folder of the user's
+	// (S3); the project stays linked to it.
+	httpapi.RegisterURLImportRoute(routes, projectService, projectImporter, linkedRepositories)
 
 	log.Print("Listening...")
 	if err := http.ListenAndServe(":8080", routes); err != nil {

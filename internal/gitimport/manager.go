@@ -135,6 +135,63 @@ func (manager *Manager) Import(
 	return manager.provisioner.FinalizeImportRepository(ctx, spec)
 }
 
+// BundleFromURL clones the repository at remoteURL and packs its branches
+// and tags into a bundle, the same kind the app uploads from a folder, so an
+// import by URL runs the folder import (SERVER_COMPLETE_PLAN.md, S3). Only
+// https addresses without credentials in them; a token for a private one.
+// cleanup removes the clone and bundle.
+func (manager *Manager) BundleFromURL(
+	ctx context.Context,
+	remoteURL string,
+	username string,
+	token string,
+) (bundlePath string, defaultBranch string, cleanup func(), err error) {
+	if err := validImportURL(remoteURL); err != nil {
+		return "", "", nil, err
+	}
+	temporary, err := os.MkdirTemp(manager.tempRoot, "commitarium-url-import-*")
+	if err != nil {
+		return "", "", nil, fmt.Errorf("%w: create import checkout: %v", project.ErrImportUnavailable, err)
+	}
+	cleanup = func() { os.RemoveAll(temporary) }
+	if token != "" && username == "" {
+		// GitHub and GitLab take any name beside a token.
+		username = "x-access-token"
+	}
+	clone := filepath.Join(temporary, "repository.git")
+	if _, err := manager.runner.Run(ctx, temporary, gitEnvironment(username, token),
+		"clone", "--bare", "--", strings.TrimSpace(remoteURL), clone); err != nil {
+		cleanup()
+		return "", "", nil, fmt.Errorf("%w: the repository could not be cloned; check its address, and give a token for a private one",
+			project.ErrInvalidGitBundle)
+	}
+	head, err := manager.runner.Run(ctx, clone, gitEnvironment("", ""), "symbolic-ref", "--short", "HEAD")
+	defaultBranch = strings.TrimSpace(head)
+	if err != nil || defaultBranch == "" {
+		cleanup()
+		return "", "", nil, fmt.Errorf("%w: the repository has no default branch", project.ErrInvalidGitBundle)
+	}
+	bundlePath = filepath.Join(temporary, "repository.bundle")
+	if _, err := manager.runner.Run(ctx, clone, gitEnvironment("", ""),
+		"bundle", "create", bundlePath, "--branches", "--tags"); err != nil {
+		cleanup()
+		return "", "", nil, fmt.Errorf("%w: the repository has nothing to import", project.ErrInvalidGitBundle)
+	}
+	return bundlePath, defaultBranch, cleanup, nil
+}
+
+// validImportURL accepts an https URL of a repository, without credentials:
+// those go in the token.
+func validImportURL(raw string) error {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil ||
+		len(strings.Trim(parsed.Path, "/")) == 0 {
+		return fmt.Errorf("%w: give the repository's https address, such as https://github.com/you/app.git",
+			project.ErrInvalidGitBundle)
+	}
+	return nil
+}
+
 func (manager *Manager) Verify(
 	ctx context.Context,
 	spec project.RepositoryImportSpec,

@@ -1,6 +1,6 @@
 # Server Mode, Complete: Implementation Plan (0.10.0)
 
-**Status:** agreed 2026-11-02. S1 built and tested on a server except restore; S2 reworked into a linked repository the user pulls from and pushes to, after the push mirror proved able to overwrite the remote; S3 next. Finishes what
+**Status:** agreed 2026-11-02. S1 built and tested on a server except restore; S2 reworked into a linked repository the user pulls from and pushes to, after the push mirror proved able to overwrite the remote; S3 built, and an import stays linked; S4 next. Finishes what
 [REMOTE_HOST_PLAN.md](REMOTE_HOST_PLAN.md) left for after its milestone, so a
 server can be the only place a user's work lives. Released together as 0.10.0;
 company sign-in follows as 0.11.0.
@@ -60,10 +60,13 @@ backups, importing a folder, syncing with a local folder, and the audit viewer.
 
 ## S3: Import by repository URL
 
-- The coordinator asks Forgejo to **migrate** the repository from its URL,
-  with a token for a private one, then makes the project from it, as an
-  import from a folder does.
+- The coordinator clones the repository from its URL, with a token for a
+  private one, and packs it into the bundle a folder import uploads, then
+  runs that same import. (Forgejo's own migrate was the first idea; reusing
+  the folder import keeps one path that checks and sets a project up.)
 - On a server, Import shows a URL field in place of the folder picker.
+- The imported project stays linked to the repository (S2), with the same
+  token, ready to pull and push.
 
 ## S4: The audit viewer on a server
 
