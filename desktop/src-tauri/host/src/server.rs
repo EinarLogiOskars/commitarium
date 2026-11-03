@@ -388,6 +388,12 @@ struct SetAccess {
 }
 
 #[derive(Deserialize)]
+struct SetGroups {
+    project_id: String,
+    groups: Vec<String>,
+}
+
+#[derive(Deserialize)]
 struct SetPassword {
     project_id: String,
     password: String,
@@ -551,6 +557,19 @@ fn respond_to_post(path: &str, body: &[u8], shared: &Shared) -> Reply {
             shared.on_a_server()?;
             shared.publishing.set_access(&set.project_id, set.access)
         }),
+        "/v1/publishing/groups" => with_body(body, |set: SetGroups| {
+            shared.on_a_server()?;
+            shared.publishing.set_groups(&set.project_id, &set.groups)
+        }),
+        "/v1/publishing/sign-in" => with_body(body, |asked: crate::sign_in::Connect| {
+            shared.on_a_server()?;
+            shared.publishing.connect_sign_in(asked)
+        }),
+        "/v1/publishing/sign-in/disconnect" => respond_with(
+            shared
+                .on_a_server()
+                .and_then(|()| shared.publishing.disconnect_sign_in()),
+        ),
         "/v1/publishing/reveal" => with_body(body, |asked: ProjectRequest| {
             shared.on_a_server()?;
             shared.publishing.app_password(&asked.project_id)

@@ -7,6 +7,7 @@
 
 use crate::deployments::Deployments;
 use crate::docker;
+use crate::sign_in::{self, Provider};
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -47,6 +48,7 @@ const RESERVED: &[&str] = &[
     "status",
     "ns1",
     "ns2",
+    sign_in::NAME,
 ];
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Serialize)]
@@ -56,6 +58,8 @@ pub enum Access {
     #[default]
     Private,
     Public,
+    /// People sign in with their company account (COMPANY_SIGN_IN_PLAN.md).
+    Company,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -70,6 +74,10 @@ struct AppRoute {
     /// alone, and only paired devices can ask for it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     password: Option<String>,
+    /// For company sign-in: the groups that may open it; none means anyone
+    /// at the company.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    groups: Vec<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -77,6 +85,9 @@ struct Settings {
     domain: Option<String>,
     #[serde(default)]
     apps: BTreeMap<String, AppRoute>,
+    /// The company's sign-in provider, once connected.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    sign_in: Option<Provider>,
 }
 
 /// A published app as a client sees it.
@@ -88,6 +99,7 @@ pub struct PublishedApp {
     url: String,
     /// Whether its deployment runs, so the address answers with the app.
     live: bool,
+    groups: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -96,6 +108,8 @@ pub struct Overview {
     /// The address the wildcard record should point at.
     server_address: Option<String>,
     apps: Vec<PublishedApp>,
+    /// The company's sign-in provider, when one is connected.
+    sign_in: Option<sign_in::Connected>,
 }
 
 /// What publishing an app answers: its address.
@@ -153,8 +167,13 @@ impl Publishing {
                         .map(|domain| address(&route.name, domain))
                         .unwrap_or_default(),
                     live: running.contains_key(project_id),
+                    groups: route.groups.clone(),
                 })
                 .collect(),
+            sign_in: settings
+                .sign_in
+                .as_ref()
+                .map(|provider| provider.shown(settings.domain.as_deref())),
             domain: settings.domain,
         })
     }
@@ -223,11 +242,19 @@ impl Publishing {
         let (password_hash, password) = match (access, password, previous) {
             (_, Some(password), _) => (Some(hashed(password)?), Some(password.to_string())),
             (_, None, Some((hash, kept))) => (Some(hash), kept),
-            (Access::Public, None, None) => (None, None),
+            (Access::Public | Access::Company, None, None) => (None, None),
             (Access::Private, None, None) => {
                 return Err("choose a password for who may open it".into())
             }
         };
+        if access == Access::Company && settings.sign_in.is_none() {
+            return Err(NO_PROVIDER.into());
+        }
+        let groups = settings
+            .apps
+            .get(project_id)
+            .map(|route| route.groups.clone())
+            .unwrap_or_default();
         settings.apps.insert(
             project_id.to_string(),
             AppRoute {
@@ -235,6 +262,7 @@ impl Publishing {
                 access,
                 password_hash,
                 password,
+                groups,
             },
         );
         self.write(&settings)?;
@@ -274,6 +302,72 @@ impl Publishing {
             return Err("choose a password for who may open it".into());
         }
         route.access = access;
+        if access == Access::Company && settings.sign_in.is_none() {
+            return Err(NO_PROVIDER.into());
+        }
+        self.write(&settings)
+    }
+
+    /// The groups that may open a company app; none means anyone at the
+    /// company.
+    pub fn set_groups(&self, project_id: &str, groups: &[String]) -> Result<(), String> {
+        let mut groups = groups
+            .iter()
+            .map(|group| sign_in::valid_group(group))
+            .collect::<Result<Vec<_>, _>>()?;
+        groups.sort();
+        groups.dedup();
+        let _held = self
+            .applied
+            .lock()
+            .map_err(|_| "publishing is unavailable")?;
+        let mut settings = self.read()?;
+        let route = settings
+            .apps
+            .get_mut(project_id)
+            .ok_or("this app is not published")?;
+        route.groups = groups;
+        self.write(&settings)
+    }
+
+    /// Connects the company's sign-in provider, once it answers as one. A
+    /// changed provider keeps the cookie secret, so no one is signed out
+    /// for nothing.
+    pub fn connect_sign_in(&self, asked: sign_in::Connect) -> Result<sign_in::Connected, String> {
+        let kept = self.read()?.sign_in.map(|provider| provider.cookie_secret);
+        // Checked before the lock: it waits on the provider.
+        let provider = Provider::connect(asked, kept)?;
+        let _held = self
+            .applied
+            .lock()
+            .map_err(|_| "publishing is unavailable")?;
+        let mut settings = self.read()?;
+        let shown = provider.shown(settings.domain.as_deref());
+        settings.sign_in = Some(provider);
+        self.write(&settings)?;
+        Ok(shown)
+    }
+
+    /// Disconnects the provider, once no app uses it.
+    pub fn disconnect_sign_in(&self) -> Result<(), String> {
+        let _held = self
+            .applied
+            .lock()
+            .map_err(|_| "publishing is unavailable")?;
+        let mut settings = self.read()?;
+        let using: Vec<&str> = settings
+            .apps
+            .values()
+            .filter(|route| route.access == Access::Company)
+            .map(|route| route.name.as_str())
+            .collect();
+        if !using.is_empty() {
+            return Err(format!(
+                "{} still use company sign-in: choose who can open them first",
+                using.join(", ")
+            ));
+        }
+        settings.sign_in = None;
         self.write(&settings)
     }
 
@@ -315,9 +409,10 @@ impl Publishing {
             .lock()
             .map_err(|_| "publishing is unavailable")?;
         let settings = self.read()?;
-        if settings.domain.is_none() {
+        let Some(domain) = settings.domain.as_deref() else {
             return Ok(());
-        }
+        };
+        sign_in::sync(settings.sign_in.as_ref(), domain)?;
         let config = caddy_config(&settings, &deployments.running_ports());
         let body = serde_json::to_string_pretty(&config).map_err(|e| e.to_string())?;
         let running = caddy_running();
@@ -418,7 +513,19 @@ fn caddy_config(settings: &Settings, running: &BTreeMap<String, u16>) -> Value {
         .iter()
         .map(|(project_id, route)| {
             let host = format!("{}.{domain}", route.name);
-            let mut handle = Vec::new();
+            let mut handle = vec![sign_in::strip_identity()];
+            if route.access == Access::Company {
+                // No provider would be no gate: then no way in.
+                if settings.sign_in.is_none() {
+                    let page = page(503, NO_SIGN_IN);
+                    return json!({"match": [{"host": [host]}], "handle": [page], "terminal": true});
+                }
+                handle.push(sign_in::caddy_gate(
+                    domain,
+                    &route.groups,
+                    page(403, NOT_YOURS),
+                ));
+            }
             if let (Access::Private, Some(hash)) = (route.access, &route.password_hash) {
                 handle.push(json!({
                     "handler": "authentication",
@@ -444,6 +551,9 @@ fn caddy_config(settings: &Settings, running: &BTreeMap<String, u16>) -> Value {
             json!({"match": [{"host": [host]}], "handle": handle, "terminal": true})
         })
         .collect();
+    if settings.sign_in.is_some() {
+        routes.insert(0, sign_in::caddy_route(domain));
+    }
     routes.push(json!({"handle": [page(404, NO_APP)]}));
     json!({
         "admin": {"listen": CADDY_ADMIN},
@@ -477,6 +587,9 @@ fn page(status: u16, text: &str) -> Value {
 
 const NOT_RUNNING: &str = "This app is starting or has stopped. Try again in a moment.";
 const NO_APP: &str = "No app here.";
+const NOT_YOURS: &str = "You are signed in, but this app is for other groups at your company.";
+const NO_SIGN_IN: &str = "This app opens with company sign-in, which is not set up.";
+const NO_PROVIDER: &str = "connect your company's sign-in in Settings first";
 
 fn caddy_running() -> bool {
     docker::docker_command()
@@ -575,6 +688,7 @@ mod tests {
         let mut settings = Settings {
             domain: Some("example.com".into()),
             apps: BTreeMap::new(),
+            sign_in: None,
         };
         settings.apps.insert(
             "prj_todo".into(),
@@ -583,6 +697,7 @@ mod tests {
                 access: Access::Private,
                 password_hash: Some("$2b$12$hash".into()),
                 password: Some("tasks".into()),
+                groups: Vec::new(),
             },
         );
         settings.apps.insert(
@@ -592,6 +707,7 @@ mod tests {
                 access: Access::Public,
                 password_hash: None,
                 password: None,
+                groups: Vec::new(),
             },
         );
         settings
@@ -608,8 +724,10 @@ mod tests {
             .iter()
             .find(|route| route["match"][0]["host"][0] == "todo.example.com")
             .unwrap();
-        assert_eq!(todo["handle"][0]["handler"], "authentication");
-        assert_eq!(todo["handle"][1]["upstreams"][0]["dial"], "127.0.0.1:32778");
+        // No visitor sets who signed in.
+        assert_eq!(todo["handle"][0]["handler"], "headers");
+        assert_eq!(todo["handle"][1]["handler"], "authentication");
+        assert_eq!(todo["handle"][2]["upstreams"][0]["dial"], "127.0.0.1:32778");
         let blog = routes
             .as_array()
             .unwrap()
@@ -617,8 +735,8 @@ mod tests {
             .find(|route| route["match"][0]["host"][0] == "blog.example.com")
             .unwrap();
         // Public and not running: straight to the "not running" page.
-        assert_eq!(blog["handle"][0]["handler"], "static_response");
-        assert_eq!(blog["handle"][0]["status_code"], 503);
+        assert_eq!(blog["handle"][1]["handler"], "static_response");
+        assert_eq!(blog["handle"][1]["status_code"], 503);
         // Anything else: no app.
         assert_eq!(
             routes.as_array().unwrap().last().unwrap()["handle"][0]["status_code"],
@@ -660,7 +778,7 @@ mod tests {
             .find(|route| route["match"][0]["host"][0] == "todo.example.com")
             .unwrap()
             .clone();
-        assert_eq!(todo["handle"][0]["handler"], "reverse_proxy");
+        assert_eq!(todo["handle"][1]["handler"], "reverse_proxy");
         assert!(settings.apps["prj_todo"].password_hash.is_some());
     }
 
@@ -671,5 +789,130 @@ mod tests {
         let hash = hashed("tasks for friends").unwrap();
         assert!(hash.starts_with("$2"));
         assert!(bcrypt::verify("tasks for friends", &hash).unwrap());
+    }
+
+    fn route<'a>(config: &'a Value, host: &str) -> &'a Value {
+        config["apps"]["http"]["servers"]["public"]["routes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|route| route["match"][0]["host"][0] == host)
+            .unwrap()
+    }
+
+    #[test]
+    fn a_company_app_is_gated_and_its_sign_in_address_served() {
+        let mut settings = settings();
+        let todo = settings.apps.get_mut("prj_todo").unwrap();
+        todo.access = Access::Company;
+        todo.groups = vec!["sales".into()];
+        settings.sign_in = Some(Provider {
+            issuer: "https://login.example.com".into(),
+            client_id: "commitarium".into(),
+            client_secret: "secret".into(),
+            scopes: None,
+            groups_claim: None,
+            cookie_secret: "c".repeat(32),
+        });
+        let running = BTreeMap::from([("prj_todo".to_string(), 32778)]);
+        let config = caddy_config(&settings, &running);
+        let todo = route(&config, "todo.example.com");
+        assert_eq!(todo["handle"][0]["handler"], "headers");
+        assert_eq!(
+            todo["handle"][1]["rewrite"]["uri"],
+            "/oauth2/auth?allowed_groups=sales"
+        );
+        assert_eq!(todo["handle"][2]["upstreams"][0]["dial"], "127.0.0.1:32778");
+        let sign_in = route(&config, "sign-in.example.com");
+        assert_eq!(
+            sign_in["handle"][0]["upstreams"][0]["dial"],
+            "127.0.0.1:4180"
+        );
+        // Without a provider there is no way in, not an open door.
+        settings.sign_in = None;
+        let config = caddy_config(&settings, &running);
+        let todo = route(&config, "todo.example.com");
+        assert_eq!(todo["handle"][0]["status_code"], 503);
+        assert_eq!(todo["handle"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn company_access_needs_a_provider_and_disconnecting_needs_no_users() {
+        let data = tempfile::tempdir().unwrap();
+        let publishing = Publishing::new(data.path());
+        let mut settings = settings();
+        publishing.write(&settings).unwrap();
+        assert_eq!(
+            publishing
+                .set_access("prj_blog", Access::Company)
+                .unwrap_err(),
+            NO_PROVIDER
+        );
+        settings.sign_in = Some(Provider {
+            issuer: "https://login.example.com".into(),
+            client_id: "commitarium".into(),
+            client_secret: "secret".into(),
+            scopes: None,
+            groups_claim: None,
+            cookie_secret: "c".repeat(32),
+        });
+        publishing.write(&settings).unwrap();
+        publishing.set_access("prj_blog", Access::Company).unwrap();
+        publishing
+            .set_groups("prj_blog", &[" sales ".into(), "sales".into(), "it".into()])
+            .unwrap();
+        assert_eq!(
+            publishing.read().unwrap().apps["prj_blog"].groups,
+            ["it", "sales"]
+        );
+        assert!(publishing
+            .disconnect_sign_in()
+            .unwrap_err()
+            .contains("blog"));
+        publishing.set_access("prj_blog", Access::Public).unwrap();
+        publishing.disconnect_sign_in().unwrap();
+        assert!(publishing.read().unwrap().sign_in.is_none());
+    }
+
+    /// Writes a company app's Caddy config and gate arguments for a live
+    /// run against a test provider: `SIGN_IN_TEST_DIR=… cargo test -- --ignored`.
+    #[test]
+    #[ignore]
+    fn write_a_sign_in_test_setup() {
+        let dir = std::path::PathBuf::from(std::env::var("SIGN_IN_TEST_DIR").unwrap());
+        let groups: Vec<String> = std::env::var("SIGN_IN_TEST_GROUPS")
+            .map(|groups| groups.split(',').map(String::from).collect())
+            .unwrap_or_default();
+        let provider = Provider {
+            issuer: std::env::var("SIGN_IN_TEST_ISSUER").unwrap(),
+            client_id: "commitarium".into(),
+            client_secret: "secret".into(),
+            scopes: None,
+            groups_claim: None,
+            cookie_secret: "c".repeat(32),
+        };
+        let mut settings = Settings {
+            domain: Some("example.test".into()),
+            apps: BTreeMap::new(),
+            sign_in: Some(provider.clone()),
+        };
+        settings.apps.insert(
+            "prj_todo".into(),
+            AppRoute {
+                name: "todo".into(),
+                access: Access::Company,
+                password_hash: None,
+                password: None,
+                groups,
+            },
+        );
+        let running = BTreeMap::from([("prj_todo".to_string(), 3000)]);
+        let config = caddy_config(&settings, &running);
+        fs::write(dir.join("caddy.json"), config.to_string()).unwrap();
+        fs::write(
+            dir.join("gate-args"),
+            sign_in::arguments(&provider, "example.test").join("\n"),
+        )
+        .unwrap();
     }
 }
