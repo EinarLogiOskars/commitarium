@@ -266,20 +266,23 @@ pub fn sync(provider: Option<&Provider>, domain: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// The running gate's spec, `None` when it is not running.
+/// The gate's spec, `None` when there is no gate. One that Docker is
+/// restarting counts: it waits for a provider that does not answer yet, and
+/// recreating it would not help.
 fn running_spec() -> Option<String> {
     let output = docker::docker_command()
         .args([
             "inspect",
             "-f",
-            &format!("{{{{.State.Running}}}} {{{{index .Config.Labels \"{SPEC_LABEL}\"}}}}"),
+            &format!("{{{{.State.Status}}}} {{{{index .Config.Labels \"{SPEC_LABEL}\"}}}}"),
             CONTAINER,
         ])
         .output()
         .ok()?;
     let text = String::from_utf8_lossy(&output.stdout);
-    let (running, spec) = text.trim().split_once(' ')?;
-    (output.status.success() && running == "true").then(|| spec.to_string())
+    let (status, spec) = text.trim().split_once(' ')?;
+    (output.status.success() && matches!(status, "running" | "restarting"))
+        .then(|| spec.to_string())
 }
 
 fn remove() {
@@ -435,5 +438,44 @@ mod tests {
             .contains("https://"));
         let secret = new_cookie_secret().unwrap();
         assert_eq!(secret.len(), 32);
+    }
+
+    fn container_id() -> String {
+        let output = docker::docker_command()
+            .args(["inspect", "-f", "{{.Id}}", CONTAINER])
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
+    }
+
+    /// Runs the gate on this computer's Docker: started, left alone while
+    /// nothing changes, recreated when the provider does, removed with it.
+    /// `cargo test -- --ignored the_gate_follows`.
+    #[test]
+    #[ignore]
+    fn the_gate_follows_the_provider() {
+        let mut provider = provider();
+        sync(Some(&provider), "example.com").unwrap();
+        let first = container_id();
+        assert!(!first.is_empty());
+        assert_eq!(
+            running_spec().as_deref(),
+            Some(spec(&provider, "example.com").as_str())
+        );
+        let output = docker::docker_command()
+            .args(["inspect", "-f", "{{json .Args}}", CONTAINER])
+            .output()
+            .unwrap();
+        let arguments = String::from_utf8_lossy(&output.stdout);
+        assert!(!arguments.contains(&provider.client_secret), "{arguments}");
+        assert!(!arguments.contains(&provider.cookie_secret), "{arguments}");
+        sync(Some(&provider), "example.com").unwrap();
+        assert_eq!(container_id(), first);
+        provider.client_secret = "another secret".into();
+        sync(Some(&provider), "example.com").unwrap();
+        let second = container_id();
+        assert!(!second.is_empty() && second != first);
+        sync(None, "example.com").unwrap();
+        assert!(container_id().is_empty());
     }
 }
