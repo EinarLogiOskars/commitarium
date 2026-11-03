@@ -80,12 +80,20 @@ account, and each app chooses which groups may open it.
 
 ## C3: Mayka sets it up
 
-- Choosing Company sign-in without a provider asks Mayka to set it up. Her
-  instructions for it ride only that turn, like the first look at an import.
+- Choosing Company sign-in before a provider is connected offers **Set it up
+  with Mayka**, which opens the project's chat focused on company sign-in
+  (the "Company sign-in" chip) and tells her the server's domain.
+- The setup instructions ride with the focus, so they are in her turns only
+  while the chip stays, never in everyday ones.
 - She asks the flow's questions, explains the choices in plain words, and
-  gives the steps for the user's provider: the sign-in address to register,
-  where the client ID and secret are, how to put groups in the token.
-- The secret is pasted into the app's card, never into the chat.
+  gives the steps for the user's provider: Entra ID, Google Workspace, Okta,
+  authentik, Keycloak and Pocket ID, the sign-in address to register, the
+  issuer, and groups in the token. For Google she says to make the consent
+  screen Internal: otherwise any Google account could sign in.
+- The secret goes into Settings, never the chat; a pasted one is to be
+  replaced.
+- Her standing deploy instructions name the identity headers, so she builds
+  on them when asked who is signed in.
 
 ## C4 and C5: A provider on the server
 
