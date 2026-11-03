@@ -179,20 +179,23 @@ Tested on a computer (Docker Desktop), 2026-11-03:
 - Unit tests for the Caddy config, settings, groups, Mayka's focus; Go,
   Rust (with the Windows check) and the frontend in CI.
 
-Owed to the user, on the server:
+Tested on a server (Hetzner CX43, 16 GB, a fresh Ubuntu 24.04 with the
+0.11.0-rc.1 host), 2026-11-03, by the user:
 
-1. Update the server to these builds (host and app).
-2. Settings → Server → Company sign-in shows, with the sign-in address.
-3. Connect a real provider (Google Workspace or Entra ID is the likeliest),
-   choose Company sign-in on a deployed app, sign in in a browser, and see
-   the app; try Choose groups with a group you are not in.
-4. Set it up with Mayka: the chip, her questions about the team, and her
-   steps for the provider.
-5. authentik on a server of 8 GB or more: Set up authentik, sign in to its
-   admin page, add a person and a group, open an app through it.
-6. A backup and restore with authentik set up: people and groups survive.
-7. Disconnect: refused while an app uses it, then the gate (and authentik)
-   gone.
+- Settings → Server → Company sign-in with the sign-in address; authentik set
+  up from there (about 4 minutes) and its admin page at `auth.<domain>`.
+- The docs website, imported by URL and deployed, behind Company sign-in: a
+  signed-out visitor sent to sign in, a person in authentik let through.
+- Groups: a person outside the app's group gets the "other groups" page.
+- Disconnect refused while an app uses it; after the app went back to Anyone,
+  the gate and authentik gone and the app open again.
+- Found: a person with no email address gets the gate's bare 500 (the gate
+  needs an email). The docs and Mayka now say everyone needs one; a plain
+  page for it is a follow-up.
+
+Still owed: a backup and restore with authentik set up; connecting an outside
+provider (Google Workspace or Entra ID) live; Mayka's team questions in the
+rc.2 build (the Ask Mayka link from Settings is not in rc.1).
 
 Notes: `X-Commitarium-User` is the provider's stable ID for the person
 (opaque in authentik); `X-Commitarium-Username` and `-Email` are the
