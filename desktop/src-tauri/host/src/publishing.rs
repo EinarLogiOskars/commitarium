@@ -959,13 +959,28 @@ mod tests {
         let groups: Vec<String> = std::env::var("SIGN_IN_TEST_GROUPS")
             .map(|groups| groups.split(',').map(String::from).collect())
             .unwrap_or_default();
-        let provider = Provider {
-            issuer: std::env::var("SIGN_IN_TEST_ISSUER").unwrap(),
-            client_id: "commitarium".into(),
-            client_secret: "secret".into(),
-            scopes: None,
-            groups_claim: None,
-            cookie_secret: "c".repeat(32),
+        // With SIGN_IN_TEST_AUTHENTIK set, authentik is set up as the
+        // provider, its files in the same directory.
+        let authentik = std::env::var("SIGN_IN_TEST_AUTHENTIK").is_ok();
+        let provider = if authentik {
+            let connection = Authentik::new(&dir).install("example.test").unwrap();
+            Provider {
+                issuer: connection.issuer,
+                client_id: connection.client_id,
+                client_secret: connection.client_secret,
+                scopes: None,
+                groups_claim: None,
+                cookie_secret: "c".repeat(32),
+            }
+        } else {
+            Provider {
+                issuer: std::env::var("SIGN_IN_TEST_ISSUER").unwrap(),
+                client_id: "commitarium".into(),
+                client_secret: "secret".into(),
+                scopes: None,
+                groups_claim: None,
+                cookie_secret: "c".repeat(32),
+            }
         };
         let mut settings = Settings {
             domain: Some("example.test".into()),
@@ -983,8 +998,9 @@ mod tests {
             },
         );
         let running = BTreeMap::from([("prj_todo".to_string(), 3000)]);
-        let config = caddy_config(&settings, &running, false);
+        let config = caddy_config(&settings, &running, authentik);
         fs::write(dir.join("caddy.json"), config.to_string()).unwrap();
+        fs::write(dir.join("client-secret"), &provider.client_secret).unwrap();
         fs::write(
             dir.join("gate-args"),
             sign_in::arguments(&provider, "example.test").join("\n"),

@@ -398,6 +398,26 @@ impl Api<'_> {
         Err(format!("authentik has no {what}"))
     }
 
+    /// authentik's own email mapping calls every email unverified, which the
+    /// gate refuses. Here its admins set people's emails, so they are.
+    fn email_mapping(&self) -> Result<Value, String> {
+        const NAME: &str = "Commitarium: email";
+        let mapping = json!({
+            "name": NAME,
+            "scope_name": "email",
+            "expression": "return {\"email\": request.user.email, \"email_verified\": True}",
+        });
+        match self.first("propertymappings/provider/scope/?name=Commitarium%3A%20email")? {
+            Some(found) => Ok(found["pk"].clone()),
+            None => Ok(self.call(
+                reqwest::Method::POST,
+                "propertymappings/provider/scope/",
+                Some(mapping),
+            )?["pk"]
+                .clone()),
+        }
+    }
+
     /// Makes, or brings up to date, the provider and application the gate
     /// signs in with.
     fn configure(&self, domain: &str, client_secret: &str) -> Result<(), String> {
@@ -413,19 +433,20 @@ impl Api<'_> {
             "crypto/certificatekeypairs/?name=authentik%20Self-signed%20Certificate",
             "signing key",
         )?;
-        let mappings: Vec<Value> = self.get("propertymappings/provider/scope/?page_size=100")?
-            ["results"]
+        let mut mappings: Vec<Value> = self
+            .get("propertymappings/provider/scope/?page_size=100")?["results"]
             .as_array()
             .cloned()
             .unwrap_or_default()
             .into_iter()
             .filter(|mapping| {
-                ["openid", "email", "profile"].iter().any(|scope| {
+                ["openid", "profile"].iter().any(|scope| {
                     mapping["managed"] == format!("goauthentik.io/providers/oauth2/scope-{scope}")
                 })
             })
             .map(|mapping| mapping["pk"].clone())
             .collect();
+        mappings.push(self.email_mapping()?);
         let provider = json!({
             "name": PROVIDER_NAME,
             "authorization_flow": authorization,
