@@ -218,6 +218,9 @@ progress {
   flex: none;
 }
 .topbar__brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   font-weight: 600;
   font-size: var(--text-md);
   letter-spacing: -0.02em;
@@ -7225,4 +7228,10 @@ button.shell-agent:hover {
 .quiet__order:hover {
   color: var(--text);
   text-decoration: underline;
+}
+
+.app__brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
 }

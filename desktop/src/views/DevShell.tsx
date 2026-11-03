@@ -35,6 +35,7 @@ import { ProjectPageBody, useProjectPages } from "./ProjectPages";
 import type { PageTarget } from "./pageTarget";
 import { MarketplaceRelease } from "./MarketplaceRelease";
 import { ProjectCost } from "./usage";
+import { BrandMark } from "./BrandMark";
 
 const TOP = "commitarium";
 const SELECTED_KEY = "commitarium.chats.selected";
@@ -658,6 +659,7 @@ export function DevShell({
     <div className="dev-shell">
       <nav className={`chat-side ${sidebar.hidden ? "chat-side--folded" : ""}`} aria-label="Chats">
         <div className="chat-side__brand">
+          <BrandMark size={16} />
           <span>Commitarium</span>
           <span className="pill chat-side__mode">Developer</span>
         </div>
