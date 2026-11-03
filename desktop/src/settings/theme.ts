@@ -28,3 +28,9 @@ export function saveTheme(theme: Theme) {
     // The choice lasts until the window closes.
   }
 }
+
+/** Light or dark as the app shows now: the system's, where it follows it. */
+export function shownTheme(theme: Theme = readTheme()): "light" | "dark" {
+  if (theme !== "system") return theme;
+  return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+}

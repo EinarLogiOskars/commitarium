@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getProject } from "../api/projects";
 import { listFeatures, setUpPreview, tellAssistantPreviewFailed } from "../api/features";
 import { getPreviewStatus, onPreviewStatusChanged, startPreview, type PreviewStatus } from "../ipc";
 import { isStopped, primaryUrl } from "./usePreview";
 import { AssistantDrawer, SignInNotice } from "./AssistantDrawer";
 import { RippleField } from "./RippleField";
+import { shownTheme } from "../settings/theme";
 import { agentName, useAgents } from "./useAgents";
 import { getConversation, type Conversation } from "../api/assistant";
 import type { Feature, Project } from "../api/types";
@@ -154,6 +155,8 @@ export function AppWindow({ projectId }: { projectId: string }) {
   };
 
   const revealed = !!url && loadedUrl === url;
+  // Once per address: a theme changed later must not reload the app.
+  const address = useMemo(() => (url ? withTheme(url) : null), [url]);
   const nextItem = goal?.items.find((item) => !item.done);
   // The waiting screen, over the app while it loads, then fading out.
   const waiting =
@@ -245,7 +248,7 @@ export function AppWindow({ projectId }: { projectId: string }) {
         <iframe
           key={url}
           className={`app-window__frame ${loadedUrl === url ? "" : "app-window__frame--loading"}`}
-          src={url}
+          src={address ?? url}
           title={name}
           onLoad={() => setLoadedUrl(url)}
           // Same-site with this page (ADR-029), so it may not navigate it
@@ -282,4 +285,16 @@ export function AppWindow({ projectId }: { projectId: string }) {
       />
     </div>
   );
+}
+
+/** The app's address with Commitarium's theme as a hint: an app built here
+ * starts from it, then keeps a setting of its own. */
+function withTheme(url: string): string {
+  try {
+    const address = new URL(url);
+    address.searchParams.set("theme", shownTheme());
+    return address.toString();
+  } catch {
+    return url;
+  }
 }
