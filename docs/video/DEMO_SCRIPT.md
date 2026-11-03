@@ -85,8 +85,10 @@ Opens with: "Agents are connected; now let's make something."
 4. Ask for a change from inside the app: "Add a thirst bar to each plant."
    Watch it change.
 
-Check: the app builds and opens without help; the change lands and the app
-reloads with it; the agents now show their usage.
+Check: the app builds and opens without help, fading in from the waiting
+screen, with its progress in a corner while the build goes on; it starts in
+the same theme as Commitarium and has its own light/dark setting; the change
+lands and the app reloads with it; the agents now show their usage.
 
 Cut: "Next video opens the hood: Developer mode."
 
