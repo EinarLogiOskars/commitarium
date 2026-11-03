@@ -10,6 +10,7 @@ import {
   orderLine,
   repeatKey,
   runSummary,
+  staysInView,
   type QuietEntry,
   type QuietLine,
 } from "./quietLines";
@@ -265,5 +266,25 @@ describe("orderLine", () => {
       text: "FSRS · Done",
     });
     expect(orderLine("FSRS", "", flags)).toMatchObject({ tone: "info", text: "FSRS" });
+  });
+});
+
+describe("a helper's question", () => {
+  it("is Mayka's to answer, so it folds away with the routine lines", () => {
+    const line = eventLine(
+      "The brief writer for “Manage my plants” asks: Should this wait for the foundation?",
+    );
+    expect(line).toMatchObject({ tone: "info", kind: "helper-ask" });
+    expect(staysInView(line)).toBe(false);
+    expect(eventLine("The vision writer asks: Which comes first?").kind).toBe("helper-ask");
+  });
+
+  it("does not hide a note that waits for the user", () => {
+    expect(eventLine("“Sort” waits for your approval.").tone).toBe("needs");
+  });
+
+  it("is counted in a folded run's summary", () => {
+    const ask = eventLine("The stack designer asks: Postgres or SQLite?");
+    expect(runSummary([ask, ask])).toBe("Helpers asked Mayka 2 things");
   });
 });

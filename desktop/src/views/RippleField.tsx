@@ -4,6 +4,8 @@ import { useEffect, useRef } from "react";
 // dots, and a ripple leaving the centre about once a second, like drops
 // landing in water. Where a ripple passes, the dots brighten and swell; each
 // ripple weakens as it spreads, so a few show at once at different strengths.
+// Behind the words beside it (its siblings) the field stays quiet, so the
+// text reads; the ripple shows again just outside them.
 // With reduced motion, the dots hold still.
 
 const SPACING = 26;
@@ -14,6 +16,27 @@ const LIFE_MS = 3600;
 /** How wide a ripple's ring is. */
 const WIDTH = 20;
 const COLOR = "125, 211, 252";
+/** How far beyond the words the field takes to come back to full strength. */
+const QUIET_EDGE = 56;
+
+/** The area the canvas' sibling elements cover, in the canvas' coordinates. */
+function wordsArea(canvas: HTMLCanvasElement) {
+  const box = canvas.getBoundingClientRect();
+  let left = Infinity;
+  let top = Infinity;
+  let right = -Infinity;
+  let bottom = -Infinity;
+  for (const sibling of Array.from(canvas.parentElement?.children ?? [])) {
+    if (sibling === canvas) continue;
+    const r = sibling.getBoundingClientRect();
+    if (r.width === 0 && r.height === 0) continue;
+    left = Math.min(left, r.left - box.left);
+    top = Math.min(top, r.top - box.top);
+    right = Math.max(right, r.right - box.left);
+    bottom = Math.max(bottom, r.bottom - box.top);
+  }
+  return left === Infinity ? null : { left, top, right, bottom };
+}
 
 export function RippleField() {
   const canvas = useRef<HTMLCanvasElement | null>(null);
@@ -38,6 +61,7 @@ export function RippleField() {
       context.clearRect(0, 0, width, height);
       const cx = width / 2;
       const cy = height / 2;
+      const words = wordsArea(el);
       const elapsed = now - started;
       // The ripples alive now: how far each has gone, and how strong it is.
       const ripples: { radius: number; strength: number }[] = [];
@@ -59,7 +83,15 @@ export function RippleField() {
             const off = (distance - ripple.radius) / WIDTH;
             glow += ripple.strength * Math.exp(-off * off);
           }
-          glow = Math.min(1, glow);
+          // 0 behind the words, rising to 1 a short way outside them.
+          let open = 1;
+          if (words) {
+            const dx = Math.max(words.left - x, 0, x - words.right);
+            const dy = Math.max(words.top - y, 0, y - words.bottom);
+            const t = Math.min(1, Math.hypot(dx, dy) / QUIET_EDGE);
+            open = t * t * (3 - 2 * t);
+          }
+          glow = Math.min(1, glow) * open;
           const radius = 1.1 + 3 * glow;
           if (glow > 0.05) {
             context.fillStyle = `rgba(${COLOR}, ${0.3 * glow})`;
@@ -67,7 +99,7 @@ export function RippleField() {
             context.arc(x, y, radius * 3.4, 0, Math.PI * 2);
             context.fill();
           }
-          context.fillStyle = `rgba(${COLOR}, ${0.1 + 0.8 * glow})`;
+          context.fillStyle = `rgba(${COLOR}, ${0.04 + 0.06 * open + 0.8 * glow})`;
           context.beginPath();
           context.arc(x, y, radius, 0, Math.PI * 2);
           context.fill();

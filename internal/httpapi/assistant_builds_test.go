@@ -157,3 +157,12 @@ func TestApprovingACardWithOtherAgentsIsCheckedLikeAnyChoice(t *testing.T) {
 		})
 	}
 }
+
+func TestBriefEarlyNoteNamesTheWorkAndSaysNotToWait(t *testing.T) {
+	note := briefEarlyNote("Build the app foundation")
+	for _, want := range []string{"“Build the app foundation”", "has not merged", "Do not ask whether to wait"} {
+		if !strings.Contains(note, want) {
+			t.Fatalf("note %q lacks %q", note, want)
+		}
+	}
+}

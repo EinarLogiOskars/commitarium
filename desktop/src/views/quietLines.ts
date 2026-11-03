@@ -28,6 +28,7 @@ export type QuietKind =
   | "vision"
   | "stack"
   | "answer"
+  | "helper-ask"
   | "order"
   | "note";
 
@@ -62,6 +63,9 @@ export function staysInView(line: QuietLine): boolean {
 }
 
 const BRIEF_READY = /^The brief for “(.+)” is ready\.$/;
+/** A helper's question: it goes to Mayka, who answers it, not to the user. */
+const HELPER_ASKS =
+  /^The (brief writer for “.+?”|vision writer|research on “.+?”|stack designer) asks: /;
 const NEEDS_YOU =
   /waiting for the user|waits for (the user|your)|needs you|for you[:.]|yours to approve|\basks: |is blocked/i;
 const FAILED = /\b(failed|could not|couldn't|stopped before it finished|did not hold)\b/i;
@@ -72,6 +76,7 @@ export function eventLine(text: string): QuietLine {
   if (brief) {
     return { tone: "info", kind: "brief-ready", count: 1, text, briefFor: brief[1].toLowerCase() };
   }
+  if (HELPER_ASKS.test(text)) return { tone: "info", kind: "helper-ask", count: 1, text };
   if (NEEDS_YOU.test(text)) return { tone: "needs", kind: "note", count: 1, text };
   if (FAILED.test(text)) return { tone: "failed", kind: "note", count: 1, text };
   if (/^Autopilot/.test(text)) {
@@ -328,6 +333,8 @@ export function kindPhrase(kind: QuietKind, n: number): string {
       return "set up the stack";
     case "answer":
       return plural(n, "answered a helper", `answered ${n} helpers`);
+    case "helper-ask":
+      return plural(n, "a helper asked Mayka", `helpers asked Mayka ${n} things`);
     case "order":
       return plural(n, "1 work order done", `${n} work orders done`);
     default:
