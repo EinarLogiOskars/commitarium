@@ -2,6 +2,8 @@ import type { ReactNode } from "react";
 import { AbsoluteFill, interpolate, interpolateColors, useCurrentFrame } from "remotion";
 import "../../desktop/src/App.css";
 import { iconColor, initials } from "../../desktop/src/views/AppsView";
+import { ComposerBox } from "../../desktop/src/views/Composer";
+import { QuietRow } from "../../desktop/src/views/QuietRow";
 
 // The README's loop, told like an ad rather than a walkthrough: the assistant
 // asks what you need, you say it, the request becomes an app that plans and
@@ -94,7 +96,15 @@ const TILE_RECT = {
   height: TILE_H * TILE_SCALE,
 };
 
-export function ReadmeLoop() {
+export type Theme = "light" | "dark";
+
+// The app's own tokens for the theme, as the desktop sets them.
+function useTheme(theme: Theme) {
+  if (typeof document !== "undefined") document.documentElement.dataset.theme = theme;
+}
+
+export function ReadmeLoop({ theme = "light" }: { theme?: Theme }) {
+  useTheme(theme);
   const frame = useCurrentFrame();
   const fade = interpolate(frame, [END - 10, END - 1], [1, 0], clamp);
   return (
@@ -126,35 +136,28 @@ function Conversation({ frame }: { frame: number }) {
       <div style={{ width: 640, display: "flex", flexDirection: "column" }}>
         <div className="chat" style={{ gap: 0, overflow: "visible" }}>
           <Appear at={ASK_IN}>
-            <Message who="Assistant" text="What can I do for you?" />
+            <Message who="Mayka" text="What can I do for you?" />
           </Appear>
           <Appear at={SEND + 3}>
             <Message who="You" text={ASK} />
           </Appear>
           <Appear at={REPLY_AT}>
-            <Message who="Assistant" text={`On it. I'll build it and call it ${APP_NAME}.`} />
+            <Message who="Mayka" text={`On it. I'll build it and call it ${APP_NAME}.`} />
           </Appear>
         </div>
         <div
-          className="composer"
           style={{
             opacity: composer * (1 - easeInOut(progress(frame, REPLY_AT, REPLY_AT + 12))),
             transform: `translateY(${(1 - composer) * 24}px)`,
             marginTop: 14,
           }}
         >
-          <div className="reply">
-            <textarea
-              rows={2}
-              readOnly
-              value={sent ? "" : typed + caret(frame, TYPE_FROM - 6, TYPE_FROM, TYPE_TO)}
-              placeholder="Ask the assistant…"
-              style={{ outline: focusRing(frame, TYPE_FROM - 6, SEND) }}
-            />
-            <button className="primary" disabled={frame < TYPE_TO} style={pressed(frame, SEND)}>
-              Send
-            </button>
-          </div>
+          <Composer
+            frame={frame}
+            text={sent ? "" : typed + caret(frame, TYPE_FROM - 6, TYPE_FROM, TYPE_TO)}
+            ready={frame >= TYPE_TO}
+            send={SEND}
+          />
         </div>
       </div>
     </AbsoluteFill>
@@ -370,12 +373,18 @@ function PlantPal({ frame }: { frame: number }) {
             <aside
               className="assistant-drawer"
               aria-label="Assistant"
-              style={{ animation: "none", width: 480, minWidth: 0, transform: `translateX(${(1 - drawer) * 100}%)` }}
+              // Commitarium's, not the app's: it sits over the app's page.
+              style={{
+                animation: "none",
+                width: 480,
+                minWidth: 0,
+                color: "var(--text)",
+                transform: `translateX(${(1 - drawer) * 100}%)`,
+              }}
             >
               <header className="assistant-drawer__head">
-                <div className="assistant-drawer__title">
-                  <strong>Assistant</strong>
-                  <span className="muted">{APP_NAME}</span>
+                <div className="assistant-drawer__top">
+                  <strong className="assistant-drawer__title">{APP_NAME}</strong>
                 </div>
               </header>
               <div className="chat assistant-drawer__chat" style={{ justifyContent: "flex-end", overflow: "hidden", gap: 0 }}>
@@ -383,31 +392,27 @@ function PlantPal({ frame }: { frame: number }) {
                   <Message who="You" text={CHANGE_ASK} />
                 </Appear>
                 <Appear at={SEND_2 + 8} until={REPLY_2_AT}>
-                  <p className="muted status-line">The assistant is thinking…</p>
+                  <QuietRow tone="busy" pulse>
+                    Mayka is thinking…
+                  </QuietRow>
                 </Appear>
                 <Appear at={REPLY_2_AT}>
-                  <Message who="Assistant" text="Good idea. Each plant gets a bar that fills up as its next watering gets closer." />
+                  <Message who="Mayka" text="Good idea. Each plant gets a bar that fills up as its next watering gets closer." />
                 </Appear>
                 <Appear at={STARTED_AT}>
-                  <p className="muted assistant__applied">✓ Started: {CHANGE_TITLE}</p>
+                  <QuietRow tone="busy">Started “{CHANGE_TITLE}”</QuietRow>
                 </Appear>
                 <Appear at={MERGED_AT}>
-                  <p className="muted assistant__event">“{CHANGE_TITLE}” merged.</p>
+                  <QuietRow tone="done">“{CHANGE_TITLE}” merged</QuietRow>
                 </Appear>
               </div>
-              <div className="composer">
-                <div className="reply">
-                  <textarea
-                    rows={2}
-                    readOnly
-                    value={sent ? "" : typed + caret(frame, TYPE_2_FROM - 6, TYPE_2_FROM, TYPE_2_TO)}
-                    placeholder="Ask the assistant…"
-                    style={{ outline: focusRing(frame, TYPE_2_FROM - 6, SEND_2) }}
-                  />
-                  <button className="primary" disabled={frame < TYPE_2_TO} style={pressed(frame, SEND_2)}>
-                    Send
-                  </button>
-                </div>
+              <div style={{ padding: "0 14px 14px" }}>
+                <Composer
+                  frame={frame}
+                  text={sent ? "" : typed + caret(frame, TYPE_2_FROM - 6, TYPE_2_FROM, TYPE_2_TO)}
+                  ready={frame >= TYPE_2_TO}
+                  send={SEND_2}
+                />
               </div>
             </aside>
           )}
@@ -473,15 +478,30 @@ function Appear({ at, until, children }: { at: number; until?: number; children:
   );
 }
 
-function Message({ who, text }: { who: "You" | "Assistant"; text: string }) {
+// As the chat shows them (ChatView): yours under "You", Mayka's plain.
+function Message({ who, text }: { who: "You" | "Mayka"; text: string }) {
   return (
-    <div className="assistant__turn">
-      <div className={`msg ${who === "You" ? "msg--user" : "msg--lead"}`}>
-        <span className="msg__who">{who}</span>
-        <div className="msg__text">
-          <p>{text}</p>
-        </div>
+    <div className={`msg ${who === "You" ? "msg--user" : "msg--lead msg--plain"}`}>
+      {who === "You" && <span className="msg__who">You</span>}
+      <div className="msg__text">
+        <p>{text}</p>
       </div>
+    </div>
+  );
+}
+
+// The app's own message box, being typed into and sent.
+function Composer({ frame, text, ready, send }: { frame: number; text: string; ready: boolean; send: number }) {
+  return (
+    <div style={pressed(frame, send)}>
+      <ComposerBox
+        value={text}
+        onChange={() => {}}
+        placeholder="Ask Mayka…"
+        onSubmit={() => {}}
+        submitDisabled={!ready}
+        submitLabel="Send"
+      />
     </div>
   );
 }
@@ -511,12 +531,6 @@ function caret(frame: number, focused: number, from: number, to: number) {
   const typing = frame >= from && frame < to;
   return typing || Math.floor(frame / 8) % 2 === 0 ? "|" : "";
 }
-
-// The app's focus ring (textarea:focus), faded in on focus and out on send.
-const focusRing = (frame: number, focused: number, sent: number) =>
-  `2px solid color-mix(in srgb, var(--accent) ${Math.round(
-    55 * Math.min(progress(frame, focused, focused + 6), 1 - progress(frame, sent, sent + 8)),
-  )}%, transparent)`;
 
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 const progress = (frame: number, from: number, to: number) => interpolate(frame, [from, to], [0, 1], clamp);

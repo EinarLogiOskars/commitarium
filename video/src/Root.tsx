@@ -7,14 +7,18 @@ import { END, ReadmeLoop, THUMBNAIL_HEIGHT, THUMBNAIL_WIDTH, VideoThumbnail } fr
 export function Root() {
   return (
     <>
-      <Composition
-        id="ReadmeLoop"
-        component={ReadmeLoop}
-        durationInFrames={END}
-        fps={30}
-        width={1280}
-        height={800}
-      />
+      {(["light", "dark"] as const).map((theme) => (
+        <Composition
+          key={theme}
+          id={`ReadmeLoop-${theme}`}
+          component={ReadmeLoop}
+          defaultProps={{ theme }}
+          durationInFrames={END}
+          fps={30}
+          width={1280}
+          height={800}
+        />
+      ))}
       <Composition
         id="VideoThumbnail"
         component={VideoThumbnail}
