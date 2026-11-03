@@ -100,6 +100,14 @@ each with their installed dependencies. None of it was ever cleared.
 - **Preview images.** The host's cleanup removes `commitarium-preview-*`
   images (previews, checks, deployments) no container has used, once built
   over two days ago. A deployment's stays while its container exists.
+- **Checks and deleted projects.** A preview check removes its own images
+  when it finishes: they serve only that check. On a server, the cleanup
+  also removes at once the images of projects the coordinator no longer
+  has, whichever way the project went. On this computer it does not: a
+  second Commitarium may share Docker.
+- **Backups.** Workspace backups leave out `node_modules`; agents install
+  dependencies again. A day of a server's tests took a backup from 340 MB
+  to 824 MB, most of it dependencies.
 - **On a schedule.** The cleanup also runs every six hours, not only after
   builds and updates.
 - **Build cache.** On a server, BuildKit cache unused for a week goes. On

@@ -13,7 +13,8 @@
 //!   derivatives (labelled with their base image);
 //! - the provider and journal volumes of agents that were removed;
 //! - preview, check and deployment images (`commitarium-preview-*`) no
-//!   container has used for two days, rebuilt when next wanted.
+//!   container has used for two days, rebuilt when next wanted, and on a
+//!   server at once those of a project the coordinator no longer has.
 //!
 //! Nothing a container uses, running or stopped, is removed. It runs after
 //! the builds and updates that leave things behind, and every few hours on
@@ -96,7 +97,9 @@ struct Removal {
 /// How thorough a cleanup is.
 #[derive(Clone, Copy, Default)]
 struct Sweep {
-    /// Prune the BuildKit cache: Docker is Commitarium's alone.
+    /// Docker is Commitarium's alone, as on a server: prune the BuildKit
+    /// cache, and remove the images of projects the coordinator does not
+    /// have. On this computer another Commitarium may share Docker.
     build_cache: bool,
     /// The disk is low: unused preview images and build cache go however
     /// recent.
@@ -173,7 +176,7 @@ fn run(sweep: Sweep) {
         }
         Err(error) => eprintln!("[cleanup] images: {error}"),
     }
-    match plan_preview_images(sweep.low_disk) {
+    match plan_preview_images(sweep.low_disk, sweep.build_cache) {
         Ok(removals) => {
             for removal in removals {
                 remove("image", &removal);
@@ -194,43 +197,98 @@ fn run(sweep: Sweep) {
     }
 }
 
-/// Unused preview, check and deployment images built over two days ago, or
-/// any unused one when the disk is low. A deployment's image stays while its
-/// container exists, running or stopped.
-fn plan_preview_images(low_disk: bool) -> Result<Vec<Removal>, String> {
-    let reference = format!("reference={PREVIEW_IMAGES}");
-    let until = format!("until={PREVIEW_IMAGE_KEEP}");
-    let mut args = vec!["image", "ls", "--no-trunc", "--filter", &reference];
-    if !low_disk {
-        args.extend(["--filter", &until]);
+/// Unused preview, check and deployment images built over two days ago, any
+/// unused one when the disk is low, and on a server at once those of a
+/// project that was deleted. A deployment's image stays while its container exists, running
+/// or stopped.
+fn plan_preview_images(low_disk: bool, own_docker: bool) -> Result<Vec<Removal>, String> {
+    let list = |until: Option<&str>| -> Result<Vec<ImageRow>, String> {
+        let reference = format!("reference={PREVIEW_IMAGES}");
+        let mut args = vec!["image", "ls", "--no-trunc", "--filter", &reference];
+        let until = until.map(|until| format!("until={until}"));
+        if let Some(until) = &until {
+            args.extend(["--filter", until]);
+        }
+        args.extend(["--format", "{{.ID}}\t{{.Repository}}\t{{.Tag}}\t{{.Size}}"]);
+        Ok(parse_images(&docker_output(&args)?))
+    };
+    let images = list(None)?;
+    let old: HashSet<String> = if low_disk {
+        images.iter().map(|image| image.id.clone()).collect()
+    } else {
+        list(Some(PREVIEW_IMAGE_KEEP))?
+            .into_iter()
+            .map(|image| image.id)
+            .collect()
+    };
+    Ok(select_preview_images(
+        &images,
+        &old,
+        &used_images()?,
+        own_docker.then(projects).flatten().as_ref(),
+        low_disk,
+    ))
+}
+
+/// The projects the coordinator has, or `None` when it does not answer: then
+/// no image counts as a deleted project's.
+fn projects() -> Option<HashSet<String>> {
+    #[derive(serde::Deserialize)]
+    struct Project {
+        id: String,
     }
-    args.extend(["--format", "{{.ID}}\t{{.Repository}}\t{{.Tag}}\t{{.Size}}"]);
-    let images = parse_images(&docker_output(&args)?);
-    Ok(select_preview_images(&images, &used_images()?, low_disk))
+    let projects = crate::runtime::block_on(async {
+        reqwest::Client::new()
+            .get(crate::preview::coordinator_url("/api/v1/projects"))
+            .timeout(Duration::from_secs(10))
+            .send()
+            .await
+            .ok()?
+            .error_for_status()
+            .ok()?
+            .json::<Vec<Project>>()
+            .await
+            .ok()
+    })?;
+    Some(projects.into_iter().map(|project| project.id).collect())
+}
+
+/// The project an image was built for: its Compose project, and so its
+/// repository, starts `commitarium-preview-<project>-`.
+fn image_project(repository: &str) -> Option<&str> {
+    repository
+        .strip_prefix(crate::preview::PREVIEW_TEMP_PREFIX)?
+        .split('-')
+        .next()
+        .filter(|project| !project.is_empty())
 }
 
 fn select_preview_images(
     images: &[ImageRow],
+    old: &HashSet<String>,
     used: &HashSet<String>,
+    projects: Option<&HashSet<String>>,
     low_disk: bool,
 ) -> Vec<Removal> {
     images
         .iter()
-        .filter(|image| {
-            !used.contains(&image.id)
-                && image.tag != NONE
-                && image
-                    .repository
-                    .starts_with(crate::preview::PREVIEW_TEMP_PREFIX)
-        })
-        .map(|image| Removal {
-            reference: format!("{}:{}", image.repository, image.tag),
-            size: image.size.clone(),
-            reason: if low_disk {
+        .filter(|image| !used.contains(&image.id) && image.tag != NONE)
+        .filter_map(|image| {
+            let project = image_project(&image.repository)?;
+            let reason = if projects.is_some_and(|projects| !projects.contains(project)) {
+                "an image of a deleted project"
+            } else if low_disk {
                 "a preview image, while the disk is low"
-            } else {
+            } else if old.contains(&image.id) {
                 "a preview image unused for two days"
-            },
+            } else {
+                return None;
+            };
+            Some(Removal {
+                reference: format!("{}:{}", image.repository, image.tag),
+                size: image.size.clone(),
+                reason,
+            })
         })
         .collect()
 }
@@ -527,12 +585,48 @@ mod tests {
             untagged("e", None, false),
         ];
         let used = HashSet::from(["c".to_string()]);
+        let old = HashSet::from(["a", "b", "c", "d", "e"].map(String::from));
+        let projects = HashSet::from(["prj_1".to_string()]);
         assert_eq!(
-            references(&select_preview_images(&images, &used, false)),
+            references(&select_preview_images(
+                &images,
+                &old,
+                &used,
+                Some(&projects),
+                false
+            )),
             [
                 "commitarium-preview-prj_1-web:latest",
                 "commitarium-preview-prj_1-check-api:latest"
             ]
+        );
+    }
+
+    #[test]
+    fn a_deleted_projects_images_go_at_once_and_recent_ones_stay() {
+        let images = [
+            tagged("a", "commitarium-preview-prj_1-web:latest"),
+            tagged("b", "commitarium-preview-prj_gone-web:latest"),
+            tagged("c", "commitarium-preview-prj_gone-live-web:latest"),
+        ];
+        let used = HashSet::from(["c".to_string()]);
+        let projects = HashSet::from(["prj_1".to_string()]);
+        let none = HashSet::new();
+        assert_eq!(
+            references(&select_preview_images(
+                &images,
+                &none,
+                &used,
+                Some(&projects),
+                false
+            )),
+            ["commitarium-preview-prj_gone-web:latest"]
+        );
+        // A coordinator that does not answer deletes nothing on its word.
+        assert!(select_preview_images(&images, &none, &used, None, false).is_empty());
+        assert_eq!(
+            references(&select_preview_images(&images, &none, &used, None, true)).len(),
+            2
         );
     }
 
