@@ -4,7 +4,7 @@
 
 **Commitarium is an AI coding harness that works like a disciplined team.**
 Every change is planned, built, reviewed by a second model, tested, and merged
-through a pull request, using the Claude and Codex accounts you already have.
+through a pull request, using your Claude or Codex subscription, or an API key.
 
 **It opens as a desktop app with nothing to configure.** Install it, sign in
 your agents, and describe an app or bring your own repository.
@@ -51,13 +51,15 @@ repository. Work with Mayka the way you would with a small team:
 
 Either way:
 
-- **Uses the AI you already have.** Sign in with your Claude or Codex account.
-  Commitarium keeps an eye on your usage limits and spreads the work to fit.
+- **Uses the AI you already have.** Sign in with your Claude or ChatGPT (Codex)
+  subscription, or add an API key; either works. With a subscription,
+  Commitarium keeps an eye on its usage limits and spreads the work to fit; with
+  a key, you pay your provider per use.
 - **Yours, on your machines.** Your code, apps and data stay on your computer,
   or on a server of your own that keeps working while your computer is off.
 
 **[Download for macOS, Windows, or Linux](https://github.com/EinarLogiOskars/commitarium/releases)**
-· needs [Docker](#requirements) and a Claude or Codex account.
+· needs [Docker](#requirements) and a Claude or Codex subscription or API key.
 
 > [!IMPORTANT]
 > Commitarium is pre-1.0 early-access software. The core is in daily use and
@@ -104,8 +106,9 @@ company. Each part stands on its own.
   work is brought up to date with main before it merges, and a failure pauses
   a work order instead of ending it. When Mayka can't fix something, she
   tells you in plain words with one thing to do.
-- **Agents you add.** Sign in to Codex or Claude accounts on the Agents page.
-  Commitarium shows each account's usage limits and keeps the CLIs up to date;
+- **Agents you add.** On the Agents page, sign in a Claude or Codex
+  subscription, or add an API key. Commitarium shows each subscription's usage
+  limits and keeps the CLIs up to date;
   Mayka spreads work by what is left.
 - **Marketplace (early).** Release an app to a shared marketplace and install
   other people's apps as your own copy.
@@ -179,7 +182,8 @@ your approval depends on the project's mode and merge policy.
 
 - Docker Desktop with Docker Compose on macOS or Windows
 - Docker Engine with the Compose v2 plugin on Linux
-- A Codex or Claude account (both work best: lead and reviewer then come
+- A Claude or Codex subscription, or an API key for either (both providers work
+  best: lead and reviewer then come
   from different providers)
 - Git on the host. On macOS, the first use prompts you to install Apple's
   Command Line Tools
