@@ -2,8 +2,9 @@
 
 **Think it, and it’s yours.**
 
-Describe any app. Commitarium builds it, runs it, and changes it whenever you
-want.
+Describe any app, and Commitarium builds it, runs it, and changes it whenever
+you want. Or bring your own code, and work with a team of AI agents that plan,
+build and review every change.
 
 [![CI](https://github.com/EinarLogiOskars/commitarium/actions/workflows/ci.yml/badge.svg)](https://github.com/EinarLogiOskars/commitarium/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/EinarLogiOskars/commitarium?label=release)](https://github.com/EinarLogiOskars/commitarium/releases)
@@ -17,20 +18,35 @@ want.
 <sub>*Sped up. In reality, an app like this takes about half an hour to build,
 and a small change a few minutes.*</sub>
 
-Want an app that does exactly what you need? Tell Commitarium in a sentence.
-Its assistant plans the app, hands the work to coding agents, checks what they
-make, and opens the finished app on your computer. Want it different? Ask, and
-it changes. When it is ready for others, put it online from your own server,
-for anyone, behind a password, or for your company's accounts.
+## Two ways to use it
 
-- **No coding needed.** You talk to one assistant in plain words. It takes care
-  of the plan, the code, the setup, and the fixes when something breaks.
-- **Yours, on your machines.** Your apps and their data stay on your computer,
-  or on a server of your own that keeps working while your computer is off.
+**Apps, for anyone.** Tell Commitarium in a sentence what you need. Its
+assistant, Mayka, plans the app, hands the work to coding agents, checks what
+they make, and opens the finished app on your computer. Want it different? Ask,
+and it changes. No code needed. When it is ready for others, put it online from
+your own server, for anyone, behind a password, or for your company's accounts.
+
+**A workshop, for developers.** Turn on Developer mode and bring your own
+repository. Work with Mayka the way you would with a small team:
+
+- **Planned work orders.** Mayka turns what you want into work orders, each
+  planned, built, reviewed and merged on its own, several side by side. Plan
+  mode writes a bigger change as commit-sized slices first.
+- **Independent review.** A lead agent builds; a reviewer, ideally from another
+  provider, challenges the plan and the code. No model signs off on its own work.
+- **Real pull requests.** Every change is a pull request in a private Forgejo on
+  your machine, the whole discussion kept as an audit trail. Nothing reaches
+  your repository until you sync it.
+- **As much control as you want.** Approve each plan and merge, or let Mayka
+  build everything and ask only when a decision needs you. Choose models and
+  efforts per phase.
+
+Either way:
+
 - **Uses the AI you already have.** Sign in with your Claude or Codex account.
   Commitarium keeps an eye on your usage limits and spreads the work to fit.
-- **Checked, not just generated.** A second agent, ideally from another
-  provider, reviews every plan and every change before it lands.
+- **Yours, on your machines.** Your code, apps and data stay on your computer,
+  or on a server of your own that keeps working while your computer is off.
 
 **[Download for macOS, Windows, or Linux](https://github.com/EinarLogiOskars/commitarium/releases)**
 · needs [Docker](#requirements) and a Claude or Codex account.
