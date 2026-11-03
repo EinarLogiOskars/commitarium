@@ -614,6 +614,10 @@ func newAPI(
 		)
 	}
 	mux.HandleFunc(
+		"POST /api/v1/projects/{id}/first-look",
+		api.firstLookHandler,
+	)
+	mux.HandleFunc(
 		"GET /api/v1/projects",
 		api.listProjectsHandler,
 	)

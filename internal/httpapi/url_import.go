@@ -37,8 +37,11 @@ type Linker interface {
 // RegisterURLImportRoute adds PUT /api/v1/project-imports/{importID}/url:
 // the repository is cloned, bundled and imported as a folder's would be, so
 // a server, which has no folder of the user's, imports too. The project
-// stays linked to the repository.
-func RegisterURLImportRoute(mux *http.ServeMux, importer ProjectImporter, bundler URLBundler, linker Linker) {
+// stays linked to the repository, and Mayka takes a first look at it.
+func RegisterURLImportRoute(
+	mux *http.ServeMux, importer ProjectImporter, bundler URLBundler, linker Linker,
+	firstLook func(ctx context.Context, projectID string),
+) {
 	mux.HandleFunc("PUT /api/v1/project-imports/{importID}/url", func(w http.ResponseWriter, r *http.Request) {
 		var request importFromURLRequest
 		decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10))
@@ -87,6 +90,11 @@ func RegisterURLImportRoute(mux *http.ServeMux, importer ProjectImporter, bundle
 		if err := linker.Link(r.Context(), imported.ID, request.URL,
 			strings.TrimSpace(request.Username), strings.TrimSpace(request.Token)); err != nil {
 			log.Printf("link imported project %s: %v", imported.ID, err)
+		}
+		// Mayka looks the project over once it is linked, so her first look
+		// knows where the code came from.
+		if created && firstLook != nil {
+			firstLook(r.Context(), imported.ID)
 		}
 		w.Header().Set("Location", "/api/v1/projects/"+imported.ID)
 		status := http.StatusOK

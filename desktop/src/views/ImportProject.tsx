@@ -1,6 +1,5 @@
 import { connectedServer } from "../connection";
 import { useState } from "react";
-import { openAssistantOn } from "../attention/askAssistant";
 import { importFromURL } from "../api/projects";
 import { pickFolder, inspectFolder, importProject, type FolderInfo } from "../ipc";
 import {
@@ -135,16 +134,9 @@ function ImportProjectOnThisComputer({
             detection={detection}
             saving={saving}
             onUse={() => void applyDetected()}
-            onVerify={() => {
-              // The assistant has the repository checked (ADR-035) once the
-              // project opens.
-              onImported(imported);
-              openAssistantOn(
-                { kind: "stack" },
-                "Check the stack this repository uses and set it up.",
-                imported,
-              );
-            }}
+            // Mayka's first look, which the import started, checks the
+            // stack against the code (S7).
+            onVerify={() => onImported(imported)}
             onManual={() => onImported(imported)}
           />
         ) : !info ? (
@@ -256,18 +248,17 @@ function DetectionReview({
     return (
       <div className="detect">
         <p>
-          No runtime toolchain was detected in this repository. Let an agent read the repository and
-          propose one, or choose a stack yourself in the workspace.
+          No runtime toolchain was detected in this repository. Mayka is taking a first look at it
+          and will propose one, or choose a stack yourself in the workspace.
         </p>
         <div className="row">
           <button className="primary" onClick={onVerify} disabled={saving}>
-            Ask an agent
+            Leave it to Mayka
           </button>
           <button onClick={onManual} disabled={saving}>
             Choose manually
           </button>
         </div>
-        <p className="muted note">Asking an agent uses one provider turn.</p>
       </div>
     );
   }
@@ -295,13 +286,15 @@ function DetectionReview({
           {saving ? "Saving…" : "Use detected stack"}
         </button>
         <button onClick={onVerify} disabled={saving}>
-          Have an agent verify
+          Leave it to Mayka
         </button>
         <button onClick={onManual} disabled={saving}>
           Choose manually
         </button>
       </div>
-      <p className="muted note">Verifying with an agent uses one provider turn.</p>
+      <p className="muted note">
+        Mayka&apos;s first look checks the stack against the code either way.
+      </p>
     </div>
   );
 }
@@ -352,12 +345,8 @@ function ImportFromURL({
         token,
         projectDefaultsPayload(initialProjectDefaults()),
       );
+      // The coordinator has Mayka take a first look at it (S7).
       onImported(project.id);
-      openAssistantOn(
-        { kind: "stack" },
-        "Check the stack this repository uses and set it up.",
-        project.id,
-      );
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       setBusy(false);

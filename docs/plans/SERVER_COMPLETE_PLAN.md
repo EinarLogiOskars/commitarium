@@ -1,6 +1,6 @@
 # Server Mode, Complete: Implementation Plan (0.10.0)
 
-**Status:** agreed 2026-11-02. S1 built and tested on a server except restore; S2 reworked into a linked repository the user pulls from and pushes to, after the push mirror proved able to overwrite the remote; S1 to S6 built; waiting for the user's test, then 0.10.0. Finishes what
+**Status:** agreed 2026-11-02. S1 built and tested on a server except restore; S2 reworked into a linked repository the user pulls from and pushes to, after the push mirror proved able to overwrite the remote; S1 to S7 built; waiting for the user's test, then 0.10.0. Finishes what
 [REMOTE_HOST_PLAN.md](REMOTE_HOST_PLAN.md) left for after its milestone, so a
 server can be the only place a user's work lives. Released together as 0.10.0;
 company sign-in follows as 0.11.0.
@@ -18,6 +18,7 @@ backups, importing a folder, syncing with a local folder, and the audit viewer.
 | S4 | The audit viewer on a server | It opens from a paired device |
 | S5 | A warning before an app's address changes | Changing it says the old address stops working |
 | S6 | Disk hygiene | A server running for months does not fill its disk |
+| S7 | A first look at an imported project | An import ends with Mayka saying what the project is and what to do next |
 
 ## S1: Backups on a server
 
@@ -119,6 +120,28 @@ each with their installed dependencies. None of it was ever cleared.
   once, and skips the nightly backup.
 - Not here: telling the user in the app when the disk stays low, and the
   journal (systemd caps it already).
+
+## S7: A first look at an imported project
+
+Asked for during the S3 test: an import used to end with Mayka checking only
+the stack, and on a server that message was lost in a glitch.
+
+- When an import creates a project, from a folder or a URL, the coordinator
+  wakes Mayka once with a first-look brief: what the app is and how the
+  repository is laid out; whether the stack matches the code, proposing
+  design_stack when not; what likely needs doing, as work orders; her view of
+  the project; the project's settings in plain words (stopping at each phase,
+  merging, validation checks, review rounds, failed runs), changeable in
+  Project settings; and how she works there.
+- The brief rides with that one turn as its note, so Mayka's everyday
+  instructions do not carry it.
+- The coordinator starts it, not the app, so it does not depend on the
+  window that imported.
+- Where Mayka assists, the app draws a fixed card under her reply: Build for
+  me, which switches the project to building everything, or Not now, which
+  hides it for that project.
+- Design stack now checks a stack already set against the code; it refused
+  before, so a stack detected only in part could not be corrected.
 
 ## Not in this plan
 
