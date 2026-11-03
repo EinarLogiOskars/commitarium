@@ -12,7 +12,7 @@ export default defineConfig({
     starlight({
       title: "Commitarium",
       description:
-        "Describe any app and Commitarium builds it; or bring your code and work with a lead and a reviewer agent on every change.",
+        "An AI coding harness that works like a disciplined team: every change planned, reviewed by a second model, tested and merged through a pull request.",
       social: [
         {
           icon: "github",
