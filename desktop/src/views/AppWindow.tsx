@@ -4,6 +4,7 @@ import { listFeatures, setUpPreview, tellAssistantPreviewFailed } from "../api/f
 import { getPreviewStatus, onPreviewStatusChanged, startPreview, type PreviewStatus } from "../ipc";
 import { isStopped, primaryUrl } from "./usePreview";
 import { AssistantDrawer, SignInNotice } from "./AssistantDrawer";
+import { RippleField } from "./RippleField";
 import { agentName, useAgents } from "./useAgents";
 import { getConversation, type Conversation } from "../api/assistant";
 import type { Feature, Project } from "../api/types";
@@ -161,6 +162,8 @@ export function AppWindow({ projectId }: { projectId: string }) {
         />
       ) : (
         <div className="app-window__state">
+          {/* While it is being made or started, not when it needs the user. */}
+          {(building || !(status?.state === "failed" || error || stopped)) && <RippleField />}
           <h1>{name}</h1>
           {building ? (
             <>
