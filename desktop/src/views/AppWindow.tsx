@@ -7,7 +7,7 @@ import { AssistantDrawer, SignInNotice } from "./AssistantDrawer";
 import { RippleField } from "./RippleField";
 import { shownTheme } from "../settings/theme";
 import { agentName, useAgents } from "./useAgents";
-import { getConversation, type Conversation } from "../api/assistant";
+import { getConversation, type AutopilotGoal, type Conversation } from "../api/assistant";
 import type { Feature, Project } from "../api/types";
 import { ContainerEvidence } from "./ContainerEvidence";
 import { plainFailure } from "./previewEvidence";
@@ -186,15 +186,7 @@ export function AppWindow({ projectId }: { projectId: string }) {
                     ? "Setting it up…"
                     : `Building · ${goal?.items.filter((i) => i.done).length ?? 0} of ${goal?.items.length ?? 0}`}
               </p>
-              {goal && (
-                <ul className="app-window__items">
-                  {goal.items.map((item) => (
-                    <li key={item.id} className={item.done ? "app-window__item--done" : ""}>
-                      {item.done ? "✓" : "·"} {item.title}
-                    </li>
-                  ))}
-                </ul>
-              )}
+              {goal && <BuildChecklist goal={goal} />}
               {conversation?.sign_in?.needs_user && (
                 <SignInNotice
                   agentId={conversation.sign_in.agent}
@@ -272,15 +264,7 @@ export function AppWindow({ projectId }: { projectId: string }) {
             Building · {goal.items.filter((i) => i.done).length} of {goal.items.length}
             {nextItem && <span className="muted"> · {nextItem.title}</span>}
           </button>
-          {showProgress && (
-            <ul className="app-window__items">
-              {goal.items.map((item) => (
-                <li key={item.id} className={item.done ? "app-window__item--done" : ""}>
-                  {item.done ? "✓" : "·"} {item.title}
-                </li>
-              ))}
-            </ul>
-          )}
+          {showProgress && <BuildChecklist goal={goal} />}
         </div>
       )}
       <AssistantDrawer
@@ -305,4 +289,33 @@ function withTheme(url: string): string {
   } catch {
     return url;
   }
+}
+
+/** The build's items: P0, what the app needs to be usable, then a line where
+ * it opens, then the rest. The first item is the base the others build on. */
+function BuildChecklist({ goal }: { goal: AutopilotGoal }) {
+  const core = goal.items.filter((item) => item.label.startsWith("P0."));
+  const later = goal.items.filter((item) => !item.label.startsWith("P0."));
+  const row = (item: AutopilotGoal["items"][number], first: boolean) => (
+    <li key={item.id} className={item.done ? "app-window__item--done" : ""}>
+      {item.done ? "✓" : "·"} {item.title}
+      {first && !item.done && (
+        <span className="muted app-window__item-note">
+          The base the rest builds on; usually the longest step.
+        </span>
+      )}
+    </li>
+  );
+  return (
+    <ul className="app-window__items">
+      {core.map((item, index) => row(item, index === 0))}
+      {core.length > 0 && later.length > 0 && (
+        <li className="app-window__usable">
+          Usable from here. Changes keep arriving after that, and the app may restart now and then
+          while they do.
+        </li>
+      )}
+      {later.map((item, index) => row(item, core.length === 0 && index === 0))}
+    </ul>
+  );
 }

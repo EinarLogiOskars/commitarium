@@ -5451,6 +5451,19 @@ select:focus {
 .app-window__item--done {
   color: var(--text);
 }
+.app-window__item-note {
+  display: block;
+  margin-left: 1.1em;
+  font-size: var(--text-xs);
+}
+/* Where the app opens: everything above it, P0, makes it usable. */
+.app-window__usable {
+  margin: 8px 0;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  color: var(--text-subtle);
+  font-size: var(--text-xs);
+}
 
 /* The rail's head: an explicit way back, then the project's name. */
 .rail__switch--static {
