@@ -41,6 +41,7 @@ const CORE_COMPONENTS: &[BackupComponent] = &[
         source: "/var/lib/commitarium",
         owner: "65532:65532",
         required: true,
+        leave_out: &[],
     },
     BackupComponent {
         name: Cow::Borrowed("forgejo"),
@@ -48,6 +49,7 @@ const CORE_COMPONENTS: &[BackupComponent] = &[
         source: "/var/lib/gitea",
         owner: "1000:1000",
         required: true,
+        leave_out: &[],
     },
     BackupComponent {
         name: Cow::Borrowed("workspaces"),
@@ -55,6 +57,8 @@ const CORE_COMPONENTS: &[BackupComponent] = &[
         source: "/workspaces",
         owner: "65532:65532",
         required: true,
+        // Dependencies are installed again; they were most of a backup.
+        leave_out: &["node_modules"],
     },
     BackupComponent {
         name: Cow::Borrowed("toolchains"),
@@ -62,6 +66,7 @@ const CORE_COMPONENTS: &[BackupComponent] = &[
         source: "/var/lib/commitarium-toolchains",
         owner: "65532:65532",
         required: true,
+        leave_out: &[],
     },
     BackupComponent {
         name: Cow::Borrowed("simulated-worker-journal"),
@@ -69,6 +74,7 @@ const CORE_COMPONENTS: &[BackupComponent] = &[
         source: "/var/lib/commitarium-worker",
         owner: "65532:65532",
         required: false,
+        leave_out: &[],
     },
 ];
 
@@ -89,6 +95,8 @@ struct BackupComponent {
     source: &'static str,
     owner: &'static str,
     required: bool,
+    /// What is left out wherever it appears: what can be made again.
+    leave_out: &'static [&'static str],
 }
 
 fn journal_component(name: String, service: String) -> BackupComponent {
@@ -98,6 +106,7 @@ fn journal_component(name: String, service: String) -> BackupComponent {
         source: "/var/lib/commitarium-worker",
         owner: "65532:65532",
         required: false,
+        leave_out: &[],
     }
 }
 
@@ -259,6 +268,7 @@ fn export_backup(
             &helper_image,
             &container_id,
             component.source,
+            component.leave_out,
             &destination.join(&filename),
         )?;
         hashes.insert(
@@ -497,22 +507,16 @@ fn export_component(
     image: &str,
     container_id: &str,
     source: &str,
+    leave_out: &[&str],
     destination: &Path,
 ) -> Result<(), String> {
     let output =
         File::create(destination).map_err(|e| format!("create {}: {e}", destination.display()))?;
     let status = docker::docker_command()
         .args(["run", "--rm", "--user", "0", "--volumes-from", container_id])
-        .args([
-            "--entrypoint",
-            "/bin/tar",
-            image,
-            "-C",
-            source,
-            "-czf",
-            "-",
-            ".",
-        ])
+        .args(["--entrypoint", "/bin/tar", image, "-C", source])
+        .args(leave_out.iter().flat_map(|name| ["--exclude", name]))
+        .args(["-czf", "-", "."])
         .stdout(Stdio::from(output))
         .stderr(Stdio::piped())
         .output()
