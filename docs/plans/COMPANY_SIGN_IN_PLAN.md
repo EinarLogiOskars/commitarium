@@ -20,9 +20,21 @@ account, and each app chooses which groups may open it.
   authentik, Pocket ID, Entra ID, Google Workspace, Okta and Keycloak all
   speak. A provider the company has is connected; one it lacks can be set up
   on the server.
-- **The flow** (the user's): need company logins? Have a provider? Yes:
-  connect it. No: want one here? Yes: Pocket ID or authentik, with the
-  differences explained. No: ask what they want and help set it up.
+- **The flow** (the user's, revised 2026-11-03): does the company have its
+  own provider, or want one? Has one: connect it. Wants one: first ask how
+  big the team is and whether someone can run a small service. A small team
+  is recommended Pocket ID, which they run with Mayka's guidance, and told
+  that Commitarium can set up authentik for them instead, at more memory. A
+  bigger company, or anyone who would rather not set anything up, is
+  recommended authentik, which Commitarium sets up on the server. Anything
+  else: ask what, and help.
+- **Upfront about resources** (the user's): before anything is installed, the
+  app and Mayka say what the module costs. Connecting a provider runs only
+  the gate (about 50 MB of memory); authentik needs 2 to 3 GB for itself, so
+  a server of 8 GB or more alongside Commitarium and its apps.
+- **One built-in provider: authentik.** It can be set up with no one at the
+  screen; Pocket ID's first admin needs a passkey in a browser, so it stays a
+  provider the team runs and connects, with Mayka's guidance.
 
 ## How it works
 
