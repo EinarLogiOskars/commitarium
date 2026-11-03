@@ -15,8 +15,10 @@ import { defaultModel } from "./workChoice";
 // (ADR-031), set in the Models section.
 export function AssistantSettingsSection() {
   const agents = useAgents();
-  const { modelsFor } = useModels();
   const [settings, setSettings] = useState<Settings | null>(null);
+  const chosen = settings ? agents.find((a) => a.id === settings.agent) : undefined;
+  // A worker just added is still starting: its models come a moment later.
+  const { modelsFor, waiting } = useModels(chosen?.provider);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -28,8 +30,10 @@ export function AssistantSettingsSection() {
   }, []);
 
   if (!settings) return error ? <div className="banner banner--error">{error}</div> : null;
-  const agent = agents.find((a) => a.id === settings.agent);
+  const agent = chosen;
   const models = agent ? modelsFor(agent.provider, "lead") : [];
+  // Chosen before its models came: the default once they do.
+  const model = settings.model || (agent ? defaultModel(models, settings.ask_before) : "");
 
   const update = (next: Partial<Settings>) => {
     setSaved(false);
@@ -41,7 +45,7 @@ export function AssistantSettingsSection() {
     try {
       // The effort limit is set in the Models section; keep what is saved.
       const { max_effort } = await getAssistantSettings();
-      setSettings(await saveAssistantSettings({ ...settings, max_effort }));
+      setSettings(await saveAssistantSettings({ ...settings, model, max_effort }));
       setSaved(true);
     } catch (e) {
       setError(describe(e));
@@ -85,10 +89,13 @@ export function AssistantSettingsSection() {
         </label>
         <label className="field">
           <span>Model</span>
-          <select value={settings.model} onChange={(e) => update({ model: e.target.value })}>
-            {!models.some((m) => m.id === settings.model) && settings.model && (
-              <option value={settings.model}>{settings.model}</option>
+          <select value={model} onChange={(e) => update({ model: e.target.value })}>
+            {waiting && (
+              <option value="" disabled>
+                Getting {agent?.name ?? "the agent"}&apos;s models…
+              </option>
             )}
+            {!models.some((m) => m.id === model) && model && <option value={model}>{model}</option>}
             {models.map((m) => (
               <option key={m.id} value={m.id}>
                 {m.display_name}
@@ -102,7 +109,7 @@ export function AssistantSettingsSection() {
         <button
           className="primary"
           onClick={() => void save()}
-          disabled={saving || !settings.agent || !settings.model}
+          disabled={saving || !settings.agent || !model}
         >
           {saving ? "Saving…" : "Save"}
         </button>

@@ -5,7 +5,14 @@ import type { AgentProvider, AgentRole, ModelCatalog, ModelInfo } from "../api/t
 
 /** Load the provider+role model catalogs, refreshed from the workers on open,
  * and expose a per-(provider,role) lookup. */
-export function useModels() {
+/** How often, and how long, to ask again for a provider whose models have
+ * not come yet: a worker just added is still starting. */
+const WAIT_EVERY_MS = 4000;
+const WAIT_TRIES = 45;
+
+/** waitFor names a provider whose models the view needs: until they come,
+ * it asks the workers again every few seconds. */
+export function useModels(waitFor?: AgentProvider) {
   const [catalogs, setCatalogs] = useState<ModelCatalog[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -43,7 +50,21 @@ export function useModels() {
     [catalogs],
   );
 
-  return { catalogs, modelsFor, loading, error, refresh: () => load(true) };
+  const waiting = !!waitFor && modelsFor(waitFor, "lead").length === 0;
+  useEffect(() => {
+    if (!waiting) return;
+    let tries = 0;
+    const timer = setInterval(() => {
+      tries += 1;
+      if (tries > WAIT_TRIES) clearInterval(timer);
+      void refreshModels()
+        .then((r) => setCatalogs(r.catalogs))
+        .catch(() => undefined);
+    }, WAIT_EVERY_MS);
+    return () => clearInterval(timer);
+  }, [waiting]);
+
+  return { catalogs, modelsFor, loading, error, waiting, refresh: () => load(true) };
 }
 
 /** Keep `current` if it's still a valid option, else fall back to the first. */

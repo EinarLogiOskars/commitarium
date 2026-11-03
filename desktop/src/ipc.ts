@@ -56,8 +56,23 @@ const hostGet = async <T>(path: string): Promise<T> => {
   const response = await fetch(url + path, {
     headers: { Authorization: `Bearer ${token}` },
   });
-  const body = await response.json();
-  if (!response.ok) throw new Error(body.error ?? `host error ${response.status}`);
+  return hostAnswer<T>(response);
+};
+
+/** The host's JSON answer. A host that is restarting, or a server in the
+ * middle of an update, may answer with something else for a moment: that is
+ * said in words, not as a parsing error. */
+const hostAnswer = async <T>(response: Response): Promise<T> => {
+  const text = await response.text();
+  let body: { error?: string } | null;
+  try {
+    body = JSON.parse(text);
+  } catch {
+    throw new Error(
+      "The server didn't answer properly. It may be restarting; try again in a moment.",
+    );
+  }
+  if (!response.ok) throw new Error(body?.error ?? `host error ${response.status}`);
   return body as T;
 };
 
@@ -68,9 +83,7 @@ const hostPost = async <T>(path: string, payload?: unknown): Promise<T> => {
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
     body: JSON.stringify(payload ?? null),
   });
-  const body = await response.json();
-  if (!response.ok) throw new Error(body.error ?? `host error ${response.status}`);
-  return body as T;
+  return hostAnswer<T>(response);
 };
 
 // --- Deployments and publishing (PUBLISHING_PLAN.md) ---
