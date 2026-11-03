@@ -190,7 +190,7 @@ export interface AssistantActivity {
 
 /** What the conversation is about: a work order, the vision, or the stack. */
 export interface AssistantFocus {
-  kind: "work_order" | "vision" | "stack";
+  kind: "work_order" | "vision" | "stack" | "sign_in";
   work_order_id?: string;
   /** What the chip says; the coordinator fills it in. */
   label?: string;

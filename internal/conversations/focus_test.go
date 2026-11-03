@@ -65,3 +65,27 @@ func TestTheFocusTellsTheAssistantAWorkOrderAlreadyStarted(t *testing.T) {
 		t.Fatal("the assistant was told to clarify a started work order as a draft")
 	}
 }
+
+// Opened on company sign-in, the assistant carries the setup through for as
+// long as the chip stays, and never takes the secret in the chat.
+func TestTheSignInFocusCarriesTheSetup(t *testing.T) {
+	service, worker := newTestService(t)
+	conversation, err := service.SetFocus(t.Context(), "prj_test", &Focus{Kind: FocusSignIn})
+	if err != nil || conversation.Focus == nil || conversation.Focus.Label != "Company sign-in" {
+		t.Fatalf("focus = %+v, %v", conversation.Focus, err)
+	}
+	if _, err := service.Send(t.Context(), "prj_test", "Set up company sign-in.", "msg-1"); err != nil {
+		t.Fatal(err)
+	}
+	instructions := worker.puts[0].Instructions
+	for _, want := range []string{
+		"https://sign-in.<domain>/oauth2/callback",
+		"Settings → Server → Company sign-in",
+		"user type to Internal",
+		"Never ask for the client secret in this chat",
+	} {
+		if !strings.Contains(instructions, want) {
+			t.Fatalf("instructions miss %q", want)
+		}
+	}
+}

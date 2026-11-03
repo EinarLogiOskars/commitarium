@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { getWorkspace, listFeatures } from "../api/features";
+import { openAssistantOn } from "../attention/askAssistant";
 import {
   deploy,
   deployments as readDeployments,
@@ -357,10 +358,25 @@ function Address({
     </option>
   );
   const setUpSignIn = needsSignIn && !companySignIn && (
-    <p className="muted shell-card__text">
-      Company sign-in lets people open it with their work account, such as Microsoft or Google.
-      Connect your company&apos;s sign-in in Settings → Server first.
-    </p>
+    <>
+      <p className="muted shell-card__text">
+        Company sign-in lets people open it with their work account, such as Microsoft or Google. It
+        is connected once for this server, in Settings → Server.
+      </p>
+      <div className="row deploy-links">
+        <button
+          className="shell-card__link"
+          onClick={() =>
+            openAssistantOn(
+              { kind: "sign_in" },
+              `Help me set up company sign-in for this app. The server's domain is ${domain}.`,
+            )
+          }
+        >
+          Set it up with Mayka
+        </button>
+      </div>
+    </>
   );
 
   const stop = (

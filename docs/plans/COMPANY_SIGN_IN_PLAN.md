@@ -1,7 +1,7 @@
 # Company Sign-in: Implementation Plan (0.11.0)
 
-**Status:** shape agreed with the user 2026-11-03; being built as stacked PRs
-for the user to review. Builds on [PUBLISHING_PLAN.md](PUBLISHING_PLAN.md).
+**Status:** shape agreed with the user 2026-11-03. C1 to C3 built as stacked
+PRs for the user to review; C4 waits on a decision (below), C5 after it. Builds on [PUBLISHING_PLAN.md](PUBLISHING_PLAN.md).
 
 A deployed app on a server can be opened by anyone, or only with a password.
 Company sign-in adds a third choice: people sign in with their company
@@ -20,9 +20,21 @@ account, and each app chooses which groups may open it.
   authentik, Pocket ID, Entra ID, Google Workspace, Okta and Keycloak all
   speak. A provider the company has is connected; one it lacks can be set up
   on the server.
-- **The flow** (the user's): need company logins? Have a provider? Yes:
-  connect it. No: want one here? Yes: Pocket ID or authentik, with the
-  differences explained. No: ask what they want and help set it up.
+- **The flow** (the user's, revised 2026-11-03): does the company have its
+  own provider, or want one? Has one: connect it. Wants one: first ask how
+  big the team is and whether someone can run a small service. A small team
+  is recommended Pocket ID, which they run with Mayka's guidance, and told
+  that Commitarium can set up authentik for them instead, at more memory. A
+  bigger company, or anyone who would rather not set anything up, is
+  recommended authentik, which Commitarium sets up on the server. Anything
+  else: ask what, and help.
+- **Upfront about resources** (the user's): before anything is installed, the
+  app and Mayka say what the module costs. Connecting a provider runs only
+  the gate (about 50 MB of memory); authentik needs 2 to 3 GB for itself, so
+  a server of 8 GB or more alongside Commitarium and its apps.
+- **One built-in provider: authentik.** It can be set up with no one at the
+  screen; Pocket ID's first admin needs a passkey in a browser, so it stays a
+  provider the team runs and connects, with Mayka's guidance.
 
 ## How it works
 
@@ -80,12 +92,20 @@ account, and each app chooses which groups may open it.
 
 ## C3: Mayka sets it up
 
-- Choosing Company sign-in without a provider asks Mayka to set it up. Her
-  instructions for it ride only that turn, like the first look at an import.
+- Choosing Company sign-in before a provider is connected offers **Set it up
+  with Mayka**, which opens the project's chat focused on company sign-in
+  (the "Company sign-in" chip) and tells her the server's domain.
+- The setup instructions ride with the focus, so they are in her turns only
+  while the chip stays, never in everyday ones.
 - She asks the flow's questions, explains the choices in plain words, and
-  gives the steps for the user's provider: the sign-in address to register,
-  where the client ID and secret are, how to put groups in the token.
-- The secret is pasted into the app's card, never into the chat.
+  gives the steps for the user's provider: Entra ID, Google Workspace, Okta,
+  authentik, Keycloak and Pocket ID, the sign-in address to register, the
+  issuer, and groups in the token. For Google she says to make the consent
+  screen Internal: otherwise any Google account could sign in.
+- The secret goes into Settings, never the chat; a pasted one is to be
+  replaced.
+- Her standing deploy instructions name the identity headers, so she builds
+  on them when asked who is signed in.
 
 ## C4 and C5: A provider on the server
 
@@ -95,6 +115,17 @@ account, and each app chooses which groups may open it.
 - C5 authentik: passwords, two-factor, passkeys and a full admin page, at
   about 1.5 to 2 GB of memory; offered with that said plainly.
 - Either one's data goes into the server's backups.
+
+### Found while building (2026-11-03)
+
+Pocket ID (v1.16) cannot be set up unattended: there is no API key to set in
+advance, and its first admin registers with a passkey in a browser. So
+Commitarium can start it at `id.<domain>`, but the user must open it once to
+create the admin and the OIDC client (or an API key Commitarium then uses).
+To decide with the user: Commitarium starts it and Mayka walks them through
+those two screens, or Commitarium asks for an API key after the admin is
+made and creates the client itself. authentik can be set up unattended (its
+bootstrap token and blueprints), at its memory cost.
 
 ## Decisions to check
 

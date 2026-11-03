@@ -19,6 +19,9 @@ const (
 	FocusWorkOrder FocusKind = "work_order"
 	FocusVision    FocusKind = "vision"
 	FocusStack     FocusKind = "stack"
+	// FocusSignIn is setting up company sign-in for the project's deployed
+	// app (COMPANY_SIGN_IN_PLAN.md, C3).
+	FocusSignIn FocusKind = "sign_in"
 )
 
 type Focus struct {
@@ -43,6 +46,8 @@ func (service *Service) SetFocus(ctx context.Context, scope string, focus *Focus
 			*focus = Focus{Kind: FocusVision, Label: "The vision"}
 		case FocusStack:
 			*focus = Focus{Kind: FocusStack, Label: "The stack"}
+		case FocusSignIn:
+			*focus = Focus{Kind: FocusSignIn, Label: "Company sign-in"}
 		case FocusWorkOrder:
 			item, err := service.workOrder(ctx, scope, focus.WorkOrderID)
 			if err != nil {
@@ -50,7 +55,8 @@ func (service *Service) SetFocus(ctx context.Context, scope string, focus *Focus
 			}
 			*focus = Focus{Kind: FocusWorkOrder, WorkOrderID: item.ID, Label: item.Title}
 		default:
-			return Conversation{}, fmt.Errorf("%w: focus on a work order, the vision, or the stack", ErrInvalid)
+			return Conversation{}, fmt.Errorf("%w: focus on a work order, the vision, the stack, or company sign-in",
+				ErrInvalid)
 		}
 	}
 	chat, err := service.chatFor(ctx, scope)
@@ -150,6 +156,8 @@ func (service *Service) focusInstructions(ctx context.Context, scope string, foc
 		return "\n\nThe user opened you on the project's stack. Propose set_up_stack when the vision recommends a " +
 			"stack Commitarium knows; otherwise design_stack, with what the app needs. For a repository that already " +
 			"has code, design_stack checks the stack the code uses."
+	case FocusSignIn:
+		return signInInstructions
 	}
 	return ""
 }
