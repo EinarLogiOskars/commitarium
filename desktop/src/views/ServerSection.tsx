@@ -1,8 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
 import { connectedServer } from "../connection";
 import {
+  authentikPassword,
   connectSignIn,
   disconnectSignIn,
+  installAuthentik,
+  openExternal,
   hostUpdate,
   hostVersion,
   installHostUpdate,
@@ -117,6 +120,8 @@ function SignInSection() {
   const [overview, setOverview] = useState<PublishingOverview | null>(null);
   const [asked, setAsked] = useState<ConnectSignIn>(NO_PROVIDER);
   const [editing, setEditing] = useState(false);
+  const [installing, setInstalling] = useState(false);
+  const [password, setPassword] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -144,6 +149,13 @@ function SignInSection() {
 
   if (!overview?.domain) return null;
   const provider = overview.sign_in;
+  const authentik = overview.authentik;
+  const memory = authentik.memory_total_bytes;
+  const memoryGb = memory === null ? null : Math.round(memory / 1024 ** 3);
+  const install = () => {
+    setInstalling(true);
+    void run(installAuthentik).finally(() => setInstalling(false));
+  };
   const redirect = provider?.redirect_url ?? `https://sign-in.${overview.domain}/oauth2/callback`;
   const field = (key: keyof ConnectSignIn) => ({
     value: asked[key] ?? "",
@@ -163,7 +175,51 @@ function SignInSection() {
   return (
     <section className="set__section">
       <h3 className="set__heading">Company sign-in</h3>
-      {provider && !editing ? (
+      {provider && authentik.installed ? (
+        <>
+          <p className="set__note">
+            Apps can let people sign in with their company account, through authentik on this server
+            {authentik.running ? "" : " (starting)"}. Add people and groups in its admin page.
+          </p>
+          {authentik.admin_url && (
+            <p className="muted set__note">
+              Admin page:{" "}
+              <button
+                className="shell-card__link"
+                onClick={() => void openExternal(authentik.admin_url!)}
+              >
+                {authentik.admin_url}
+              </button>
+              , user <code>{authentik.admin_user}</code>
+              {password !== null && (
+                <>
+                  , password <code>{password}</code>
+                </>
+              )}
+            </p>
+          )}
+          <div className="set__row">
+            <button
+              disabled={busy}
+              onClick={() =>
+                password === null
+                  ? void run(() => authentikPassword().then(setPassword))
+                  : setPassword(null)
+              }
+            >
+              {password === null ? "Show password" : "Hide password"}
+            </button>
+            <button
+              className="ghost"
+              disabled={busy}
+              title="Stops authentik; its people and groups stay for setting it up again"
+              onClick={() => void run(disconnectSignIn)}
+            >
+              Disconnect
+            </button>
+          </div>
+        </>
+      ) : provider && !editing ? (
         <>
           <p className="set__note">
             Apps can let people sign in with their company account, through {provider.issuer}.
@@ -241,6 +297,28 @@ function SignInSection() {
               </button>
             )}
           </div>
+          {!provider && (
+            <>
+              <h4 className="set__heading">No provider? Set up authentik here</h4>
+              <p className="muted set__note">
+                Commitarium can run authentik on this server and connect it for you: a full sign-in
+                system with passwords, two-factor and passkeys, and an admin page for people and
+                groups. It needs about {authentik.memory_needed_gb} GB of this server&apos;s memory
+                for itself, so a server of 8 GB or more alongside Commitarium and its apps.
+                {memoryGb !== null && ` This server has ${memoryGb} GB.`} A small team may prefer
+                Pocket ID, which is lighter and which Mayka can help you set up.
+              </p>
+              {memoryGb !== null && memoryGb < 8 && (
+                <p className="set__note">
+                  This server is likely too small for authentik beside your apps: consider a bigger
+                  one first.
+                </p>
+              )}
+              <button disabled={busy} onClick={install}>
+                {installing ? "Setting up authentik, a few minutes…" : "Set up authentik"}
+              </button>
+            </>
+          )}
         </>
       )}
       {error && <p className="set__note">{error}</p>}

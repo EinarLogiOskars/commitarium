@@ -26,8 +26,13 @@ const EVERY: Duration = Duration::from_secs(24 * 60 * 60);
 const CHECK_EVERY: Duration = Duration::from_secs(15 * 60);
 pub const PROGRESS_EVENT: &str = "backup_progress";
 /// The host's own files a backup carries: what is published and deployed.
-/// Device keys stay out: a backup is no way into a server.
-const STATE_FILES: &[&str] = &["publishing.json", "deployments.json"];
+/// Device keys stay out: a backup is no way into a server. authentik's
+/// secrets go in, with its database: one is no use without the other.
+const STATE_FILES: &[&str] = &[
+    "publishing.json",
+    "deployments.json",
+    crate::authentik::FILE,
+];
 
 /// A backup as the list shows it.
 #[derive(Serialize)]

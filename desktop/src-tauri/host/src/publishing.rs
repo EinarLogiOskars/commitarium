@@ -5,6 +5,7 @@
 //! container, never a port. The host writes Caddy's whole configuration from
 //! the settings and the running deployments, and reloads it when it changes.
 
+use crate::authentik::{self, Authentik};
 use crate::deployments::Deployments;
 use crate::docker;
 use crate::sign_in::{self, Provider};
@@ -49,6 +50,7 @@ const RESERVED: &[&str] = &[
     "ns1",
     "ns2",
     sign_in::NAME,
+    authentik::NAME,
 ];
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Serialize)]
@@ -110,6 +112,8 @@ pub struct Overview {
     apps: Vec<PublishedApp>,
     /// The company's sign-in provider, when one is connected.
     sign_in: Option<sign_in::Connected>,
+    /// authentik on this server, and what it needs.
+    authentik: authentik::Status,
 }
 
 /// What publishing an app answers: its address.
@@ -122,6 +126,7 @@ pub struct Published {
 pub struct Publishing {
     file: PathBuf,
     caddy_dir: PathBuf,
+    authentik: Authentik,
     /// Orders changes to the file, and holds the configuration last loaded.
     applied: Arc<Mutex<Option<String>>>,
 }
@@ -131,6 +136,7 @@ impl Publishing {
         Self {
             file: data_dir.join(FILE),
             caddy_dir: data_dir.join(CADDY_DIR),
+            authentik: Authentik::new(data_dir),
             applied: Arc::default(),
         }
     }
@@ -174,6 +180,7 @@ impl Publishing {
                 .sign_in
                 .as_ref()
                 .map(|provider| provider.shown(settings.domain.as_deref())),
+            authentik: self.authentik.status(settings.domain.as_deref()),
             domain: settings.domain,
         })
     }
@@ -348,7 +355,50 @@ impl Publishing {
         Ok(shown)
     }
 
-    /// Disconnects the provider, once no app uses it.
+    /// Sets authentik up on this server and connects it as the company's
+    /// provider. It takes minutes: images, then its first start.
+    pub fn install_authentik(&self) -> Result<sign_in::Connected, String> {
+        let settings = self.read()?;
+        let domain = settings
+            .domain
+            .clone()
+            .ok_or("set this server's domain in Settings first")?;
+        if settings.sign_in.is_some() && !self.authentik.installed() {
+            return Err("another provider is connected: disconnect it first".into());
+        }
+        let connection = self.authentik.install(&domain)?;
+        let _held = self
+            .applied
+            .lock()
+            .map_err(|_| "publishing is unavailable")?;
+        let mut settings = self.read()?;
+        // Its own: no need to ask it whether it answers, before Caddy has
+        // its address.
+        let cookie_secret = match settings.sign_in.take() {
+            Some(provider) => provider.cookie_secret,
+            None => sign_in::new_cookie_secret()?,
+        };
+        let provider = Provider {
+            issuer: connection.issuer,
+            client_id: connection.client_id,
+            client_secret: connection.client_secret,
+            scopes: None,
+            groups_claim: None,
+            cookie_secret,
+        };
+        let shown = provider.shown(Some(&domain));
+        settings.sign_in = Some(provider);
+        self.write(&settings)?;
+        Ok(shown)
+    }
+
+    /// authentik's admin password, for its admin page.
+    pub fn authentik_password(&self) -> Result<String, String> {
+        self.authentik.admin_password()
+    }
+
+    /// Disconnects the provider, once no app uses it. authentik on this
+    /// server stops with it; its data stays for setting it up again.
     pub fn disconnect_sign_in(&self) -> Result<(), String> {
         let _held = self
             .applied
@@ -368,7 +418,11 @@ impl Publishing {
             ));
         }
         settings.sign_in = None;
-        self.write(&settings)
+        self.write(&settings)?;
+        if self.authentik.installed() {
+            self.authentik.remove()?;
+        }
+        Ok(())
     }
 
     /// A private app's password, for its owner to share again. `None` for
@@ -413,7 +467,12 @@ impl Publishing {
             return Ok(());
         };
         sign_in::sync(settings.sign_in.as_ref(), domain)?;
-        let config = caddy_config(&settings, &deployments.running_ports());
+        self.authentik.keep_running()?;
+        let config = caddy_config(
+            &settings,
+            &deployments.running_ports(),
+            self.authentik.installed(),
+        );
         let body = serde_json::to_string_pretty(&config).map_err(|e| e.to_string())?;
         let running = caddy_running();
         if running && applied.as_deref() == Some(body.as_str()) {
@@ -506,7 +565,7 @@ fn resolves_to(name: &str, here: IpAddr) -> bool {
 /// Caddy's whole configuration. A published app with a running deployment
 /// gets a route to it, behind its password when private; one without gets
 /// the "not running" page. Any other name gets "No app here".
-fn caddy_config(settings: &Settings, running: &BTreeMap<String, u16>) -> Value {
+fn caddy_config(settings: &Settings, running: &BTreeMap<String, u16>, authentik: bool) -> Value {
     let domain = settings.domain.as_deref().unwrap_or_default();
     let mut routes: Vec<Value> = settings
         .apps
@@ -553,6 +612,19 @@ fn caddy_config(settings: &Settings, running: &BTreeMap<String, u16>) -> Value {
         .collect();
     if settings.sign_in.is_some() {
         routes.insert(0, sign_in::caddy_route(domain));
+    }
+    if authentik {
+        routes.insert(
+            0,
+            json!({
+                "match": [{"host": [format!("{}.{domain}", authentik::NAME)]}],
+                "handle": [{
+                    "handler": "reverse_proxy",
+                    "upstreams": [{"dial": format!("127.0.0.1:{}", authentik::PORT)}],
+                }],
+                "terminal": true,
+            }),
+        );
     }
     routes.push(json!({"handle": [page(404, NO_APP)]}));
     json!({
@@ -661,7 +733,7 @@ fn reload_caddy() -> Result<(), String> {
     Ok(())
 }
 
-fn write_private(path: &Path, body: &[u8]) -> Result<(), String> {
+pub(crate) fn write_private(path: &Path, body: &[u8]) -> Result<(), String> {
     let temporary = path.with_extension("new");
     fs::write(&temporary, body)
         .and_then(|()| set_private(&temporary))
@@ -716,7 +788,7 @@ mod tests {
     #[test]
     fn a_running_app_is_proxied_and_a_private_one_asks_first() {
         let running = BTreeMap::from([("prj_todo".to_string(), 32778)]);
-        let config = caddy_config(&settings(), &running);
+        let config = caddy_config(&settings(), &running, false);
         let routes = &config["apps"]["http"]["servers"]["public"]["routes"];
         let todo = routes
             .as_array()
@@ -770,7 +842,7 @@ mod tests {
         let mut settings = settings();
         settings.apps.get_mut("prj_todo").unwrap().access = Access::Public;
         let running = BTreeMap::from([("prj_todo".to_string(), 32778)]);
-        let config = caddy_config(&settings, &running);
+        let config = caddy_config(&settings, &running, false);
         let todo = config["apps"]["http"]["servers"]["public"]["routes"]
             .as_array()
             .unwrap()
@@ -815,7 +887,7 @@ mod tests {
             cookie_secret: "c".repeat(32),
         });
         let running = BTreeMap::from([("prj_todo".to_string(), 32778)]);
-        let config = caddy_config(&settings, &running);
+        let config = caddy_config(&settings, &running, false);
         let todo = route(&config, "todo.example.com");
         assert_eq!(todo["handle"][0]["handler"], "headers");
         assert_eq!(
@@ -828,9 +900,13 @@ mod tests {
             sign_in["handle"][0]["upstreams"][0]["dial"],
             "127.0.0.1:4180"
         );
+        // authentik on this server gets its own address.
+        let config = caddy_config(&settings, &running, true);
+        let auth = route(&config, "auth.example.com");
+        assert_eq!(auth["handle"][0]["upstreams"][0]["dial"], "127.0.0.1:9400");
         // Without a provider there is no way in, not an open door.
         settings.sign_in = None;
-        let config = caddy_config(&settings, &running);
+        let config = caddy_config(&settings, &running, false);
         let todo = route(&config, "todo.example.com");
         assert_eq!(todo["handle"][0]["status_code"], 503);
         assert_eq!(todo["handle"].as_array().unwrap().len(), 1);
@@ -907,7 +983,7 @@ mod tests {
             },
         );
         let running = BTreeMap::from([("prj_todo".to_string(), 3000)]);
-        let config = caddy_config(&settings, &running);
+        let config = caddy_config(&settings, &running, false);
         fs::write(dir.join("caddy.json"), config.to_string()).unwrap();
         fs::write(
             dir.join("gate-args"),
