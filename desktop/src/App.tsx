@@ -35,6 +35,7 @@ import { useDesktopUpdate } from "./update/useDesktopUpdate";
 import { markOffered, offeredVersion, shouldOffer } from "./update/offer";
 import { DEV_MODE_KEY } from "./devMode";
 import "./App.css";
+import { BrandMark } from "./views/BrandMark";
 
 const AREA_KEY = "commitarium.area";
 
@@ -287,7 +288,10 @@ function App() {
     return (
       <main className="app">
         <header className="app__header">
-          <h1>Commitarium</h1>
+          <h1 className="app__brand">
+            <BrandMark size={22} />
+            Commitarium
+          </h1>
           <span className="app__subtitle">Local workspace launcher</span>
           <button className="ghost" onClick={() => setShowAgents(true)}>
             Agents
@@ -432,7 +436,10 @@ function App() {
     >
       {!projectId && !chatShell && (
         <header className="topbar">
-          <span className="topbar__brand">Commitarium</span>
+          <span className="topbar__brand">
+            <BrandMark />
+            Commitarium
+          </span>
           <PlaceSwitch />
           <span className="view-switch" role="tablist">
             {(devMode

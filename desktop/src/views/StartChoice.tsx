@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { connectToServer, chooseThisComputer } from "../ipc";
 import "./BootScreen.css";
+import { BrandMark } from "./BrandMark";
 
 export const INSTALL_COMMAND =
   "curl -fsSL https://github.com/EinarLogiOskars/commitarium/releases/latest/download/install-host.sh | sudo sh";
@@ -52,7 +53,7 @@ export function StartChoice({ onLocal }: { onLocal: () => void }) {
     <main className="boot">
       <div className="boot__band">
         <div className="boot__inner">
-          <span className="boot__mark" aria-hidden />
+          <BrandMark size={34} className="boot__mark" />
           <h1 className="boot__title">Commitarium</h1>
           <div className="boot__status">
             {connecting ? (

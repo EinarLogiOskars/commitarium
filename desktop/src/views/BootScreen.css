@@ -32,33 +32,8 @@
 
 /* A commit node on a line: the mark drawn in CSS so it follows the theme. */
 .boot__mark {
-  position: relative;
-  width: 32px;
-  height: 32px;
+  display: block;
   margin-bottom: 16px;
-}
-.boot__mark::before {
-  content: "";
-  position: absolute;
-  left: 0;
-  right: 0;
-  top: 50%;
-  height: 2px;
-  margin-top: -1px;
-  border-radius: 9999px;
-  background: var(--text-subtle, #737373);
-}
-.boot__mark::after {
-  content: "";
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  width: 14px;
-  height: 14px;
-  margin: -7px 0 0 -7px;
-  border-radius: 50%;
-  border: 2px solid var(--text, #ededed);
-  background: var(--bg, #000);
 }
 
 .boot__title {
