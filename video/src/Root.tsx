@@ -1,4 +1,5 @@
 import { Composition } from "remotion";
+import { DocsScreens } from "./docs/Screens";
 import { ARCHITECTURE_HEIGHT, ARCHITECTURE_WIDTH, Architecture } from "./Architecture";
 import { END, ReadmeLoop, THUMBNAIL_HEIGHT, THUMBNAIL_WIDTH, VideoThumbnail } from "./ReadmeLoop";
 
@@ -7,6 +8,7 @@ import { END, ReadmeLoop, THUMBNAIL_HEIGHT, THUMBNAIL_WIDTH, VideoThumbnail } fr
 export function Root() {
   return (
     <>
+      <DocsScreens />
       {(["light", "dark"] as const).map((theme) => (
         <Composition
           key={theme}

@@ -1,0 +1,59 @@
+---
+title: Installing on a server
+description: Install Commitarium on a Linux server with one line, and pair your app with it.
+sidebar:
+  order: 2
+---
+
+import Screenshot from "../../../../components/Screenshot.astro";
+
+This page shows you how to install Commitarium on your server and connect your app to it.
+
+## Reaching the server
+
+First decide how your computer will reach the server. Do this before you install.
+
+**With Tailscale.** Best for a server at home, because it opens no ports. [Tailscale](https://tailscale.com/) puts your machines on a private network. Install it on the server and on your computer, and sign in to the same account on both. The install finds the Tailscale address by itself.
+
+**With an open port.** On a VPS, allow **TCP port 7443** in its firewall. Leave every other Commitarium port closed: they listen only inside the server. To [put apps online](/docs/online/your-domain/), ports **80** and **443** must be open too.
+
+## Install
+
+Connect to the server (with SSH, for example) and run:
+
+```bash
+curl -fsSL https://github.com/EinarLogiOskars/commitarium/releases/latest/download/install-host.sh | sudo sh
+```
+
+It installs Docker if you agree, sets up the service, starts everything, and prints a **pairing line** that starts with `commitarium://`.
+
+## Pair your app
+
+1. In Commitarium, open the menu under Commitarium's name and choose **Connect a server…**. On a first start, choose **Connect to a server** instead.
+2. Paste the pairing line, and choose **Connect**.
+
+<Screenshot id="connect-server" alt="The Connect to a server screen with a pairing line pasted in" />
+
+A pairing line works once, for 5 minutes. Your app then gets a key of its own, kept in your computer's keychain, and uses it from then on.
+
+To make a new pairing line, run on the server:
+
+```bash
+sudo commitarium-host pair
+```
+
+### Behind a router
+
+The address in the pairing line may be a private one that your computer can't reach. Name the right one:
+
+```bash
+sudo commitarium-host pair --address my-server.example.com
+```
+
+## Sign in your agents there
+
+A server has its own agents. After pairing, open **Agents** while you are on the server, and [add your agents](/docs/get-started/agents/) as you did on your computer.
+
+## If something goes wrong
+
+Running the install line again is safe. It repairs the setup and keeps your data.

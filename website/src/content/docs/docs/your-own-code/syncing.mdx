@@ -1,0 +1,69 @@
+---
+title: Syncing with your repository
+description: Bring Commitarium's work back to your own copy, send your own commits in, and keep a server project in step with GitHub.
+sidebar:
+  order: 3
+---
+
+import Screenshot from "../../../../components/Screenshot.astro";
+
+This page shows you how to move code between Commitarium and your own copy, in both directions.
+
+Agents work in Commitarium's private Git server. Your own folder or repository only changes when you ask. Nothing syncs on its own, and nothing is ever forced.
+
+## On this computer: the Sync card
+
+A project's **Sync** card shows **Your computer**: whether your copy is up to date, how many work orders there are to pull, and how many of your own commits there are to bring in.
+
+<Screenshot id="sync-card" alt="The Sync card: Your computer with work orders to pull and local commits to bring in" />
+
+### Set up your copy
+
+A project you made in Commitarium has no copy on your computer yet. The card says **Not set up yet**; choose **Set up** to pick where it goes. An [imported](/docs/your-own-code/importing/) project uses the folder you imported from.
+
+### Pull: Commitarium's work to your copy
+
+When work orders have merged, **Pull** brings them to your copy as one commit. For a Git repository, it commits the latest work there. For a plain folder, it copies the files in.
+
+### Bring in: your work to Commitarium
+
+When you commit changes of your own in your copy, the card counts them. **Bring in** first shows you which files would be sent, and asks you to confirm, since they go to your agents and their AI provider. Uncommitted files are left out: commit them first if they belong.
+
+Mayka then merges your changes through a reviewed work order. **Pull** once that work order has merged, and both sides have everything.
+
+:::tip
+Bring in works best when you have paused your own work on those files.
+:::
+
+### Push to your Git host
+
+If your copy has a remote, such as GitHub, the full Sync page can push the project to it. It always pushes to **a new branch** you confirm, never over an existing one, so you can open a pull request there.
+
+## On a server: a linked repository
+
+On a server, a project's code lives in the server's own Git server. A **linked repository** keeps it in step with GitHub, GitLab, Codeberg or another Git host, so the code also lives somewhere else.
+
+A project [imported by address](/docs/your-own-code/importing/#by-address-on-a-server) is linked already. Otherwise, on the **Linked repository** card, give the repository's https address and an access token that can read and push to it, then **Link**. The token stays on the server. A public repository can be linked without a token, but then only pulls.
+
+<Screenshot id="linked-repository" alt="The Linked repository card with Pull and Push buttons" />
+
+### Pull
+
+**Pull** brings the commits made there into the project.
+
+- If the project has nothing new of its own, it simply moves forward.
+- If both sides have new commits, Mayka merges the two in a work order, and handles any conflicts.
+
+### Push to a named branch
+
+**Push** sends the project's main branch to a **branch you name** on the Git host. It is offered the last name you used, at first `commitarium`. It never pushes to the host's main branch, and never forces.
+
+After a push, **Open a pull request** takes you to the host, where you merge the branch into main yourself.
+
+### Unlink
+
+**Unlink** removes the link. Both repositories keep their code.
+
+## Not available on a server
+
+A server can't reach the folders on your computer, so **Bring in**, pulling to a local folder, and importing a folder are not available there. A linked repository is the way to keep the code elsewhere.

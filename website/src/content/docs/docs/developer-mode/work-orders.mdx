@@ -1,0 +1,57 @@
+---
+title: Work orders
+description: The steps of a work order, how many rounds the agents get, and how a stuck one recovers.
+sidebar:
+  order: 3
+---
+
+import Screenshot from "../../../../components/Screenshot.astro";
+
+This page explains a work order from start to merge, and what to do when one stops.
+
+A **work order** is one focused piece of work: a feature, a fix, a change. Mayka creates them from the plan or from what you ask; you can also create one yourself from the **Work orders** card.
+
+<Screenshot id="work-order" alt="A work order's page with its phases at the top: Clarify, Plan, Implement, Review, Merge" />
+
+## The phases
+
+1. **Clarify.** The request becomes a **handoff brief**: what is wanted, open questions, areas to touch. You can talk it through with Mayka, edit it, and **Accept brief**, or choose **Start without clarifying**.
+2. **Plan.** The lead checks the brief against what has changed since, and writes a plan, commit by commit. The reviewer challenges it until they agree.
+3. **Implement.** The lead writes the code, ticking off its plan as a checklist.
+4. **Review.** The reviewer checks the code. The lead makes corrections until the reviewer approves.
+5. **Merge.** The change is brought up to date with main, your [validation checks](/docs/developer-mode/project-settings/) run, and it merges through a pull request, either by itself or with your **Confirm merge**, depending on the merge policy.
+
+## How much each work order does
+
+Not every change needs every step. A work order runs one of these ways:
+
+| Way | What happens |
+| --- | --- |
+| **Full** | A reviewer checks the plan and the code. For data, money, sign-in, migrations and other risky work. |
+| **Reviewed plan** | A reviewer checks the plan; the lead implements it. For most features. |
+| **Planned** | The lead plans the commits alone and implements them. You decide the merge. |
+| **Quick change** | The lead goes straight to the change in one turn. You decide the merge. |
+
+Mayka picks the way, the agents and the models for the work she starts. For work you start, she suggests them and you can change them.
+
+## Round limits
+
+The agents get up to **10 rounds** to agree on a plan, and **10 rounds** of review. If they haven't settled by then, the work order pauses with **Round limit reached** and asks how to continue.
+
+Mayka handles a first round limit herself when she can: she finds the one point the agents are stuck on and settles it from the plan or what you already said, which gives a stuck plan a few more rounds. When the point is a choice only you can make, such as taste, scope or cost, she asks you in a sentence or two, with her suggestion.
+
+## When something goes wrong
+
+A failure never ends a work order. It **pauses**, keeps everything done so far, and waits. Only you, or a merge, end a work order.
+
+From a paused work order you can:
+
+- **Continue**: try again, with guidance for the agent if you like;
+- **Reopen for clarification**: go back and change the brief;
+- **Back to Ready**: start it over from the brief.
+
+In a project Mayka builds, she does this herself: interrupted turns retry, and she picks the fitting recovery. She only asks you when she can't fix it.
+
+:::tip
+Delete removes a work order and its branch. A merged work order's changes stay in the project: deleting it is not an undo.
+:::

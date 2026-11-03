@@ -1,0 +1,50 @@
+---
+title: What Commitarium is
+description: An app that turns a sentence into a working app, using the AI accounts you already have.
+sidebar:
+  order: 1
+---
+
+import Screenshot from "../../../../components/Screenshot.astro";
+
+This page explains what Commitarium does for you, and what it needs.
+
+:::note
+A short video for this section is coming.
+:::
+
+## In one sentence
+
+Describe any app. Commitarium builds it, runs it, and changes it whenever you want.
+
+You tell Commitarium what you need, in plain words. Its assistant, **Mayka**, plans the app, hands the work to coding agents, checks what they make, and opens the finished app on your computer. Want it different? Ask, and it changes.
+
+<Screenshot id="apps" alt="The Apps area in Commitarium, with app tiles and the New app button" />
+
+## What makes it different
+
+- **No coding needed.** You talk to one assistant. She takes care of the plan, the code, the setup, and the fixes when something breaks.
+- **Yours, on your machines.** Your apps and their data stay on your computer, or on a server of your own that keeps working while your computer is off.
+- **Uses the AI you already have.** You sign in with your Claude or Codex account. Commitarium keeps an eye on your usage limits and spreads the work to fit.
+- **Checked, not just generated.** A second agent, ideally from another AI provider, reviews every plan and every change before it lands.
+
+## Words you will see
+
+- **Mayka** is your assistant. You talk to her; she talks to the agents.
+- An **agent** is one of your AI accounts (Claude or Codex) that does the coding.
+- An **app** is something Commitarium built for you. It opens in its own window.
+- A **work order** is one piece of work: one change or one feature, planned, built, reviewed and merged.
+- **Developer mode** shows the workshop behind your apps: projects, chats, work orders and the code's history. You don't need it to make apps.
+
+## Where it runs
+
+Everything runs in [Docker](https://www.docker.com/) on your computer: the assistant, the agents, a private Git server that keeps the history, and your apps. You can also [run it on a server](/docs/servers/why-a-server/) of your own, and from there [put apps online](/docs/online/your-domain/), even [behind your company's sign-in](/docs/company-sign-in/overview/).
+
+Commitarium is local-first, but not offline. When an agent works, the AI provider you signed in with receives your prompts and the code it needs, under your account and that provider's terms. See [Security and your data](/docs/security/).
+
+## What you need
+
+- A computer with macOS, Windows or Linux, and Docker.
+- A Claude or Codex account. Both is best: one builds, the other reviews.
+
+Next: [Install Commitarium](/docs/get-started/install/).

@@ -1,0 +1,42 @@
+---
+title: Deploying
+description: Put a version of your app online, separately from the preview you keep working in, and roll back when you need to.
+sidebar:
+  order: 2
+---
+
+import Screenshot from "../../../../components/Screenshot.astro";
+
+This page shows you how to put an app online, update it, and go back to an earlier version.
+
+## The deployment is separate from the preview
+
+A **deployment** is the version of your app that visitors see. Your **preview** is the one you keep working in and trying things out.
+
+They don't affect each other. Changes land in the preview first, and visitors only see them when you deploy. The deployment's data is its own too, so nothing you do in the preview touches what visitors saved.
+
+## Deploy
+
+On the project's **Deployment** card, choose **Deploy**. It puts the latest merged version on your server.
+
+<Screenshot id="deploy" alt="The Deployment page: the deployed version, its address, Deploy latest, and earlier deploys" />
+
+The card then shows its state and address. When there is newer work than what is deployed, **Deploy latest** puts it online. Visitors see a short "updating" page while the new version starts, and their data carries over.
+
+You can also ask Mayka to deploy. She always asks you first, with a card.
+
+## Earlier versions and rolling back
+
+The **Deployment** page, opened from the card, has more:
+
+- **Deploy an earlier version…** picks any merged version to deploy.
+- **Earlier deploys** lists what was deployed before. **Roll back** puts one of them online again.
+- **Stop deployment** takes the app offline.
+
+## Safe by design
+
+A deployed app reaches none of Commitarium's own services: not its assistant, its Git server, its agents, or your other apps. It keeps running, and starts again when the server restarts.
+
+To check this on your server, run `sudo sh check-isolation.sh` from the `scripts` folder of [Commitarium's repository](https://github.com/EinarLogiOskars/commitarium).
+
+Next: [give it an address, and choose who can open it](/docs/online/addresses-and-access/).
