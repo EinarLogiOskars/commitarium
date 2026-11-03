@@ -5307,6 +5307,50 @@ select:focus {
   border: none;
   display: block;
   background: #fff;
+  transition:
+    opacity 700ms ease,
+    transform 900ms cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+/* Loading underneath the waiting screen: it eases in once loaded. */
+.app-window__frame--loading {
+  opacity: 0;
+  transform: scale(0.985);
+}
+/* The waiting screen over the app, fading out once the app has loaded. */
+.app-window__cover {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  background: var(--bg);
+  transition: opacity 700ms ease;
+}
+.app-window__cover--leaving {
+  opacity: 0;
+  pointer-events: none;
+}
+/* While the app is still being built: how far along, in a corner. */
+.app-window__progress {
+  position: absolute;
+  left: 16px;
+  bottom: 16px;
+  z-index: 3;
+  max-width: min(360px, calc(100% - 32px));
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: var(--float-shadow);
+  font-size: var(--text-sm);
+}
+.app-window__progress .app-window__items {
+  margin: 4px 8px 6px;
+  text-align: left;
+}
+@media (prefers-reduced-motion: reduce) {
+  .app-window__frame,
+  .app-window__cover {
+    transition: none;
+  }
 }
 .app-window__state {
   height: 100%;
@@ -5318,9 +5362,23 @@ select:focus {
   text-align: center;
   padding: 24px;
 }
+.app-window__state {
+  position: relative;
+  overflow: hidden;
+}
+.app-window__state > :not(.ripple-field) {
+  position: relative;
+}
 .app-window__state h1 {
   margin: 0;
   font-size: var(--text-xl);
+}
+.ripple-field {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
 }
 .app-window__starting {
   animation: dot-pulse 1.6s ease-in-out infinite;
@@ -5392,6 +5450,19 @@ select:focus {
 }
 .app-window__item--done {
   color: var(--text);
+}
+.app-window__item-note {
+  display: block;
+  margin-left: 1.1em;
+  font-size: var(--text-xs);
+}
+/* Where the app opens: everything above it, P0, makes it usable. */
+.app-window__usable {
+  margin: 8px 0;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  color: var(--text-subtle);
+  font-size: var(--text-xs);
 }
 
 /* The rail's head: an explicit way back, then the project's name. */
