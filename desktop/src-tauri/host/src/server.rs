@@ -313,6 +313,9 @@ fn respond_to_get(path: &str, shared: &Shared) -> Reply {
         "/v1/profiles" => respond_with(block_on(profiles::list_profiles(&shared.profiles))),
         "/v1/deployments" => respond_with(shared.deployments.list()),
         "/v1/backups" => respond_with(shared.on_a_server().and_then(|()| shared.backups.list())),
+        "/v1/backups/underway" => respond_with(Ok(
+            serde_json::json!({ "underway": shared.backups.underway() }),
+        )),
         "/v1/publishing" => respond_with(
             shared
                 .on_a_server()
