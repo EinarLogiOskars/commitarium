@@ -9,7 +9,10 @@ want.
 [![Release](https://img.shields.io/github/v/release/EinarLogiOskars/commitarium?label=release)](https://github.com/EinarLogiOskars/commitarium/releases)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-![Commitarium building an app from one sentence, then changing it on request](docs/media/commitarium.gif)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/media/commitarium-dark.gif">
+  <img alt="Commitarium building an app from one sentence, then changing it from a screenshot of the app" src="docs/media/commitarium.gif">
+</picture>
 
 <sub>*Sped up. In reality, an app like this takes about half an hour to build,
 and a small change a few minutes.*</sub>

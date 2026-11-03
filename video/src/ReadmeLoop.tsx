@@ -1,8 +1,9 @@
 import type { ReactNode } from "react";
-import { AbsoluteFill, interpolate, interpolateColors, useCurrentFrame } from "remotion";
+import { AbsoluteFill, interpolate, interpolateColors, staticFile, useCurrentFrame } from "remotion";
 import "../../desktop/src/App.css";
 import { iconColor, initials } from "../../desktop/src/views/AppsView";
-import { ComposerBox } from "../../desktop/src/views/Composer";
+import { AttachmentChips } from "../../desktop/src/views/Attachments";
+import { ComposerBox, type ComposerOption } from "../../desktop/src/views/Composer";
 import { QuietRow } from "../../desktop/src/views/QuietRow";
 
 // The README's loop, told like an ad rather than a walkthrough: the assistant
@@ -68,7 +69,13 @@ const EXPAND_TO = EXPAND_FROM + 20;
 const FAB_PULSE = EXPAND_TO + 25;
 const DRAWER_FROM = FAB_PULSE + 14;
 const DRAWER_TO = DRAWER_FROM + 10;
-const TYPE_2_FROM = DRAWER_TO + 14;
+// You show Mayka what to change: the +, Screenshot the app, and a flash
+// while the drawer steps aside for it.
+const PLUS_AT = DRAWER_TO + 12;
+const PICK_AT = PLUS_AT + 26;
+const CAPTURE_AT = PICK_AT + 8;
+const SHOT_IN = CAPTURE_AT + 14;
+const TYPE_2_FROM = SHOT_IN + 12;
 const TYPE_2_TO = TYPE_2_FROM + 45;
 const SEND_2 = TYPE_2_TO + 10;
 const REPLY_2_AT = SEND_2 + 24;
@@ -96,7 +103,21 @@ const TILE_RECT = {
   height: TILE_H * TILE_SCALE,
 };
 
-export function ReadmeLoop() {
+export type Theme = "light" | "dark";
+
+// The app's own tokens for the theme, as the desktop sets them.
+function useTheme(theme: Theme) {
+  if (typeof document !== "undefined") document.documentElement.dataset.theme = theme;
+}
+
+const SHOT = "plant-pal-screenshot.png";
+const SHOT_NAME = "screenshot-2026-11-03-1412.png";
+const SHOT_OPTIONS: ComposerOption[] = [
+  { label: "Screenshot the app", hint: "Show Mayka what to change", onSelect: () => {} },
+];
+
+export function ReadmeLoop({ theme = "light" }: { theme?: Theme }) {
+  useTheme(theme);
   const frame = useCurrentFrame();
   const fade = interpolate(frame, [END - 10, END - 1], [1, 0], clamp);
   return (
@@ -256,7 +277,13 @@ function PlantPal({ frame }: { frame: number }) {
   };
   const content = easeOut(progress(frame, EXPAND_FROM, EXPAND_FROM + 8));
   const scale = rect.width / W;
-  const drawer = easeOut(progress(frame, DRAWER_FROM, DRAWER_TO)) - easeOut(progress(frame, CLOSE_FROM, CLOSE_TO));
+  // The drawer steps aside while the screenshot is taken, as in the app.
+  const aside = Math.sin(progress(frame, PICK_AT + 2, SHOT_IN) * Math.PI);
+  const drawer =
+    (easeOut(progress(frame, DRAWER_FROM, DRAWER_TO)) - easeOut(progress(frame, CLOSE_FROM, CLOSE_TO))) *
+    (1 - aside);
+  const flash = Math.sin(progress(frame, CAPTURE_AT - 2, CAPTURE_AT + 6) * Math.PI);
+  const shot = frame >= SHOT_IN && frame < SEND_2 + 3;
   const drawerOpen = frame >= DRAWER_FROM && frame < CLOSE_FROM;
   const reload = 1 - 0.6 * Math.sin(progress(frame, RELOAD, RELOAD + 12) * Math.PI);
   const bars = easeInOut(progress(frame, RELOAD + 6, RELOAD + 30));
@@ -361,11 +388,22 @@ function PlantPal({ frame }: { frame: number }) {
 
           <Fab open={drawerOpen} style={{ transform: `scale(${1 + 0.18 * pulse})` }} />
 
+          {flash > 0 && (
+            <div style={{ position: "absolute", inset: 0, background: "#fff", opacity: 0.7 * flash, zIndex: 40 }} />
+          )}
+
           {drawer > 0 && (
             <aside
               className="assistant-drawer"
               aria-label="Assistant"
-              style={{ animation: "none", width: 480, minWidth: 0, transform: `translateX(${(1 - drawer) * 100}%)` }}
+              // Commitarium's, not the app's: it sits over the app's page.
+              style={{
+                animation: "none",
+                width: 480,
+                minWidth: 0,
+                color: "var(--text)",
+                transform: `translateX(${(1 - drawer) * 100}%)`,
+              }}
             >
               <header className="assistant-drawer__head">
                 <div className="assistant-drawer__top">
@@ -374,7 +412,7 @@ function PlantPal({ frame }: { frame: number }) {
               </header>
               <div className="chat assistant-drawer__chat" style={{ justifyContent: "flex-end", overflow: "hidden", gap: 0 }}>
                 <Appear at={SEND_2 + 3}>
-                  <Message who="You" text={CHANGE_ASK} />
+                  <Message who="You" text={CHANGE_ASK} screenshot />
                 </Appear>
                 <Appear at={SEND_2 + 8} until={REPLY_2_AT}>
                   <QuietRow tone="busy" pulse>
@@ -392,11 +430,24 @@ function PlantPal({ frame }: { frame: number }) {
                 </Appear>
               </div>
               <div style={{ padding: "0 14px 14px" }}>
+                {/* The menu's choice, pointed at before it is picked. */}
+                {frame >= PICK_AT - 10 && frame < PICK_AT + 2 && (
+                  <style>{`.composer-menu__list li:last-child .composer-menu__item { background: var(--accent-soft); }`}</style>
+                )}
+                {shot && (
+                  <AttachmentChips
+                    items={[{ id: "shot", file: new File([], SHOT_NAME), name: SHOT_NAME, url: staticFile(SHOT) }]}
+                    onRemove={() => {}}
+                  />
+                )}
                 <Composer
                   frame={frame}
                   text={sent ? "" : typed + caret(frame, TYPE_2_FROM - 6, TYPE_2_FROM, TYPE_2_TO)}
                   ready={frame >= TYPE_2_TO}
                   send={SEND_2}
+                  menuOpen={frame >= PLUS_AT && frame < PICK_AT + 2}
+                  options={SHOT_OPTIONS}
+                  placeholder={shot ? "What should change here?" : "Ask Mayka…"}
                 />
               </div>
             </aside>
@@ -464,30 +515,67 @@ function Appear({ at, until, children }: { at: number; until?: number; children:
 }
 
 // As the chat shows them (ChatView): yours under "You", Mayka's plain.
-function Message({ who, text }: { who: "You" | "Mayka"; text: string }) {
+function Message({ who, text, screenshot }: { who: "You" | "Mayka"; text: string; screenshot?: boolean }) {
   return (
     <div className={`msg ${who === "You" ? "msg--user" : "msg--lead msg--plain"}`}>
       {who === "You" && <span className="msg__who">You</span>}
       <div className="msg__text">
         <p>{text}</p>
+        {screenshot && (
+          <ul className="attachments attachments--sent">
+            <li className="attachment" title={SHOT_NAME}>
+              <img className="attachment__thumb" src={staticFile(SHOT)} alt="" />
+              <span className="attachment__name">{SHOT_NAME}</span>
+            </li>
+          </ul>
+        )}
       </div>
     </div>
   );
 }
 
 // The app's own message box, being typed into and sent.
-function Composer({ frame, text, ready, send }: { frame: number; text: string; ready: boolean; send: number }) {
+function Composer({
+  frame,
+  text,
+  ready,
+  send,
+  menuOpen,
+  options,
+  placeholder = "Ask Mayka…",
+}: {
+  frame: number;
+  text: string;
+  ready: boolean;
+  send: number;
+  menuOpen?: boolean;
+  options?: ComposerOption[];
+  placeholder?: string;
+}) {
   return (
     <div style={pressed(frame, send)}>
       <ComposerBox
         value={text}
         onChange={() => {}}
-        placeholder="Ask Mayka…"
+        placeholder={placeholder}
         onSubmit={() => {}}
         submitDisabled={!ready}
         submitLabel="Send"
+        onFiles={options ? () => {} : undefined}
+        options={options}
+        menuOpen={menuOpen}
       />
     </div>
+  );
+}
+
+// The plant app on its own, rendered once as the screenshot Mayka is shown.
+export function PlantPalScreenshot() {
+  useTheme("light");
+  return (
+    <AbsoluteFill>
+      <PlantPal frame={EXPAND_TO + 10} />
+    </AbsoluteFill>
   );
 }
 

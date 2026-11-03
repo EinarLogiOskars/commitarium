@@ -40,6 +40,7 @@ export function ComposerBox({
   submitDisabled,
   submitLabel,
   submitIcon = "send",
+  menuOpen,
 }: {
   value: string;
   onChange: (value: string) => void;
@@ -53,6 +54,9 @@ export function ComposerBox({
   onFiles?: (files: File[]) => void;
   filesDisabled?: boolean;
   options?: ComposerOption[];
+  /** Holds the + menu open or shut, for the README's animation, which
+   * draws frames one at a time; the app leaves it to the +. */
+  menuOpen?: boolean;
   /** Controls beside the +, such as who the message goes to. */
   leading?: ReactNode;
   onSubmit: () => void;
@@ -76,7 +80,7 @@ export function ComposerBox({
 
   return (
     <div className={`composer-box${disabled ? " composer-box--disabled" : ""}`}>
-      <PlusMenu onFiles={onFiles} filesDisabled={filesDisabled} options={options} />
+      <PlusMenu onFiles={onFiles} filesDisabled={filesDisabled} options={options} shown={menuOpen} />
       {leading}
       <textarea
         ref={(el) => {
@@ -110,12 +114,15 @@ function PlusMenu({
   onFiles,
   filesDisabled,
   options,
+  shown,
 }: {
   onFiles?: (files: File[]) => void;
   filesDisabled?: boolean;
   options: ComposerOption[];
+  shown?: boolean;
 }) {
-  const [open, setOpen] = useState(false);
+  const [opened, setOpen] = useState(false);
+  const open = shown ?? opened;
   const root = useRef<HTMLDivElement | null>(null);
   const input = useRef<HTMLInputElement | null>(null);
 
