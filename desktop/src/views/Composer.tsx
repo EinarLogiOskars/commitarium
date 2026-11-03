@@ -80,7 +80,12 @@ export function ComposerBox({
 
   return (
     <div className={`composer-box${disabled ? " composer-box--disabled" : ""}`}>
-      <PlusMenu onFiles={onFiles} filesDisabled={filesDisabled} options={options} shown={menuOpen} />
+      <PlusMenu
+        onFiles={onFiles}
+        filesDisabled={filesDisabled}
+        options={options}
+        shown={menuOpen}
+      />
       {leading}
       <textarea
         ref={(el) => {
@@ -126,8 +131,9 @@ function PlusMenu({
   const root = useRef<HTMLDivElement | null>(null);
   const input = useRef<HTMLInputElement | null>(null);
 
+  // Closing on a click elsewhere or Escape: only a menu the + opened.
   useEffect(() => {
-    if (!open) return;
+    if (!opened) return;
     const onDown = (e: MouseEvent) => {
       if (!root.current?.contains(e.target as Node)) setOpen(false);
     };
@@ -143,7 +149,7 @@ function PlusMenu({
       window.removeEventListener("mousedown", onDown);
       window.removeEventListener("keydown", onKey, true);
     };
-  }, [open]);
+  }, [opened]);
 
   const items: ComposerOption[] = [
     ...(onFiles && !filesDisabled
