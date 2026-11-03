@@ -74,6 +74,17 @@ On a server, Import project asks for the repository's https address, such as
 Commitarium copies it onto the server and links the project to it, so the
 two stay in step (see below); the original stays as it is.
 
+## Disk space
+
+The server looks after its own disk. A work order's checkouts go a day after
+it merges, and every few hours the server removes earlier releases' images,
+preview images unused for two days, and build cache unused for a week. A
+preview check removes its images when it finishes, and a deleted project's
+images go at the next tidy-up. Backups leave out `node_modules`, which agents
+install again. Every container's log is capped at 30 MB. When less than 5 GB or a tenth of the
+disk is free, it clears everything it can rebuild at once and skips that
+night's backup; the backups it keeps (the last seven) stay.
+
 ## A linked repository
 
 On a server, a project's code lives in that server's Forgejo. Link it to a

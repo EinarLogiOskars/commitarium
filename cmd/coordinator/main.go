@@ -738,6 +738,9 @@ func run(ctx context.Context, coordinatorConfig config) error {
 		go assistantWatcher.Run(ctx)
 	}
 
+	// A merged work order's checkouts go a day after the merge (S6).
+	go workspaceService.KeepRemovingMergedCheckouts(ctx)
+
 	// A linked repository on GitHub or another git host, which the user
 	// pulls from and pushes to (S2).
 	linkedRepositories, err := linkedrepo.NewService(linkedrepo.Config{

@@ -560,3 +560,25 @@ func (store *WorkspaceStore) RepinBase(
 	}
 	return stored, nil
 }
+
+// MergedBefore returns the workspaces whose work order merged before cutoff.
+func (store *WorkspaceStore) MergedBefore(ctx context.Context, cutoff time.Time) ([]string, error) {
+	rows, err := store.db.QueryContext(ctx,
+		`SELECT id, merged_at FROM feature_workspaces WHERE merged_at IS NOT NULL`)
+	if err != nil {
+		return nil, fmt.Errorf("select merged workspaces: %w", err)
+	}
+	defer rows.Close()
+	var merged []string
+	for rows.Next() {
+		var id, mergedAt string
+		if err := rows.Scan(&id, &mergedAt); err != nil {
+			return nil, fmt.Errorf("scan merged workspace: %w", err)
+		}
+		at, err := time.Parse(time.RFC3339Nano, mergedAt)
+		if err == nil && at.Before(cutoff) {
+			merged = append(merged, id)
+		}
+	}
+	return merged, rows.Err()
+}

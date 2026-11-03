@@ -1,7 +1,16 @@
 name: commitarium
 
+# Every container's log is capped, so a long-running stack never fills the
+# disk with logs (SERVER_COMPLETE_PLAN.md, S6).
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: 10m
+    max-file: "3"
+
 services:
   coordinator:
+    logging: *logging
     build:
       context: .
       dockerfile: docker/coordinator.Dockerfile
@@ -36,6 +45,7 @@ services:
       - "127.0.0.1:${COMMITARIUM_COORDINATOR_PORT:-8080}:8080"
 
   simulated-codex-worker:
+    logging: *logging
     build:
       context: .
       dockerfile: docker/worker.Dockerfile
@@ -55,6 +65,7 @@ services:
   # resolved template, adding the agent's profile, journal, tokens, and both
   # workspace trees.
   codex-agent-template:
+    logging: *logging
     profiles: ["agent-template"]
     image: commitarium-codex-agent-worker
     build:
@@ -81,6 +92,7 @@ services:
       - "8081"
 
   claude-agent-template:
+    logging: *logging
     profiles: ["agent-template"]
     image: commitarium-claude-agent-worker
     build:
@@ -104,6 +116,7 @@ services:
       - "8081"
 
   forgejo:
+    logging: *logging
     image: codeberg.org/forgejo/forgejo:16.0.3-rootless
     user: "1000:1000"
     environment:

@@ -476,6 +476,15 @@ struct StackProgress<'a> {
 }
 
 const RELEASE_MODE_ENV: &str = "COMMITARIUM_RELEASE_MODE";
+/// The log cap every container Commitarium starts carries, as in
+/// compose.yml's `x-logging`.
+pub(crate) fn log_limits() -> serde_json::Value {
+    serde_json::json!({
+        "driver": "json-file",
+        "options": { "max-size": "10m", "max-file": "3" },
+    })
+}
+
 const EMBEDDED_COMPOSE: &str = include_str!("../../../../compose.yml");
 const EMBEDDED_RELEASE_COMPOSE: &str = include_str!("../../../../compose.release.yml");
 /// Referenced by the Codex agent worker template relative to the Compose file.

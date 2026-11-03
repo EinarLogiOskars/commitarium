@@ -1,6 +1,6 @@
 # Server Mode, Complete: Implementation Plan (0.10.0)
 
-**Status:** agreed 2026-11-02. S1 built and tested on a server except restore; S2 reworked into a linked repository the user pulls from and pushes to, after the push mirror proved able to overwrite the remote; S1 to S5 built; waiting for the user's test, then 0.10.0. Finishes what
+**Status:** agreed 2026-11-02. S1 built and tested on a server except restore; S2 reworked into a linked repository the user pulls from and pushes to, after the push mirror proved able to overwrite the remote; S1 to S6 built; waiting for the user's test, then 0.10.0. Finishes what
 [REMOTE_HOST_PLAN.md](REMOTE_HOST_PLAN.md) left for after its milestone, so a
 server can be the only place a user's work lives. Released together as 0.10.0;
 company sign-in follows as 0.11.0.
@@ -17,6 +17,7 @@ backups, importing a folder, syncing with a local folder, and the audit viewer.
 | S3 | Import by repository URL | A server imports a project from a git URL |
 | S4 | The audit viewer on a server | It opens from a paired device |
 | S5 | A warning before an app's address changes | Changing it says the old address stops working |
+| S6 | Disk hygiene | A server running for months does not fill its disk |
 
 ## S1: Backups on a server
 
@@ -85,6 +86,39 @@ backups, importing a folder, syncing with a local folder, and the audit viewer.
 
 - The Deployment page lets the address be changed, and says first that the
   old address stops working and people with the link must be told.
+
+## S6: Disk hygiene
+
+Measured on the user's server after two days: Docker images 3.6 GB, of them
+2.8 GB one project's preview, check and deployment images; build cache
+0.6 GB; 1.1 GB of agents' checkouts, ten merged work orders at about 130 MB
+each with their installed dependencies. None of it was ever cleared.
+
+- **Merged checkouts.** The coordinator removes the lead's and reviewer's
+  checkouts of work orders merged a day ago or more, checking each hour.
+  Until now only deleting a work order removed them.
+- **Preview images.** The host's cleanup removes `commitarium-preview-*`
+  images (previews, checks, deployments) no container has used, once built
+  over two days ago. A deployment's stays while its container exists.
+- **Checks and deleted projects.** A preview check removes its own images
+  when it finishes: they serve only that check. On a server, the cleanup
+  also removes at once the images of projects the coordinator no longer
+  has, whichever way the project went. On this computer it does not: a
+  second Commitarium may share Docker.
+- **Backups.** Workspace backups leave out `node_modules`; agents install
+  dependencies again. A day of a server's tests took a backup from 340 MB
+  to 824 MB, most of it dependencies.
+- **On a schedule.** The cleanup also runs every six hours, not only after
+  builds and updates.
+- **Build cache.** On a server, BuildKit cache unused for a week goes. On
+  this computer it stays: Docker cannot tell it from the user's own.
+- **Container logs.** Every container Commitarium starts (the stack, agents,
+  previews, deployments, Caddy) keeps at most three 10 MB log files.
+- **Low disk.** A server checks its disk every half hour. Under 5 GB or a
+  tenth free, it clears all unused preview images and all build cache at
+  once, and skips the nightly backup.
+- Not here: telling the user in the app when the disk stays low, and the
+  journal (systemd caps it already).
 
 ## Not in this plan
 

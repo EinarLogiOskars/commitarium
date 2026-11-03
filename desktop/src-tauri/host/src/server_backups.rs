@@ -182,9 +182,15 @@ impl ServerBackups {
                 .ok()
                 .and_then(|kept| kept.first().map(|newest| newest.created_at_unix_seconds))
                 .is_none_or(|newest| now().saturating_sub(newest) >= EVERY.as_secs());
-            if due && !agents_working() {
-                make(&self);
+            if !due || agents_working() {
+                continue;
             }
+            // A backup on a full disk could fill it: tidying up comes first.
+            if crate::cleanup::disk_low(&self.data_dir) {
+                eprintln!("[backups] skipped tonight's backup: the disk is low");
+                continue;
+            }
+            make(&self);
         });
     }
 }

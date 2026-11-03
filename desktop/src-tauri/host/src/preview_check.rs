@@ -440,19 +440,18 @@ fn keep_line(output: &mut VecDeque<String>, line: String) {
     output.push_back(line);
 }
 
-/// Removes the check's containers, network, and volumes; its images stay as
-/// build cache, labelled for the project's deletion.
+/// Removes the check's containers, network, volumes and images. The images
+/// serve only this check, and a project's are as big as its previews'; the
+/// next check builds again from the build cache.
 fn tear_down(runtime: &ComposeRuntime) {
     let _ = preview::compose_capture(
         runtime,
-        &preview::compose_down_args(true, false),
+        &preview::compose_down_args(true, true),
         "remove the preview check",
     );
-    for kind in ["container", "network", "volume"] {
+    for kind in ["container", "network", "volume", "image"] {
         preview::remove_labeled_resources(kind, &runtime.project_name);
     }
-    // A rebuilt check leaves its previous images untagged.
-    crate::cleanup::spawn();
 }
 
 /// What one look at the stack says.

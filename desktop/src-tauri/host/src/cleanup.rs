@@ -11,15 +11,25 @@
 //! - untagged images from Commitarium's own builds: the stack, previews and
 //!   preview checks (Compose labels their project), and environment
 //!   derivatives (labelled with their base image);
-//! - the provider and journal volumes of agents that were removed.
+//! - the provider and journal volumes of agents that were removed;
+//! - preview, check and deployment images (`commitarium-preview-*`) no
+//!   container has used for two days, rebuilt when next wanted, and on a
+//!   server at once those of a project the coordinator no longer has.
 //!
-//! Nothing a container uses, running or stopped, is removed. The BuildKit
-//! cache is left alone: Docker cannot tell Commitarium's build cache from the
-//! user's other builds, so it can only be pruned as a whole. Every failure is
-//! logged and otherwise ignored.
+//! Nothing a container uses, running or stopped, is removed. It runs after
+//! the builds and updates that leave things behind, and every few hours on
+//! its own (SERVER_COMPLETE_PLAN.md, S6).
+//!
+//! On a server, where Docker is Commitarium's, the BuildKit cache unused for
+//! a week goes too. On this computer it is left alone: Docker cannot tell
+//! Commitarium's build cache from the user's other builds. When a server's
+//! disk runs low, everything that can be rebuilt goes at once. Every failure
+//! is logged and otherwise ignored.
 
 use std::collections::HashSet;
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 
 use crate::{agents, docker, environment};
 
@@ -33,6 +43,20 @@ const ENVIRONMENT_REPOSITORIES: &[&str] = &[
     "commitarium-codex-environment",
     "commitarium-claude-environment",
 ];
+/// Compose names preview, check and deployment images after their project.
+const PREVIEW_IMAGES: &str = "commitarium-preview-*";
+/// How long an unused preview image is kept, so a preview opened again soon
+/// starts without a rebuild.
+const PREVIEW_IMAGE_KEEP: &str = "48h";
+/// How long a server keeps build cache nothing has used.
+const BUILD_CACHE_KEEP: &str = "168h";
+/// How often the host tidies up on its own.
+const TIDY_EVERY: Duration = Duration::from_secs(6 * 60 * 60);
+/// How often a server checks its disk.
+const CHECK_DISK_EVERY: Duration = Duration::from_secs(30 * 60);
+/// Below this much free, or this share, a server's disk is low.
+const LOW_DISK_BYTES: u64 = 5 * 1024 * 1024 * 1024;
+const LOW_DISK_PERCENT: u64 = 10;
 const COMPOSE_PROJECT_LABEL: &str = "com.docker.compose.project";
 const COMPOSE_VOLUME_LABEL: &str = "com.docker.compose.volume";
 const NONE: &str = "<none>";
@@ -70,20 +94,77 @@ struct Removal {
     reason: &'static str,
 }
 
+/// How thorough a cleanup is.
+#[derive(Clone, Copy, Default)]
+struct Sweep {
+    /// Docker is Commitarium's alone, as on a server: prune the BuildKit
+    /// cache, and remove the images of projects the coordinator does not
+    /// have. On this computer another Commitarium may share Docker.
+    build_cache: bool,
+    /// The disk is low: unused preview images and build cache go however
+    /// recent.
+    low_disk: bool,
+}
+
+static RUNNING: AtomicBool = AtomicBool::new(false);
+
 /// Run a cleanup in the background, at most one at a time. Safe to call
 /// whenever Commitarium may have replaced an image.
 pub(crate) fn spawn() {
-    static RUNNING: AtomicBool = AtomicBool::new(false);
     if RUNNING.swap(true, Ordering::AcqRel) {
         return;
     }
     std::thread::spawn(|| {
-        run();
+        run(Sweep::default());
         RUNNING.store(false, Ordering::Release);
     });
 }
 
-fn run() {
+/// Tidy up every few hours for as long as the host runs. A server, whose
+/// disk is Commitarium's to look after, also prunes build cache, and checks
+/// its disk where `data_dir` lives more often, clearing all it can rebuild
+/// when it runs low.
+pub fn keep_tidy(data_dir: &Path, server: bool) {
+    let data_dir = data_dir.to_path_buf();
+    std::thread::spawn(move || {
+        let mut last: Option<Instant> = None;
+        loop {
+            std::thread::sleep(if server { CHECK_DISK_EVERY } else { TIDY_EVERY });
+            let low_disk = server && disk_low(&data_dir);
+            let due = last.is_none_or(|last| last.elapsed() >= TIDY_EVERY);
+            if !(low_disk || due) || RUNNING.swap(true, Ordering::AcqRel) {
+                continue;
+            }
+            if low_disk {
+                eprintln!("[cleanup] the disk is low: clearing all that can be rebuilt");
+            }
+            run(Sweep {
+                build_cache: server,
+                low_disk,
+            });
+            RUNNING.store(false, Ordering::Release);
+            last = Some(Instant::now());
+            if low_disk && disk_low(&data_dir) {
+                eprintln!("[cleanup] the disk is still low after cleaning up");
+            }
+        }
+    });
+}
+
+/// Whether the disk holding `dir` has under 5 GB or a tenth free.
+pub(crate) fn disk_low(dir: &Path) -> bool {
+    let (Ok(available), Ok(total)) = (fs2::available_space(dir), fs2::total_space(dir)) else {
+        return false;
+    };
+    low(available, total)
+}
+
+fn low(available: u64, total: u64) -> bool {
+    available < LOW_DISK_BYTES
+        || available.saturating_mul(100) < total.saturating_mul(LOW_DISK_PERCENT)
+}
+
+fn run(sweep: Sweep) {
     // Environment derivatives are tagged before the overlay selects them;
     // waiting for the builds keeps a new one from looking unused.
     let _images = environment::environment_images_lock();
@@ -95,6 +176,14 @@ fn run() {
         }
         Err(error) => eprintln!("[cleanup] images: {error}"),
     }
+    match plan_preview_images(sweep.low_disk, sweep.build_cache) {
+        Ok(removals) => {
+            for removal in removals {
+                remove("image", &removal);
+            }
+        }
+        Err(error) => eprintln!("[cleanup] preview images: {error}"),
+    }
     match plan_volumes() {
         Ok(removals) => {
             for removal in removals {
@@ -102,6 +191,124 @@ fn run() {
             }
         }
         Err(error) => eprintln!("[cleanup] volumes: {error}"),
+    }
+    if sweep.build_cache {
+        prune_build_cache(sweep.low_disk);
+    }
+}
+
+/// Unused preview, check and deployment images built over two days ago, any
+/// unused one when the disk is low, and on a server at once those of a
+/// project that was deleted. A deployment's image stays while its container exists, running
+/// or stopped.
+fn plan_preview_images(low_disk: bool, own_docker: bool) -> Result<Vec<Removal>, String> {
+    let list = |until: Option<&str>| -> Result<Vec<ImageRow>, String> {
+        let reference = format!("reference={PREVIEW_IMAGES}");
+        let mut args = vec!["image", "ls", "--no-trunc", "--filter", &reference];
+        let until = until.map(|until| format!("until={until}"));
+        if let Some(until) = &until {
+            args.extend(["--filter", until]);
+        }
+        args.extend(["--format", "{{.ID}}\t{{.Repository}}\t{{.Tag}}\t{{.Size}}"]);
+        Ok(parse_images(&docker_output(&args)?))
+    };
+    let images = list(None)?;
+    let old: HashSet<String> = if low_disk {
+        images.iter().map(|image| image.id.clone()).collect()
+    } else {
+        list(Some(PREVIEW_IMAGE_KEEP))?
+            .into_iter()
+            .map(|image| image.id)
+            .collect()
+    };
+    Ok(select_preview_images(
+        &images,
+        &old,
+        &used_images()?,
+        own_docker.then(projects).flatten().as_ref(),
+        low_disk,
+    ))
+}
+
+/// The projects the coordinator has, or `None` when it does not answer: then
+/// no image counts as a deleted project's.
+fn projects() -> Option<HashSet<String>> {
+    #[derive(serde::Deserialize)]
+    struct Project {
+        id: String,
+    }
+    let projects = crate::runtime::block_on(async {
+        reqwest::Client::new()
+            .get(crate::preview::coordinator_url("/api/v1/projects"))
+            .timeout(Duration::from_secs(10))
+            .send()
+            .await
+            .ok()?
+            .error_for_status()
+            .ok()?
+            .json::<Vec<Project>>()
+            .await
+            .ok()
+    })?;
+    Some(projects.into_iter().map(|project| project.id).collect())
+}
+
+/// The project an image was built for: its Compose project, and so its
+/// repository, starts `commitarium-preview-<project>-`.
+fn image_project(repository: &str) -> Option<&str> {
+    repository
+        .strip_prefix(crate::preview::PREVIEW_TEMP_PREFIX)?
+        .split('-')
+        .next()
+        .filter(|project| !project.is_empty())
+}
+
+fn select_preview_images(
+    images: &[ImageRow],
+    old: &HashSet<String>,
+    used: &HashSet<String>,
+    projects: Option<&HashSet<String>>,
+    low_disk: bool,
+) -> Vec<Removal> {
+    images
+        .iter()
+        .filter(|image| !used.contains(&image.id) && image.tag != NONE)
+        .filter_map(|image| {
+            let project = image_project(&image.repository)?;
+            let reason = if projects.is_some_and(|projects| !projects.contains(project)) {
+                "an image of a deleted project"
+            } else if low_disk {
+                "a preview image, while the disk is low"
+            } else if old.contains(&image.id) {
+                "a preview image unused for two days"
+            } else {
+                return None;
+            };
+            Some(Removal {
+                reference: format!("{}:{}", image.repository, image.tag),
+                size: image.size.clone(),
+                reason,
+            })
+        })
+        .collect()
+}
+
+/// Prune BuildKit's cache nothing has used for a week, or all of it.
+fn prune_build_cache(all: bool) {
+    let until = format!("until={BUILD_CACHE_KEEP}");
+    let mut args = vec!["builder", "prune", "--force"];
+    if all {
+        args.push("--all");
+    } else {
+        args.extend(["--filter", &until]);
+    }
+    match docker_output(&args) {
+        Ok(output) => {
+            if let Some(total) = output.lines().find(|line| line.starts_with("Total")) {
+                eprintln!("[cleanup] build cache: {total}");
+            }
+        }
+        Err(error) => eprintln!("[cleanup] build cache: {error}"),
     }
 }
 
@@ -366,6 +573,71 @@ fn removed_agent_volume(volume: &str, agents: &[String]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unused_preview_images_go_and_used_or_others_stay() {
+        let images = [
+            tagged("a", "commitarium-preview-prj_1-web:latest"),
+            tagged("b", "commitarium-preview-prj_1-check-api:latest"),
+            // A deployment's, its container stopped but kept.
+            tagged("c", "commitarium-preview-prj_1-live-web:latest"),
+            tagged("d", "someone-preview-web:latest"),
+            untagged("e", None, false),
+        ];
+        let used = HashSet::from(["c".to_string()]);
+        let old = HashSet::from(["a", "b", "c", "d", "e"].map(String::from));
+        let projects = HashSet::from(["prj_1".to_string()]);
+        assert_eq!(
+            references(&select_preview_images(
+                &images,
+                &old,
+                &used,
+                Some(&projects),
+                false
+            )),
+            [
+                "commitarium-preview-prj_1-web:latest",
+                "commitarium-preview-prj_1-check-api:latest"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_deleted_projects_images_go_at_once_and_recent_ones_stay() {
+        let images = [
+            tagged("a", "commitarium-preview-prj_1-web:latest"),
+            tagged("b", "commitarium-preview-prj_gone-web:latest"),
+            tagged("c", "commitarium-preview-prj_gone-live-web:latest"),
+        ];
+        let used = HashSet::from(["c".to_string()]);
+        let projects = HashSet::from(["prj_1".to_string()]);
+        let none = HashSet::new();
+        assert_eq!(
+            references(&select_preview_images(
+                &images,
+                &none,
+                &used,
+                Some(&projects),
+                false
+            )),
+            ["commitarium-preview-prj_gone-web:latest"]
+        );
+        // A coordinator that does not answer deletes nothing on its word.
+        assert!(select_preview_images(&images, &none, &used, None, false).is_empty());
+        assert_eq!(
+            references(&select_preview_images(&images, &none, &used, None, true)).len(),
+            2
+        );
+    }
+
+    #[test]
+    fn a_disk_is_low_under_five_gigabytes_or_a_tenth_free() {
+        const GB: u64 = 1024 * 1024 * 1024;
+        assert!(!low(27 * GB, 38 * GB));
+        assert!(low(4 * GB, 38 * GB));
+        assert!(low(9 * GB, 100 * GB));
+        assert!(!low(11 * GB, 100 * GB));
+    }
 
     fn tagged(id: &str, reference: &str) -> ImageRow {
         let (repository, tag) = reference.rsplit_once(':').unwrap();
