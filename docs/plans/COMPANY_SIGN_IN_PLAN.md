@@ -1,7 +1,7 @@
 # Company Sign-in: Implementation Plan (0.11.0)
 
-**Status:** shape agreed with the user 2026-11-03; being built as stacked PRs
-for the user to review. Builds on [PUBLISHING_PLAN.md](PUBLISHING_PLAN.md).
+**Status:** shape agreed with the user 2026-11-03. C1 to C3 built as stacked
+PRs for the user to review; C4 waits on a decision (below), C5 after it. Builds on [PUBLISHING_PLAN.md](PUBLISHING_PLAN.md).
 
 A deployed app on a server can be opened by anyone, or only with a password.
 Company sign-in adds a third choice: people sign in with their company
@@ -103,6 +103,17 @@ account, and each app chooses which groups may open it.
 - C5 authentik: passwords, two-factor, passkeys and a full admin page, at
   about 1.5 to 2 GB of memory; offered with that said plainly.
 - Either one's data goes into the server's backups.
+
+### Found while building (2026-11-03)
+
+Pocket ID (v1.16) cannot be set up unattended: there is no API key to set in
+advance, and its first admin registers with a passkey in a browser. So
+Commitarium can start it at `id.<domain>`, but the user must open it once to
+create the admin and the OIDC client (or an API key Commitarium then uses).
+To decide with the user: Commitarium starts it and Mayka walks them through
+those two screens, or Commitarium asks for an API key after the admin is
+made and creates the client itself. authentik can be set up unattended (its
+bootstrap token and blueprints), at its memory cost.
 
 ## Decisions to check
 
