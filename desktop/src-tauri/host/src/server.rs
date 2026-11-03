@@ -135,6 +135,7 @@ impl Shared {
     /// A backup or restore stops the stack, and deployed apps with it: they
     /// start again from what was deployed, as when the host starts.
     fn backed_up<T>(&self, result: Result<T, String>) -> Result<T, String> {
+        #[cfg(unix)]
         self.restore_deployments();
         result
     }

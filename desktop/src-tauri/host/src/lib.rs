@@ -26,6 +26,6 @@ pub mod profiles;
 pub mod publishing;
 pub mod runtime;
 pub mod server;
-#[cfg(unix)]
 pub mod server_backups;
+#[cfg(unix)]
 pub mod service;

@@ -129,3 +129,23 @@ jobs:
       - name: Test native application
         working-directory: desktop/src-tauri
         run: cargo test --locked --workspace
+
+  windows-host:
+    # The host's server code is Unix-only behind cfg(unix); a module outside
+    # its gate builds everywhere but Windows, which only the release builds.
+    name: Windows host check
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri -> target
+
+      - name: Check the host on Windows
+        working-directory: desktop/src-tauri
+        run: cargo check --package commitarium-host --locked
