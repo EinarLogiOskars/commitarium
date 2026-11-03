@@ -328,6 +328,8 @@ function Address({
   const [access, setAccess] = useState<Access>(published?.access ?? "private");
   const [password, setPassword] = useState("");
   const [changing, setChanging] = useState(false);
+  const [renaming, setRenaming] = useState(false);
+  const [newName, setNewName] = useState("");
   const [changed, setChanged] = useState(false);
   const [shownPassword, setShownPassword] = useState<string | null | undefined>(undefined);
   const empty = password === "";
@@ -397,6 +399,48 @@ function Address({
             )}
           </p>
         )}
+        {renaming && (
+          <div className="deploy-address">
+            <label className="muted">
+              New address
+              <span className="deploy-address__name">
+                <input
+                  autoFocus
+                  value={newName}
+                  autoCapitalize="off"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  onChange={(e) => setNewName(e.target.value)}
+                />
+                <span className="muted">.{domain}</span>
+              </span>
+            </label>
+            {newName.trim() && newName.trim().toLowerCase() !== published.name && (
+              <p className="sync-card__error">
+                {published.url.replace("https://", "")} stops working once you change it. Anyone
+                with the old link needs the new one.
+              </p>
+            )}
+            <div className="row deploy-actions">
+              <button
+                disabled={
+                  busy || !newName.trim() || newName.trim().toLowerCase() === published.name
+                }
+                onClick={() =>
+                  void act(async () => {
+                    await publishApp(projectId, newName, published.access);
+                    setRenaming(false);
+                  })
+                }
+              >
+                Change it
+              </button>
+              <button className="ghost" onClick={() => setRenaming(false)}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
         {changing && (
           <div className="row deploy-actions">
             <input
@@ -443,6 +487,18 @@ function Address({
               }
             >
               {shownPassword === undefined ? "Show password" : "Hide password"}
+            </button>
+          )}
+          {!renaming && (
+            <button
+              className="shell-card__link"
+              disabled={busy}
+              onClick={() => {
+                setNewName(published.name);
+                setRenaming(true);
+              }}
+            >
+              Change address
             </button>
           )}
           <button
