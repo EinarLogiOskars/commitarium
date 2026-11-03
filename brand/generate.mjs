@@ -10,10 +10,11 @@ const B=p([[cx+r,0],[cx+r/2,r],[cx-r/2,r],[cx-r,0],[cx-r/2,-r],[cx+r/2,-r]]);
 const pal={light:{c:'#171717',b:'#0070f3'},dark:{c:'#ededed',b:'#3b8eff'}};
 const css=t=>`.c{fill:${pal[t].c}}.b{fill:${pal[t].b}}`;
 const shapes=`<polygon class="c" points="${C}"/><polygon class="b" points="${B}"/>`;
-const VB='-215 -215 430 430';
+const VB='-215 -215 430 430'; // square, with room around the mark (favicon)
+const TIGHT=`${-2*100} ${(-2*h).toFixed(2)} ${(cx+r+2)*100} ${(4*h).toFixed(2)}`; // just the mark, for beside the name
 const svg=(style,body,vb=VB)=>`<svg xmlns="http://www.w3.org/2000/svg" viewBox="${vb}"><title>Commitarium</title><style>${style}</style>${body}</svg>\n`;
-fs.writeFileSync('commitarium-mark.svg',svg(css('light'),shapes));
-fs.writeFileSync('commitarium-mark-dark.svg',svg(css('dark'),shapes));
+fs.writeFileSync('commitarium-mark.svg',svg(css('light'),shapes,TIGHT));
+fs.writeFileSync('commitarium-mark-dark.svg',svg(css('dark'),shapes,TIGHT));
 fs.writeFileSync('favicon.svg',svg(css('light')+`@media (prefers-color-scheme:dark){${css('dark')}}`,shapes));
 const sc=1024*0.62/400;
 const icon=t=>{const bg=t==='dark'?'#0a0a0a':'#ffffff',ed=t==='dark'?'#262626':'#e5e5e5';
