@@ -1,6 +1,6 @@
 # Server Mode, Complete: Implementation Plan (0.10.0)
 
-**Status:** agreed 2026-11-02. S1 built and tested on a server except restore; S2 next. Finishes what
+**Status:** agreed 2026-11-02. S1 built and tested on a server except restore; S2 reworked into a linked repository the user pulls from and pushes to, after the push mirror proved able to overwrite the remote; S3 next. Finishes what
 [REMOTE_HOST_PLAN.md](REMOTE_HOST_PLAN.md) left for after its milestone, so a
 server can be the only place a user's work lives. Released together as 0.10.0;
 company sign-in follows as 0.11.0.
@@ -13,7 +13,7 @@ backups, importing a folder, syncing with a local folder, and the audit viewer.
 | Step | What | Done when |
 |---|---|---|
 | S1 | Backups on a server | A server backs itself up, keeps a few, and restores one |
-| S2 | Code to a git remote | A project on a server keeps a GitHub (or other) copy up to date |
+| S2 | A linked repository | A project on a server pulls from and pushes to a GitHub (or other) repository, never forced |
 | S3 | Import by repository URL | A server imports a project from a git URL |
 | S4 | The audit viewer on a server | It opens from a paired device |
 | S5 | A warning before an app's address changes | Changing it says the old address stops working |
@@ -34,16 +34,29 @@ backups, importing a folder, syncing with a local folder, and the audit viewer.
   later steps. Settings says plainly that backups on the server do not survive
   losing the server.
 
-## S2: Code to a git remote
+## S2: A linked repository
 
-- Forgejo pushes the project's repository to the remote itself, through a
-  **push mirror**: on every push, and on an interval. The coordinator sets it
-  up through Forgejo's API, with the remote's URL and an access token the
-  user creates for that repository. The token stays in Forgejo.
-- This works the same on this computer, and doubles as an off-server copy of
-  the code.
-- The Sync card on a server shows the mirror: its remote, last push, and any
-  error, with Set up and Remove.
+- A project links to one repository on GitHub or another git host, with an
+  access token the user creates for it. The coordinator keeps the link and
+  the token in its credentials volume, out of agents' reach and out of
+  backups. A public repository links without a token but can then only bring
+  commits in.
+- Both ways are the user's to start; nothing syncs on its own, so the card
+  shows no ahead/behind count, only Pull and Push.
+- **Pull.** The coordinator fetches both sides. The linked repository's new
+  commits land on the project branch `linked/<branch>`. When main has none
+  of its own, main fast-forwards to them through a pull request the merge
+  gate approves, since main takes no push. When it has, the app asks Mayka
+  to merge `linked/<branch>` in a work order, which handles any conflict.
+- **Push.** Main goes to a branch the user names there (offered: the last
+  one, at first `commitarium`), never to the main branch itself and never
+  forced: the branch is made or moved forward. The push form reminds the user
+  that it is a branch of its own, to merge into main there, and the app then
+  offers the host's page to open that pull request.
+- The first version used Forgejo's push mirror, which force-pushes and so
+  could erase commits made on the remote; a later one compared the sides and
+  could sync on its own. Divergence is the user's call (as in two-way sync on
+  this computer): nothing is overwritten.
 
 ## S3: Import by repository URL
 

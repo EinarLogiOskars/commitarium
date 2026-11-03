@@ -1,4 +1,4 @@
-import { NotOnAServer } from "./NotOnAServer";
+import { GitRemote } from "./GitRemote";
 import { connectedServer } from "../connection";
 import { useCallback, useEffect, useState } from "react";
 import {
@@ -1000,6 +1000,12 @@ function upstreamHint(
 }
 
 export function ProjectSyncCard(props: React.ComponentProps<typeof ProjectSyncCardOnThisComputer>) {
-  if (connectedServer()) return <NotOnAServer what="Syncing with a local folder" />;
+  if (connectedServer())
+    return (
+      <section className="deploy-page">
+        <h2>Linked repository</h2>
+        <GitRemote projectId={props.projectId} />
+      </section>
+    );
   return <ProjectSyncCardOnThisComputer {...props} />;
 }

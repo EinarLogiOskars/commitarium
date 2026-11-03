@@ -25,6 +25,7 @@ import (
 	"github.com/EinarLogiOskars/commitarium/internal/gitworkspace"
 	"github.com/EinarLogiOskars/commitarium/internal/httpapi"
 	"github.com/EinarLogiOskars/commitarium/internal/install"
+	"github.com/EinarLogiOskars/commitarium/internal/linkedrepo"
 	"github.com/EinarLogiOskars/commitarium/internal/marketplace"
 	"github.com/EinarLogiOskars/commitarium/internal/modelcatalog"
 	"github.com/EinarLogiOskars/commitarium/internal/modelguide"
@@ -737,8 +738,22 @@ func run(ctx context.Context, coordinatorConfig config) error {
 		go assistantWatcher.Run(ctx)
 	}
 
+	// A linked repository on GitHub or another git host, which the user
+	// pulls from and pushes to (S2).
+	linkedRepositories, err := linkedrepo.NewService(linkedrepo.Config{
+		CredentialsRoot: coordinatorConfig.credentialsRoot,
+		ForgejoURL:      coordinatorConfig.forgejoURL, ForgejoTokenFile: coordinatorConfig.forgejoTokenFile,
+		Projects: projectService, Landing: forgejoClient,
+	})
+	if err != nil {
+		return fmt.Errorf("configure linked repositories: %w", err)
+	}
+	routes := http.NewServeMux()
+	routes.Handle("/", handler)
+	httpapi.RegisterLinkedRepositoryRoutes(routes, linkedRepositories)
+
 	log.Print("Listening...")
-	if err := http.ListenAndServe(":8080", handler); err != nil {
+	if err := http.ListenAndServe(":8080", routes); err != nil {
 		return fmt.Errorf("serve coordinator API: %w", err)
 	}
 

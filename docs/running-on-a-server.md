@@ -64,8 +64,22 @@ A server backs itself up each night while no agent is working, and keeps the
 last seven, in `backups/` in its data directory: projects, chats, agents'
 history and deployed apps' data. Settings > Backup lists them, makes one now,
 and restores one. They stay on the server, so they do not survive losing it;
-a git remote (Sync) keeps a copy of the code elsewhere. Agent sign-ins and
+a linked repository keeps a copy of the code elsewhere. Agent sign-ins and
 device keys are not in a backup.
+
+## A linked repository
+
+On a server, a project's code lives in that server's Forgejo. Link it to a
+repository on GitHub or another git host to keep a copy elsewhere and work
+on it from both places. On the project's Linked repository card, give the
+repository's https address and an access token that can read and push to
+it; the token stays on the server. A public repository can be linked without
+a token, but then only pulls.
+
+**Pull** brings the commits made there into main. When main has commits of
+its own, Mayka merges the two in a work order. **Push** sends main to a branch
+you name there, never to its main, and offers to open a pull request from it:
+merge that to get your work all the way to main there. Nothing is ever forced, and nothing syncs until you ask.
 
 ## Reaching the server
 
