@@ -12,7 +12,7 @@ This page gets Commitarium onto your computer and running.
 - **Docker.** Commitarium runs everything in containers on your machine.
   - macOS and Windows: [Docker Desktop](https://www.docker.com/products/docker-desktop/), which includes Docker Compose. On Windows, use its WSL 2 backend.
   - Linux: Docker Engine with the Compose v2 plugin (the `docker compose` command).
-- **An AI account.** A Claude or Codex subscription, or an API key for either. Both providers is best, so the agent that reviews comes from a different provider than the one that builds.
+- **An AI account.** A Claude or Codex subscription, or an API key for either. Both providers is best, so the agent that reviews can come from a different provider than the one that builds; either can do either job.
 - **Git.** On macOS, the first use asks you to install Apple's Command Line Tools. Say yes.
 - **Enough disk** for Docker's images, your projects and their tools. Commitarium shows free space in Settings.
 
