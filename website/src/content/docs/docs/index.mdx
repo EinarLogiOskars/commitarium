@@ -1,19 +1,29 @@
 ---
 title: Commitarium docs
-description: Everything Commitarium does, from your first app to running apps for a company.
+description: Everything Commitarium does, for people making apps and for developers working on their own code.
 ---
 
 import { CardGrid, LinkCard } from "@astrojs/starlight/components";
 
-Commitarium turns a sentence into a working app, runs it for you, and changes it whenever you ask. These pages explain how to use it, one thing per page.
+Commitarium is two things in one app, and you can use either or both:
+
+- **Apps, for anyone.** Describe an app in a sentence. Mayka, the assistant, plans it, has coding agents build it, and opens it on your computer. Ask for changes the same way. No code needed.
+- **A workshop, for developers.** Bring your own repository. Mayka turns what you want into planned work orders; a lead agent builds each one and a reviewer agent, ideally from another provider, challenges every plan and every change before it merges. Every change is a pull request in a private Git server on your machine, and you decide how much runs on its own.
+
+<CardGrid>
+  <LinkCard title="Make an app by describing it" href="/docs/get-started/first-app/" description="Install, connect your AI, and describe what you need." />
+  <LinkCard title="Work on your own code" href="/docs/get-started/first-project/" description="Developer mode, your repository, and your first work order." />
+</CardGrid>
 
 New here? Start with [What Commitarium is](/docs/get-started/what-is-commitarium/), then [Install](/docs/get-started/install/).
 
+## Everything in the docs
+
 <CardGrid>
-  <LinkCard title="Get started" href="/docs/get-started/what-is-commitarium/" description="Install it, connect your AI, and make your first app." />
-  <LinkCard title="Apps" href="/docs/apps/asking-for-changes/" description="Change your apps, and see how they are built." />
-  <LinkCard title="Developer mode" href="/docs/developer-mode/turning-it-on/" description="The workshop behind the apps: chats, cards and work orders." />
+  <LinkCard title="Get started" href="/docs/get-started/what-is-commitarium/" description="Install it, connect your AI, and make your first app or project." />
+  <LinkCard title="Developer mode" href="/docs/developer-mode/turning-it-on/" description="The workshop: chats, cards, work orders, plan mode and project settings." />
   <LinkCard title="Your own code" href="/docs/your-own-code/importing/" description="Bring in a project you already have, and keep it in sync." />
+  <LinkCard title="Apps" href="/docs/apps/asking-for-changes/" description="Change your apps, and see how they are built." />
   <LinkCard title="Servers" href="/docs/servers/why-a-server/" description="Run Commitarium on a server that keeps working while your computer is off." />
   <LinkCard title="Putting apps online" href="/docs/online/your-domain/" description="Give an app its own address on the internet." />
   <LinkCard title="Company sign-in" href="/docs/company-sign-in/overview/" description="Let people open apps with their work accounts." />

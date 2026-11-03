@@ -1,6 +1,6 @@
 ---
 title: What Commitarium is
-description: An app that turns a sentence into a working app, using the AI accounts you already have.
+description: Apps from a sentence for anyone, and an agent workshop for developers, using the AI accounts you already have.
 sidebar:
   order: 1
 ---
@@ -13,20 +13,36 @@ This page explains what Commitarium does for you, and what it needs.
 A short video for this section is coming.
 :::
 
-## In one sentence
+## Two ways to use it
+
+### Apps, for anyone
 
 Describe any app. Commitarium builds it, runs it, and changes it whenever you want.
 
-You tell Commitarium what you need, in plain words. Its assistant, **Mayka**, plans the app, hands the work to coding agents, checks what they make, and opens the finished app on your computer. Want it different? Ask, and it changes.
+You tell Commitarium what you need, in plain words. Its assistant, **Mayka**, plans the app, hands the work to coding agents, checks what they make, and opens the finished app on your computer. Want it different? Ask, and it changes. No code needed. Start with [Your first app](/docs/get-started/first-app/).
 
 <Screenshot id="apps" alt="The Apps area in Commitarium, with app tiles and the New app button" />
 
+### A workshop, for developers
+
+Behind the apps is a full software workshop, and you can point it at your own code. Turn on **Developer mode**, bring in a repository, and work with Mayka the way you would with a small team:
+
+- **Planned work orders.** Mayka turns what you want into work orders, each planned, built, reviewed and merged on its own. Several run side by side. For something bigger, [plan mode](/docs/developer-mode/plan-mode/) writes a plan in commit-sized slices first.
+- **Independent review.** A lead agent builds; a reviewer, ideally from another provider (Claude and Codex), challenges the plan and the code. No model signs off on its own work.
+- **Real pull requests.** Every change is a pull request in a private Git server (Forgejo) on your machine, with the whole discussion kept as an audit trail. Nothing reaches your own repository until you [sync it](/docs/your-own-code/syncing/).
+- **As much control as you want.** Approve each plan and merge yourself, or let Mayka [build everything](/docs/apps/assists-or-builds/) and only ask when a decision needs you. Choose the [models and efforts](/docs/get-started/agents/) per phase.
+- **Your own server, if you like.** Agents keep working while your laptop is closed, and a server can [link to GitHub](/docs/your-own-code/syncing/) and [put apps online](/docs/online/your-domain/).
+
+Start with [Your first project](/docs/get-started/first-project/).
+
+<Screenshot id="dev-chat" alt="Developer mode: projects and chats on the left, the chat with Mayka in the middle, and cards for the plan, work orders and agents on the right" />
+
 ## What makes it different
 
-- **No coding needed.** You talk to one assistant. She takes care of the plan, the code, the setup, and the fixes when something breaks.
-- **Yours, on your machines.** Your apps and their data stay on your computer, or on a server of your own that keeps working while your computer is off.
 - **Uses the AI you already have.** You sign in with your Claude or Codex account. Commitarium keeps an eye on your usage limits and spreads the work to fit.
-- **Checked, not just generated.** A second agent, ideally from another AI provider, reviews every plan and every change before it lands.
+- **Checked, not just generated.** A second agent reviews every plan and every change before it lands.
+- **Yours, on your machines.** Your code, your apps and their data stay on your computer, or on a server of your own.
+- **Recovers on its own.** Interrupted work retries, and a failure pauses a work order instead of ending it. When Mayka can't fix something, she tells you in plain words.
 
 ## Words you will see
 
@@ -34,7 +50,7 @@ You tell Commitarium what you need, in plain words. Its assistant, **Mayka**, pl
 - An **agent** is one of your AI accounts (Claude or Codex) that does the coding.
 - An **app** is something Commitarium built for you. It opens in its own window.
 - A **work order** is one piece of work: one change or one feature, planned, built, reviewed and merged.
-- **Developer mode** shows the workshop behind your apps: projects, chats, work orders and the code's history. You don't need it to make apps.
+- **Developer mode** shows the workshop: projects, chats, work orders and the code's history. You need it to work on your own code, not to make apps.
 
 ## Where it runs
 
@@ -47,4 +63,4 @@ Commitarium is local-first, but not offline. When an agent works, the AI provide
 - A computer with macOS, Windows or Linux, and Docker.
 - A Claude or Codex account. Both is best: one builds, the other reviews.
 
-Next: [Install Commitarium](/docs/get-started/install/).
+Next: [Install Commitarium](/docs/get-started/install/), then [your first app](/docs/get-started/first-app/) or [your first project](/docs/get-started/first-project/).

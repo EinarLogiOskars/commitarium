@@ -12,7 +12,7 @@ export default defineConfig({
     starlight({
       title: "Commitarium",
       description:
-        "Describe any app. Commitarium builds it, runs it, and changes it whenever you want.",
+        "Describe any app and Commitarium builds it; or bring your code and work with a lead and a reviewer agent on every change.",
       social: [
         {
           icon: "github",
@@ -31,9 +31,9 @@ export default defineConfig({
       sidebar: [
         { label: "Overview", link: "/docs/" },
         section("Get started", "get-started"),
-        section("Apps", "apps"),
         section("Developer mode", "developer-mode"),
         section("Your own code", "your-own-code"),
+        section("Apps", "apps"),
         section("Servers", "servers"),
         section("Putting apps online", "online"),
         section("Company sign-in", "company-sign-in"),
