@@ -5307,6 +5307,50 @@ select:focus {
   border: none;
   display: block;
   background: #fff;
+  transition:
+    opacity 700ms ease,
+    transform 900ms cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+/* Loading underneath the waiting screen: it eases in once loaded. */
+.app-window__frame--loading {
+  opacity: 0;
+  transform: scale(0.985);
+}
+/* The waiting screen over the app, fading out once the app has loaded. */
+.app-window__cover {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  background: var(--bg);
+  transition: opacity 700ms ease;
+}
+.app-window__cover--leaving {
+  opacity: 0;
+  pointer-events: none;
+}
+/* While the app is still being built: how far along, in a corner. */
+.app-window__progress {
+  position: absolute;
+  left: 16px;
+  bottom: 16px;
+  z-index: 3;
+  max-width: min(360px, calc(100% - 32px));
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: var(--float-shadow);
+  font-size: var(--text-sm);
+}
+.app-window__progress .app-window__items {
+  margin: 4px 8px 6px;
+  text-align: left;
+}
+@media (prefers-reduced-motion: reduce) {
+  .app-window__frame,
+  .app-window__cover {
+    transition: none;
+  }
 }
 .app-window__state {
   height: 100%;

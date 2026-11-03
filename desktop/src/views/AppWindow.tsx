@@ -100,8 +100,8 @@ export function AppWindow({ projectId }: { projectId: string }) {
     return () => clearInterval(timer);
   }, [projectId, start, app, stopped]);
 
-  // While the app is still being built, the window says how far along it is
-  // instead of showing a preview that has nothing to run yet.
+  // While the app is still being built, the window says how far along it is:
+  // on the waiting screen, then in a corner over the app once it runs.
   const [conversation, setConversation] = useState<Conversation | null>(null);
   useEffect(() => {
     const look = () =>
@@ -115,6 +115,12 @@ export function AppWindow({ projectId }: { projectId: string }) {
   const launch = conversation?.launch?.stage;
   const goal = conversation?.goal?.status === "active" ? conversation.goal : null;
   const building = launch === "vision" || launch === "setup" || (launch === "building" && !!goal);
+
+  // The app comes in once its page has loaded: the waiting screen fades
+  // out over it, so it never blinks in, nor flashes white half-loaded.
+  const [loadedUrl, setLoadedUrl] = useState<string | null>(null);
+  const [faded, setFaded] = useState<string | null>(null);
+  const [showProgress, setShowProgress] = useState(false);
 
   const name = project?.name ?? "App";
   const agents = useAgents();
@@ -147,20 +153,15 @@ export function AppWindow({ projectId }: { projectId: string }) {
     }
   };
 
-  return (
-    <div className="app-window">
-      {url ? (
-        <iframe
-          key={url}
-          className="app-window__frame"
-          src={url}
-          title={name}
-          // Same-site with this page (ADR-029), so it may not navigate it
-          // away: everything but top navigation.
-          sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads allow-pointer-lock"
-          allow="clipboard-read; clipboard-write; fullscreen"
-        />
-      ) : (
+  const revealed = !!url && loadedUrl === url;
+  const nextItem = goal?.items.find((item) => !item.done);
+  // The waiting screen, over the app while it loads, then fading out.
+  const waiting =
+    url && faded === url ? null : (
+      <div
+        className={`app-window__cover ${revealed ? "app-window__cover--leaving" : ""}`}
+        onTransitionEnd={(e) => revealed && e.target === e.currentTarget && setFaded(url)}
+      >
         <div className="app-window__state">
           {/* While it is being made or started, not when it needs the user. */}
           {(building || !(status?.state === "failed" || error || stopped)) && <RippleField />}
@@ -233,6 +234,41 @@ export function AppWindow({ projectId }: { projectId: string }) {
             </>
           ) : (
             <p className="muted app-window__starting">Starting {name}…</p>
+          )}
+        </div>
+      </div>
+    );
+
+  return (
+    <div className="app-window">
+      {url && (
+        <iframe
+          key={url}
+          className={`app-window__frame ${loadedUrl === url ? "" : "app-window__frame--loading"}`}
+          src={url}
+          title={name}
+          onLoad={() => setLoadedUrl(url)}
+          // Same-site with this page (ADR-029), so it may not navigate it
+          // away: everything but top navigation.
+          sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads allow-pointer-lock"
+          allow="clipboard-read; clipboard-write; fullscreen"
+        />
+      )}
+      {waiting}
+      {revealed && building && goal && (
+        <div className="app-window__progress">
+          <button className="ghost" onClick={() => setShowProgress((was) => !was)}>
+            Building · {goal.items.filter((i) => i.done).length} of {goal.items.length}
+            {nextItem && <span className="muted"> · {nextItem.title}</span>}
+          </button>
+          {showProgress && (
+            <ul className="app-window__items">
+              {goal.items.map((item) => (
+                <li key={item.id} className={item.done ? "app-window__item--done" : ""}>
+                  {item.done ? "✓" : "·"} {item.title}
+                </li>
+              ))}
+            </ul>
           )}
         </div>
       )}
