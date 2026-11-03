@@ -27,7 +27,7 @@ Settings then shows authentik's **admin page**, its admin user (`akadmin`), and,
 
 ## Add people and groups
 
-Sign in to the admin page as `akadmin`. Add the people who should open your apps, and the groups you want, such as `gardeners`. Then, on an app's **Deployment** page, choose **Company sign-in** and **Choose groups**.
+Sign in to the admin page as `akadmin`. Add the people who should open your apps, and the groups you want, such as `gardeners`. Give every person an email address: without one, signing in fails. Then, on an app's **Deployment** page, choose **Company sign-in** and **Choose groups**.
 
 ## Backups
 
