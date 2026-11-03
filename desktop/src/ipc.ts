@@ -89,7 +89,7 @@ export interface Deployment {
   status: PreviewStatus | null;
 }
 
-export type Access = "private" | "public";
+export type Access = "private" | "public" | "company";
 
 export interface PublishedApp {
   project_id: string;
@@ -97,12 +97,33 @@ export interface PublishedApp {
   access: Access;
   url: string;
   live: boolean;
+  /** For company sign-in: the groups that may open it; none means anyone at the company. */
+  groups: string[];
+}
+
+/** The company's sign-in provider, as a server shows it: never its secret. */
+export interface SignInProvider {
+  issuer: string;
+  client_id: string;
+  scopes: string;
+  groups_claim: string;
+  /** The address to register with the provider; null until the domain is set. */
+  redirect_url: string | null;
+}
+
+export interface ConnectSignIn {
+  issuer: string;
+  client_id: string;
+  client_secret: string;
+  scopes?: string;
+  groups_claim?: string;
 }
 
 export interface PublishingOverview {
   domain: string | null;
   server_address: string | null;
   apps: PublishedApp[];
+  sign_in: SignInProvider | null;
 }
 
 export const deployments = (): Promise<Deployment[]> => hostGet("/v1/deployments");
@@ -137,6 +158,13 @@ export const revealAppPassword = (projectId: string): Promise<string | null> =>
   hostPost("/v1/publishing/reveal", { project_id: projectId });
 export const unpublishApp = (projectId: string): Promise<void> =>
   hostPost("/v1/publishing/unpublish", { project_id: projectId });
+/** The server checks the provider answers before keeping it. */
+export const connectSignIn = (provider: ConnectSignIn): Promise<SignInProvider> =>
+  hostPost("/v1/publishing/sign-in", provider);
+/** Refused while an app still uses company sign-in. */
+export const disconnectSignIn = (): Promise<void> => hostPost("/v1/publishing/sign-in/disconnect");
+export const setAppGroups = (projectId: string, groups: string[]): Promise<void> =>
+  hostPost("/v1/publishing/groups", { project_id: projectId, groups });
 
 // --- Remote mode (ADR-040) ---
 
