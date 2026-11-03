@@ -156,11 +156,44 @@ Made while the user was away; each is easy to change.
 - The scopes default to `openid email profile`; `groups` is added per
   provider by the guides, since Google refuses scopes it does not know.
 
-## Tests owed to the user
+## Tested, and owed to the user
 
-- C1 is tested end to end on a computer: `scripts/try-company-sign-in.sh`
-  runs Caddy with the host's config, the gate, a mock provider and an echo
-  app, and showed the redirect to sign in, the identity reaching the app (a
-  forged header replaced), a 403 page for another group, and anyone at the
-  company when the app lists no groups. Owed: a real provider (Google
-  Workspace or Entra ID) on the user's server, with a real certificate.
+Tested on a computer (Docker Desktop), 2026-11-03:
+
+- **The gate with a mock provider** (`scripts/try-company-sign-in.sh`):
+  redirect to sign in, identity reaching the app with a forged header
+  replaced, 403 for another group, anyone at the company with no groups.
+- **The gate with authentik set up by the host's own code**: signing in
+  through authentik's login flow as a browser does, the app receiving the
+  email, username and groups; 403 when the app lists a group the person is
+  not in. It found two bugs, both fixed: authentik marks every email
+  unverified (Commitarium's application now uses its own mapping), and the
+  try-out script split the gate's scopes.
+- **authentik's setup**: installed, set up, set up again reusing everything,
+  discovery naming the right issuer, removed, its data without its secrets
+  refused, nothing left behind.
+- **The gate's container**: started with its secrets off its command line,
+  left alone while nothing changes or while Docker restarts it for a
+  provider that does not answer yet (a bug, fixed), recreated when the
+  provider changes, removed with it.
+- Unit tests for the Caddy config, settings, groups, Mayka's focus; Go,
+  Rust (with the Windows check) and the frontend in CI.
+
+Owed to the user, on the server:
+
+1. Update the server to these builds (host and app).
+2. Settings → Server → Company sign-in shows, with the sign-in address.
+3. Connect a real provider (Google Workspace or Entra ID is the likeliest),
+   choose Company sign-in on a deployed app, sign in in a browser, and see
+   the app; try Choose groups with a group you are not in.
+4. Set it up with Mayka: the chip, her questions about the team, and her
+   steps for the provider.
+5. authentik on a server of 8 GB or more: Set up authentik, sign in to its
+   admin page, add a person and a group, open an app through it.
+6. A backup and restore with authentik set up: people and groups survive.
+7. Disconnect: refused while an app uses it, then the gate (and authentik)
+   gone.
+
+Notes: `X-Commitarium-User` is the provider's stable ID for the person
+(opaque in authentik); `X-Commitarium-Username` and `-Email` are the
+readable ones.
