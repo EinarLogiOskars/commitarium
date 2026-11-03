@@ -1,7 +1,7 @@
 # Company Sign-in: Implementation Plan (0.11.0)
 
-**Status:** shape agreed with the user 2026-11-03. C1 to C3 built as stacked
-PRs for the user to review; C4 waits on a decision (below), C5 after it. Builds on [PUBLISHING_PLAN.md](PUBLISHING_PLAN.md).
+**Status:** shape agreed with the user 2026-11-03. C1 to C4 built as stacked
+PRs for the user to review. Builds on [PUBLISHING_PLAN.md](PUBLISHING_PLAN.md).
 
 A deployed app on a server can be opened by anyone, or only with a password.
 Company sign-in adds a third choice: people sign in with their company
@@ -64,8 +64,7 @@ account, and each app chooses which groups may open it.
 | C1 | The gate | A company app on a server asks for company sign-in, checks groups, and passes who signed in to the app |
 | C2 | In the app | "Who can open it" offers Company sign-in; a card connects a provider and checks it first; an app chooses its groups |
 | C3 | Mayka sets it up | Mayka runs the flow as a conversation, with step-by-step guides for Entra ID, Google Workspace, Okta, authentik and Pocket ID |
-| C4 | A provider on the server | Commitarium installs Pocket ID and connects it, for a company without a provider |
-| C5 | authentik on the server | The same for authentik, with a warning about its memory |
+| C4 | authentik on the server | Commitarium installs authentik and connects it, for a company without a provider, saying its memory cost first |
 
 ## C1: The gate
 
@@ -107,14 +106,34 @@ account, and each app chooses which groups may open it.
 - Her standing deploy instructions name the identity headers, so she builds
   on them when asked who is signed in.
 
-## C4 and C5: A provider on the server
+## C4: authentik on the server
 
-- C4 Pocket ID: passkeys, light (under 100 MB of memory), people and groups
-  in its own small admin page. Commitarium runs it at `id.<domain>`, makes the
-  OIDC client for the gate, and connects it.
-- C5 authentik: passwords, two-factor, passkeys and a full admin page, at
-  about 1.5 to 2 GB of memory; offered with that said plainly.
-- Either one's data goes into the server's backups.
+- For a company without a provider that would rather not run one: Settings →
+  Server → Company sign-in, **Set up authentik**. Before anything is
+  installed it says what it costs: about 3 GB of memory for itself, so a
+  server of 8 GB or more, with the server's own memory beside it and a
+  warning under 8 GB. It points small teams at Pocket ID instead.
+- The host runs it as one Compose project (`commitarium-authentik`: server,
+  worker and Postgres 16, authentik 2026.2.7), on loopback port 9400, served
+  by Caddy at `auth.<domain>`. Its secrets are made once and reach it
+  through a private environment file; the bootstrap ones make its admin
+  (`akadmin`) and an API token on its first start.
+- With that token the host makes the OIDC provider and application the
+  gate signs in with (consent flow, signing key, openid/email/profile, which
+  carries groups), and connects it as the server's provider. Running it
+  again reuses all of it.
+- The app shows its admin page, its admin user and, on asking, its password.
+  Disconnecting stops it; its people and groups stay in its volumes, and its
+  secrets in `authentik.json`, so setting it up again finds them.
+- Backups carry `authentik.json` and its two volumes, paused while copied
+  like a deployed app's. Its data without its secrets is refused with a
+  plain message, not half-started.
+- Tested on a computer: installed, set up, set up again, its discovery
+  document named the right issuer, removed, and lost secrets refused. Owed:
+  signing in through it on the user's server.
+
+C5 (authentik) became C4: authentik is the one provider Commitarium sets up
+(the user's decision, 2026-11-03).
 
 ### Found while building (2026-11-03)
 
@@ -122,10 +141,9 @@ Pocket ID (v1.16) cannot be set up unattended: there is no API key to set in
 advance, and its first admin registers with a passkey in a browser. So
 Commitarium can start it at `id.<domain>`, but the user must open it once to
 create the admin and the OIDC client (or an API key Commitarium then uses).
-To decide with the user: Commitarium starts it and Mayka walks them through
-those two screens, or Commitarium asks for an API key after the admin is
-made and creates the client itself. authentik can be set up unattended (its
-bootstrap token and blueprints), at its memory cost.
+Decided: authentik is the one provider Commitarium sets up, since it can be
+set up unattended; Pocket ID is a provider a small team runs and connects,
+with Mayka's guidance.
 
 ## Decisions to check
 
@@ -138,11 +156,47 @@ Made while the user was away; each is easy to change.
 - The scopes default to `openid email profile`; `groups` is added per
   provider by the guides, since Google refuses scopes it does not know.
 
-## Tests owed to the user
+## Tested, and owed to the user
 
-- C1 is tested end to end on a computer: `scripts/try-company-sign-in.sh`
-  runs Caddy with the host's config, the gate, a mock provider and an echo
-  app, and showed the redirect to sign in, the identity reaching the app (a
-  forged header replaced), a 403 page for another group, and anyone at the
-  company when the app lists no groups. Owed: a real provider (Google
-  Workspace or Entra ID) on the user's server, with a real certificate.
+Tested on a computer (Docker Desktop), 2026-11-03:
+
+- **The gate with a mock provider** (`scripts/try-company-sign-in.sh`):
+  redirect to sign in, identity reaching the app with a forged header
+  replaced, 403 for another group, anyone at the company with no groups.
+- **The gate with authentik set up by the host's own code**: signing in
+  through authentik's login flow as a browser does, the app receiving the
+  email, username and groups; 403 when the app lists a group the person is
+  not in. It found two bugs, both fixed: authentik marks every email
+  unverified (Commitarium's application now uses its own mapping), and the
+  try-out script split the gate's scopes.
+- **authentik's setup**: installed, set up, set up again reusing everything,
+  discovery naming the right issuer, removed, its data without its secrets
+  refused, nothing left behind.
+- **The gate's container**: started with its secrets off its command line,
+  left alone while nothing changes or while Docker restarts it for a
+  provider that does not answer yet (a bug, fixed), recreated when the
+  provider changes, removed with it.
+- Unit tests for the Caddy config, settings, groups, Mayka's focus; Go,
+  Rust (with the Windows check) and the frontend in CI.
+
+Tested on a server (Hetzner CX43, 16 GB, a fresh Ubuntu 24.04 with the
+0.11.0-rc.1 host), 2026-11-03, by the user:
+
+- Settings → Server → Company sign-in with the sign-in address; authentik set
+  up from there (about 4 minutes) and its admin page at `auth.<domain>`.
+- The docs website, imported by URL and deployed, behind Company sign-in: a
+  signed-out visitor sent to sign in, a person in authentik let through.
+- Groups: a person outside the app's group gets the "other groups" page.
+- Disconnect refused while an app uses it; after the app went back to Anyone,
+  the gate and authentik gone and the app open again.
+- Found: a person with no email address gets the gate's bare 500 (the gate
+  needs an email). The docs and Mayka now say everyone needs one; a plain
+  page for it is a follow-up.
+
+Still owed: a backup and restore with authentik set up; connecting an outside
+provider (Google Workspace or Entra ID) live; Mayka's team questions in the
+rc.2 build (the Ask Mayka link from Settings is not in rc.1).
+
+Notes: `X-Commitarium-User` is the provider's stable ID for the person
+(opaque in authentik); `X-Commitarium-Username` and `-Email` are the
+readable ones.

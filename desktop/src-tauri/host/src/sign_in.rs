@@ -162,7 +162,7 @@ fn check_issuer(issuer: &str) -> Result<String, String> {
 }
 
 /// 32 random characters: oauth2-proxy takes a 32-byte secret as it is.
-fn new_cookie_secret() -> Result<String, String> {
+pub(crate) fn new_cookie_secret() -> Result<String, String> {
     const ALPHABET: &[u8] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
     let mut bytes = [0u8; 32];
     getrandom::fill(&mut bytes).map_err(|e| format!("make the cookie secret: {e}"))?;

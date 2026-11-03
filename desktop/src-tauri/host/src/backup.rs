@@ -682,8 +682,11 @@ const DEPLOYMENT_PREFIX: &str = "deployment--";
 /// The deployment volume a component names, if it is one.
 fn deployment_volume(name: &str) -> Option<String> {
     let volume = name.strip_prefix(DEPLOYMENT_PREFIX)?;
-    let valid = volume.starts_with(crate::preview::PREVIEW_TEMP_PREFIX)
-        && volume.contains("-live.")
+    // A deployed app's, or authentik's (company sign-in): data people saved.
+    let ours = (volume.starts_with(crate::preview::PREVIEW_TEMP_PREFIX)
+        && volume.contains("-live."))
+        || volume.starts_with(&format!("{}.", crate::authentik::PROJECT));
+    let valid = ours
         && volume.len() <= 200
         && volume
             .bytes()
@@ -875,6 +878,13 @@ mod tests {
             Some(volume)
         );
         assert_eq!(volume_project(volume), "commitarium-preview-prj_todo-live");
+        // authentik's database is backed up the same way.
+        let database = "commitarium-authentik.database";
+        assert_eq!(
+            deployment_volume(&format!("{DEPLOYMENT_PREFIX}{database}")).as_deref(),
+            Some(database)
+        );
+        assert_eq!(volume_project(database), crate::authentik::PROJECT);
         // Not a deployment's: a preview's, another project's, or unsafe.
         for name in [
             "commitarium-preview-prj_todo.api-data",

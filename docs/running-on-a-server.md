@@ -58,11 +58,39 @@ Commitarium gets a certificate for each address by itself. Ports 80 and 443
 must be open, as well as 7443. You can also ask Mayka to deploy; she asks you
 first.
 
+## Company sign-in
+
+Besides anyone or a password, an app can open with people's company
+accounts, and choose which groups may open it. It is set up once per server,
+in Settings > Server > Company sign-in, and nothing of it runs until then.
+**Set it up with Mayka**, from an app's Deployment page, walks you through it.
+
+- **Your company's provider.** Microsoft Entra ID, Google Workspace, Okta,
+  authentik, Keycloak, Pocket ID, or any other OpenID Connect provider. In
+  the provider, add an application for Commitarium with the sign-in address
+  Settings shows (`https://sign-in.<your domain>/oauth2/callback`), then give
+  Commitarium its issuer, client ID and secret. It checks the provider
+  answers before keeping it. With Google, make the consent screen Internal,
+  or any Google account could sign in.
+- **authentik on this server.** For a company without a provider,
+  **Set up authentik** runs authentik on the server at `auth.<your domain>`
+  and connects it; you add people and groups in its admin page. It needs
+  about 3 GB of memory for itself, so a server of 8 GB or more alongside
+  Commitarium and its apps. A small team may prefer Pocket ID, which is
+  lighter, run by yourselves and connected as above.
+
+On an app, **Choose groups** lists who may open it; with none, anyone at the
+company may. The app receives who signed in, in the `X-Commitarium-User`,
+`X-Commitarium-Email`, `X-Commitarium-Username` and `X-Commitarium-Groups`
+headers, which no visitor can forge. **Disconnect** is refused while an app
+still uses company sign-in; for authentik it stops it, and its people and
+groups stay for setting it up again.
+
 ## Backups
 
 A server backs itself up each night while no agent is working, and keeps the
 last seven, in `backups/` in its data directory: projects, chats, agents'
-history and deployed apps' data. Settings > Backup lists them, makes one now,
+history, deployed apps' data, and authentik's when it is set up. Settings > Backup lists them, makes one now,
 and restores one. They stay on the server, so they do not survive losing it;
 a linked repository keeps a copy of the code elsewhere. Agent sign-ins and
 device keys are not in a backup.

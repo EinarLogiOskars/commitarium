@@ -565,6 +565,16 @@ fn respond_to_post(path: &str, body: &[u8], shared: &Shared) -> Reply {
             shared.on_a_server()?;
             shared.publishing.connect_sign_in(asked)
         }),
+        "/v1/publishing/authentik/install" => respond_with(
+            shared
+                .on_a_server()
+                .and_then(|()| shared.publishing.install_authentik()),
+        ),
+        "/v1/publishing/authentik/password" => respond_with(
+            shared
+                .on_a_server()
+                .and_then(|()| shared.publishing.authentik_password()),
+        ),
         "/v1/publishing/sign-in/disconnect" => respond_with(
             shared
                 .on_a_server()

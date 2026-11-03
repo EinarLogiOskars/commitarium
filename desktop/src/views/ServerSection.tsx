@@ -1,8 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
 import { connectedServer } from "../connection";
 import {
+  authentikPassword,
   connectSignIn,
   disconnectSignIn,
+  installAuthentik,
+  openExternal,
   hostUpdate,
   hostVersion,
   installHostUpdate,
@@ -22,6 +25,7 @@ import {
 } from "../ipc";
 import { showPlace } from "./PlaceSwitch";
 import { ConnectForm } from "./StartChoice";
+import { startChatOn } from "../attention/askAssistant";
 
 /** This app's API version: raise it with `API_VERSION` in the host. */
 const API_VERSION = 1;
@@ -34,11 +38,11 @@ function versionProblem(api: number): string | null {
 }
 
 // The servers this device knows, and the shown one's state, in Settings.
-export function ServerSection({ running }: { running: boolean }) {
+export function ServerSection({ running, onLeave }: { running: boolean; onLeave?: () => void }) {
   const server = connectedServer();
   return (
     <>
-      {server && <ConnectedServer server={server} running={running} />}
+      {server && <ConnectedServer server={server} running={running} onLeave={onLeave} />}
       <Servers />
       <section className="set__section">
         <h3 className="set__heading">Connect a server</h3>
@@ -113,10 +117,12 @@ const NO_PROVIDER: ConnectSignIn = { issuer: "", client_id: "", client_secret: "
 
 // Company sign-in for deployed apps (COMPANY_SIGN_IN_PLAN.md): the company's
 // provider, connected once for the server. Nothing of it runs until then.
-function SignInSection() {
+function SignInSection({ onLeave }: { onLeave?: () => void }) {
   const [overview, setOverview] = useState<PublishingOverview | null>(null);
   const [asked, setAsked] = useState<ConnectSignIn>(NO_PROVIDER);
   const [editing, setEditing] = useState(false);
+  const [installing, setInstalling] = useState(false);
+  const [password, setPassword] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -144,6 +150,13 @@ function SignInSection() {
 
   if (!overview?.domain) return null;
   const provider = overview.sign_in;
+  const authentik = overview.authentik;
+  const memory = authentik.memory_total_bytes;
+  const memoryGb = memory === null ? null : Math.round(memory / 1024 ** 3);
+  const install = () => {
+    setInstalling(true);
+    void run(installAuthentik).finally(() => setInstalling(false));
+  };
   const redirect = provider?.redirect_url ?? `https://sign-in.${overview.domain}/oauth2/callback`;
   const field = (key: keyof ConnectSignIn) => ({
     value: asked[key] ?? "",
@@ -163,7 +176,51 @@ function SignInSection() {
   return (
     <section className="set__section">
       <h3 className="set__heading">Company sign-in</h3>
-      {provider && !editing ? (
+      {provider && authentik.installed ? (
+        <>
+          <p className="set__note">
+            Apps can let people sign in with their company account, through authentik on this server
+            {authentik.running ? "" : " (starting)"}. Add people and groups in its admin page.
+          </p>
+          {authentik.admin_url && (
+            <p className="muted set__note">
+              Admin page:{" "}
+              <button
+                className="shell-card__link"
+                onClick={() => void openExternal(authentik.admin_url!)}
+              >
+                {authentik.admin_url}
+              </button>
+              , user <code>{authentik.admin_user}</code>
+              {password !== null && (
+                <>
+                  , password <code>{password}</code>
+                </>
+              )}
+            </p>
+          )}
+          <div className="set__row">
+            <button
+              disabled={busy}
+              onClick={() =>
+                password === null
+                  ? void run(() => authentikPassword().then(setPassword))
+                  : setPassword(null)
+              }
+            >
+              {password === null ? "Show password" : "Hide password"}
+            </button>
+            <button
+              className="ghost"
+              disabled={busy}
+              title="Stops authentik; its people and groups stay for setting it up again"
+              onClick={() => void run(disconnectSignIn)}
+            >
+              Disconnect
+            </button>
+          </div>
+        </>
+      ) : provider && !editing ? (
         <>
           <p className="set__note">
             Apps can let people sign in with their company account, through {provider.issuer}.
@@ -192,6 +249,22 @@ function SignInSection() {
         </>
       ) : (
         <>
+          <p className="muted set__note">
+            Not sure where to start?{" "}
+            <button
+              className="shell-card__link"
+              onClick={() => {
+                startChatOn(
+                  { kind: "sign_in" },
+                  `Help me set up company sign-in for this server. Its domain is ${overview.domain}.`,
+                );
+                onLeave?.();
+              }}
+            >
+              Ask Mayka
+            </button>{" "}
+            to help you choose and set it up.
+          </p>
           <p className="muted set__note">
             Let people open deployed apps with their company account (Microsoft, Google, Okta,
             authentik and others), and choose which groups may open each app. In your company&apos;s
@@ -241,6 +314,29 @@ function SignInSection() {
               </button>
             )}
           </div>
+          {!provider && (
+            <>
+              <h4 className="set__heading">No provider? Set up authentik here</h4>
+              <p className="muted set__note">
+                Commitarium can run authentik on this server and connect it for you: a full sign-in
+                system with passwords, two-factor and passkeys, and an admin page for people and
+                groups. It needs about {authentik.memory_needed_gb} GB of this server&apos;s memory
+                for itself. A server of 8 GB runs it alongside Commitarium and a few apps; more
+                gives your apps room to grow.
+                {memoryGb !== null && ` This server has ${memoryGb} GB.`} A small team may prefer
+                Pocket ID, which is lighter and which Mayka can help you set up.
+              </p>
+              {memoryGb !== null && memoryGb < 8 && (
+                <p className="set__note">
+                  This server is likely too small for authentik beside your apps: consider a bigger
+                  one first.
+                </p>
+              )}
+              <button disabled={busy} onClick={install}>
+                {installing ? "Setting up authentik, a few minutes…" : "Set up authentik"}
+              </button>
+            </>
+          )}
         </>
       )}
       {error && <p className="set__note">{error}</p>}
@@ -322,7 +418,15 @@ function Servers() {
   );
 }
 
-function ConnectedServer({ server, running }: { server: string; running: boolean }) {
+function ConnectedServer({
+  server,
+  running,
+  onLeave,
+}: {
+  server: string;
+  running: boolean;
+  onLeave?: () => void;
+}) {
   const [problem, setProblem] = useState<string | null>(null);
   const [update, setUpdate] = useState<HostUpdate | null>(null);
   const [devices, setDevices] = useState<PairedDevice[]>([]);
@@ -394,7 +498,7 @@ function ConnectedServer({ server, running }: { server: string; running: boolean
       </section>
 
       <DomainSection />
-      <SignInSection />
+      <SignInSection onLeave={onLeave} />
 
       <section className="set__section">
         <h3 className="set__heading">Devices</h3>

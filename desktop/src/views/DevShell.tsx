@@ -10,6 +10,8 @@ import {
   type Conversation,
 } from "../api/assistant";
 import { ApiError } from "../api/client";
+import type { AssistantFocus } from "../api/assistant";
+import { NEW_CHAT_ON, openAssistantOn } from "../attention/askAssistant";
 import { listFeatures } from "../api/features";
 import { listProjects } from "../api/projects";
 import type { AttentionItem, Feature, Project, RunningWorkOrder } from "../api/types";
@@ -397,6 +399,40 @@ export function DevShell({
       setError(describe(e));
     }
   };
+
+  // Help that belongs to no project, such as company sign-in from Settings,
+  // starts a new chat at the top. The focus is sent once the chat shows, so
+  // it lands in the new chat and not the one that was open.
+  const chatOn = useRef<{ chat: string; focus: AssistantFocus; send: string } | null>(null);
+  useEffect(() => {
+    const start = (event: Event) => {
+      event.preventDefault();
+      const { focus, send } = (event as CustomEvent<{ focus: AssistantFocus; send: string }>)
+        .detail;
+      void (async () => {
+        setError(null);
+        try {
+          const created = await createChat(TOP);
+          if (!created.chat) return;
+          chatOn.current = { chat: created.chat, focus, send };
+          setShowProjects(false);
+          setPage(null);
+          select({ scope: TOP, chat: created.chat });
+          void loadChats();
+        } catch (e) {
+          setError(describe(e));
+        }
+      })();
+    };
+    window.addEventListener(NEW_CHAT_ON, start);
+    return () => window.removeEventListener(NEW_CHAT_ON, start);
+  }, [select, loadChats]);
+  useEffect(() => {
+    const pending = chatOn.current;
+    if (!pending || selection.scope !== TOP || selection.chat !== pending.chat) return;
+    chatOn.current = null;
+    openAssistantOn(pending.focus, pending.send, TOP);
+  }, [selection]);
 
   // The chat moves into a new project as its first chat (D2's route).
   const makeProject = async () => {

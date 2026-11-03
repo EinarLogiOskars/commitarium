@@ -124,6 +124,19 @@ export interface PublishingOverview {
   server_address: string | null;
   apps: PublishedApp[];
   sign_in: SignInProvider | null;
+  authentik: AuthentikStatus;
+}
+
+/** authentik on the server, for a company without a sign-in provider. */
+export interface AuthentikStatus {
+  installed: boolean;
+  running: boolean;
+  admin_url: string | null;
+  admin_user: string;
+  /** The server's memory; null where the system does not say. */
+  memory_total_bytes: number | null;
+  /** What authentik needs for itself. */
+  memory_needed_gb: number;
 }
 
 export const deployments = (): Promise<Deployment[]> => hostGet("/v1/deployments");
@@ -161,6 +174,11 @@ export const unpublishApp = (projectId: string): Promise<void> =>
 /** The server checks the provider answers before keeping it. */
 export const connectSignIn = (provider: ConnectSignIn): Promise<SignInProvider> =>
   hostPost("/v1/publishing/sign-in", provider);
+/** Takes minutes: authentik's images, then its first start. */
+export const installAuthentik = (): Promise<SignInProvider> =>
+  hostPost("/v1/publishing/authentik/install");
+export const authentikPassword = (): Promise<string> =>
+  hostPost("/v1/publishing/authentik/password");
 /** Refused while an app still uses company sign-in. */
 export const disconnectSignIn = (): Promise<void> => hostPost("/v1/publishing/sign-in/disconnect");
 export const setAppGroups = (projectId: string, groups: string[]): Promise<void> =>
