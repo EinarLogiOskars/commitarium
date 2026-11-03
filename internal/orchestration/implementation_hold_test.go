@@ -189,3 +189,47 @@ func TestAnEarlyPlanHoldsBeforeImplementingAndResumesAfterARestart(t *testing.T)
 		t.Fatal("no code review ran")
 	}
 }
+
+// slotHoldsStub holds a work order only for a free slot.
+type slotHoldsStub struct{}
+
+func (slotHoldsStub) ImplementationHold(context.Context, string, string) (string, bool) {
+	return execution.ImplementationSlotReason(4), true
+}
+
+// A planning turn of a work order that plans early is told not to wait for
+// the work it builds on; one held only for a slot, or not planning, is not.
+func TestEarlyPlanningTurnsAreToldNotToWaitForTheMerge(t *testing.T) {
+	planning := func() remoteLeadRequest {
+		request := remoteLeadRequest{planningStage: planningStagePlanApproval}
+		request.request.Instructions = "Plan."
+		return request
+	}
+	request := planning()
+	(&RemoteLeadStarter{holds: &holdsStub{}}).withEarlyPlanningNote(t.Context(), &request)
+	if !strings.Contains(request.request.Instructions, "“Lay the foundation”, which it builds on") ||
+		!strings.Contains(request.request.Instructions, "not a reason to keep the plan open") {
+		t.Fatalf("instructions = %s", request.request.Instructions)
+	}
+	request = planning()
+	(&RemoteLeadStarter{holds: slotHoldsStub{}}).withEarlyPlanningNote(t.Context(), &request)
+	if request.request.Instructions != "Plan." {
+		t.Fatalf("a slot wait added %s", request.request.Instructions)
+	}
+	implementing := remoteLeadRequest{}
+	implementing.request.Instructions = "Build."
+	(&RemoteLeadStarter{holds: &holdsStub{}}).withEarlyPlanningNote(t.Context(), &implementing)
+	if implementing.request.Instructions != "Build." {
+		t.Fatalf("an implementation turn added %s", implementing.request.Instructions)
+	}
+}
+
+// The reviewer approving a plan gets its checklist in full, with no need to
+// reach the coordinator from a sandbox.
+func TestPlanApprovalCarriesTheChecklist(t *testing.T) {
+	text := planApprovalInstructions("The plan.", "1. Add due grouping\nOrder: overdue first.", "Claude")
+	if !strings.Contains(text, "Its structured checklist") || !strings.Contains(text, "Order: overdue first.") ||
+		strings.Contains(text, "commitarium-artifact plan show") {
+		t.Fatalf("instructions = %s", text)
+	}
+}

@@ -141,3 +141,20 @@ func TestHandoffBriefValidate(t *testing.T) {
 		}
 	}
 }
+
+// The checklist reaches the reviewer as text, every step's details with it.
+func TestImplementationPlanMarkdownKeepsEveryDetail(t *testing.T) {
+	plan := ImplementationPlan{Title: "Home due dashboard", Steps: []ImplementationPlanStep{
+		{Title: "Add due grouping", Subtitle: "dueGroups.js", DetailsMarkdown: "Order: overdue, today, soon.",
+			Verification: []string{"npm test"}, CommitSubject: "Group plants by when they are due"},
+		{Title: "Show the dashboard"},
+	}}
+	text := plan.Markdown()
+	for _, want := range []string{"# Home due dashboard", "1. Add due grouping: dueGroups.js",
+		"Order: overdue, today, soon.", "- npm test", "Commit: Group plants by when they are due",
+		"2. Show the dashboard"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("markdown misses %q:\n%s", want, text)
+		}
+	}
+}

@@ -3,6 +3,7 @@ import type { AssistantAction, AssistantMessage, AssistantQuestion } from "../ap
 import type { VisionPlanning } from "../api/types";
 import {
   answerText,
+  heldCards,
   chatPlanning,
   passedOverQuestions,
   pickedByKey,
@@ -280,5 +281,38 @@ describe("a question's number keys", () => {
     expect(pickedByKey("5", 3)).toBeNull();
     expect(pickedByKey("0", 3)).toBeNull();
     expect(pickedByKey("a", 3)).toBeNull();
+  });
+});
+
+describe("heldCards", () => {
+  const message = (id: string, role: "user" | "assistant") =>
+    ({ id, role, text: "" }) as AssistantMessage;
+  const card = (id: string, message_id: string, type: AssistantAction["type"]) =>
+    ({ id, message_id, type, status: "proposed" }) as AssistantAction;
+  const messages = [message("m1", "assistant"), message("m2", "user"), message("m3", "assistant")];
+
+  it("replaces an older card of a kind there is one of at a time", () => {
+    const held = heldCards(
+      messages,
+      [card("a", "m1", "create_app"), card("b", "m3", "create_app")],
+      false,
+    );
+    expect(held.get("a")).toMatch(/Replaced/);
+    expect(held.has("b")).toBe(false);
+  });
+
+  it("keeps work orders side by side", () => {
+    const held = heldCards(
+      messages,
+      [card("a", "m1", "create_work_order"), card("b", "m3", "create_work_order")],
+      false,
+    );
+    expect(held.size).toBe(0);
+  });
+
+  it("holds a card while Mayka answers a message written after it", () => {
+    const asked = messages.slice(0, 2);
+    expect(heldCards(asked, [card("a", "m1", "create_app")], true).get("a")).toMatch(/Waiting/);
+    expect(heldCards(asked, [card("a", "m1", "create_app")], false).size).toBe(0);
   });
 });

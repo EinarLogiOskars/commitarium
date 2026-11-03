@@ -4668,6 +4668,14 @@ button.danger:not(.ghost) {
   padding: 8px 12px;
   background: none;
 }
+/* A card a newer one replaced, or one waiting for Mayka's answer. */
+.assistant-action--held {
+  opacity: 0.55;
+}
+.assistant-action__held {
+  margin: 6px 0 0;
+  font-size: var(--text-sm);
+}
 .assistant-action--proposed .assistant-action__desc {
   flex: 1;
   min-width: 200px;

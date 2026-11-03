@@ -355,6 +355,36 @@ func (plan ImplementationPlan) Validate() error {
 	return nil
 }
 
+// Markdown is the checklist as a reader sees it: each step with its details,
+// verification and commit subject. It goes to the reviewer with the plan, so
+// approving needs no network access to the coordinator.
+func (plan ImplementationPlan) Markdown() string {
+	var text strings.Builder
+	if title := strings.TrimSpace(plan.Title); title != "" {
+		text.WriteString("# " + title + "\n")
+	}
+	for index, step := range plan.Steps {
+		fmt.Fprintf(&text, "\n%d. %s", index+1, strings.TrimSpace(step.Title))
+		if subtitle := strings.TrimSpace(step.Subtitle); subtitle != "" {
+			text.WriteString(": " + subtitle)
+		}
+		text.WriteString("\n")
+		if details := strings.TrimSpace(step.DetailsMarkdown); details != "" {
+			text.WriteString(details + "\n")
+		}
+		if len(step.Verification) > 0 {
+			text.WriteString("Verification:\n")
+			for _, check := range step.Verification {
+				text.WriteString("- " + strings.TrimSpace(check) + "\n")
+			}
+		}
+		if subject := strings.TrimSpace(step.CommitSubject); subject != "" {
+			text.WriteString("Commit: " + subject + "\n")
+		}
+	}
+	return strings.TrimSpace(text.String())
+}
+
 func (plan ImplementationPlan) Complete() bool {
 	if len(plan.Steps) == 0 {
 		return false
