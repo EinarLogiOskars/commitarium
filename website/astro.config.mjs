@@ -11,6 +11,11 @@ export default defineConfig({
   integrations: [
     starlight({
       title: "Commitarium",
+      logo: {
+        light: "./src/assets/commitarium-mark.svg",
+        dark: "./src/assets/commitarium-mark-dark.svg",
+      },
+      favicon: "/favicon.svg",
       description:
         "An AI coding harness that works like a disciplined team: every change planned, reviewed by a second model, tested and merged through a pull request.",
       social: [
