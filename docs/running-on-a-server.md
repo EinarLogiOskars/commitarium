@@ -172,9 +172,9 @@ Your code, agent sign-ins and Forgejo all live on the server, so back it up.
 The people who run the server can reach them. Previews open in your app as
 usual.
 
-Not available on a server yet: pulling to a local folder, Bring in, importing a
-folder, backups, publishing to GitHub, the audit viewer and publishing apps on
-a domain.
+Not available on a server: importing a folder from this computer, pulling a
+project to a local folder, and Bring in. A linked repository (above) is the
+way to keep the code elsewhere.
 
 ## Removing it
 
