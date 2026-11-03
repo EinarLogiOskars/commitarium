@@ -25,6 +25,7 @@ import {
 } from "../ipc";
 import { showPlace } from "./PlaceSwitch";
 import { ConnectForm } from "./StartChoice";
+import { startChatOn } from "../attention/askAssistant";
 
 /** This app's API version: raise it with `API_VERSION` in the host. */
 const API_VERSION = 1;
@@ -37,11 +38,11 @@ function versionProblem(api: number): string | null {
 }
 
 // The servers this device knows, and the shown one's state, in Settings.
-export function ServerSection({ running }: { running: boolean }) {
+export function ServerSection({ running, onLeave }: { running: boolean; onLeave?: () => void }) {
   const server = connectedServer();
   return (
     <>
-      {server && <ConnectedServer server={server} running={running} />}
+      {server && <ConnectedServer server={server} running={running} onLeave={onLeave} />}
       <Servers />
       <section className="set__section">
         <h3 className="set__heading">Connect a server</h3>
@@ -116,7 +117,7 @@ const NO_PROVIDER: ConnectSignIn = { issuer: "", client_id: "", client_secret: "
 
 // Company sign-in for deployed apps (COMPANY_SIGN_IN_PLAN.md): the company's
 // provider, connected once for the server. Nothing of it runs until then.
-function SignInSection() {
+function SignInSection({ onLeave }: { onLeave?: () => void }) {
   const [overview, setOverview] = useState<PublishingOverview | null>(null);
   const [asked, setAsked] = useState<ConnectSignIn>(NO_PROVIDER);
   const [editing, setEditing] = useState(false);
@@ -249,6 +250,22 @@ function SignInSection() {
       ) : (
         <>
           <p className="muted set__note">
+            Not sure where to start?{" "}
+            <button
+              className="shell-card__link"
+              onClick={() => {
+                startChatOn(
+                  { kind: "sign_in" },
+                  `Help me set up company sign-in for this server. Its domain is ${overview.domain}.`,
+                );
+                onLeave?.();
+              }}
+            >
+              Ask Mayka
+            </button>{" "}
+            to help you choose and set it up.
+          </p>
+          <p className="muted set__note">
             Let people open deployed apps with their company account (Microsoft, Google, Okta,
             authentik and others), and choose which groups may open each app. In your company&apos;s
             sign-in provider, add an application for Commitarium with this sign-in address:{" "}
@@ -304,7 +321,8 @@ function SignInSection() {
                 Commitarium can run authentik on this server and connect it for you: a full sign-in
                 system with passwords, two-factor and passkeys, and an admin page for people and
                 groups. It needs about {authentik.memory_needed_gb} GB of this server&apos;s memory
-                for itself, so a server of 8 GB or more alongside Commitarium and its apps.
+                for itself. A server of 8 GB runs it alongside Commitarium and a few apps; more
+                gives your apps room to grow.
                 {memoryGb !== null && ` This server has ${memoryGb} GB.`} A small team may prefer
                 Pocket ID, which is lighter and which Mayka can help you set up.
               </p>
@@ -400,7 +418,15 @@ function Servers() {
   );
 }
 
-function ConnectedServer({ server, running }: { server: string; running: boolean }) {
+function ConnectedServer({
+  server,
+  running,
+  onLeave,
+}: {
+  server: string;
+  running: boolean;
+  onLeave?: () => void;
+}) {
   const [problem, setProblem] = useState<string | null>(null);
   const [update, setUpdate] = useState<HostUpdate | null>(null);
   const [devices, setDevices] = useState<PairedDevice[]>([]);
@@ -472,7 +498,7 @@ function ConnectedServer({ server, running }: { server: string; running: boolean
       </section>
 
       <DomainSection />
-      <SignInSection />
+      <SignInSection onLeave={onLeave} />
 
       <section className="set__section">
         <h3 className="set__heading">Devices</h3>

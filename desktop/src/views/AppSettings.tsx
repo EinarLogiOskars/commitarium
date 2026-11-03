@@ -135,7 +135,7 @@ export function AppSettings({
   // Every panel stays mounted, so a backup in progress keeps reporting while
   // another tab is open.
   const panels: Record<Tab, React.ReactNode> = {
-    server: <ServerSection running={running.length > 0} />,
+    server: <ServerSection running={running.length > 0} onLeave={close} />,
     general: (
       <>
         <Appearance />
