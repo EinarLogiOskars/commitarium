@@ -5,6 +5,7 @@ import {
   deployments as readDeployments,
   revealAppPassword,
   setAppAccess,
+  setAppGroups,
   setAppPassword,
   openExternal,
   publishApp,
@@ -31,6 +32,7 @@ function useDeployment(projectId: string) {
   const [deployment, setDeployment] = useState<Deployment | null>(null);
   const [published, setPublished] = useState<PublishedApp | null>(null);
   const [domain, setDomain] = useState<string | null>(null);
+  const [companySignIn, setCompanySignIn] = useState(false);
   const [versions, setVersions] = useState<Version[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -41,6 +43,7 @@ function useDeployment(projectId: string) {
       setDeployment(all.find((d) => d.project_id === projectId) ?? null);
       setPublished(overview.apps.find((app) => app.project_id === projectId) ?? null);
       setDomain(overview.domain);
+      setCompanySignIn(overview.sign_in !== null);
     } catch (e) {
       setError(String(e));
     }
@@ -110,6 +113,7 @@ function useDeployment(projectId: string) {
     deployment,
     published,
     domain,
+    companySignIn,
     versions,
     busy,
     error,
@@ -200,6 +204,7 @@ export function DeploymentPage({ projectId, name }: { projectId: string; name: s
     deployment,
     published,
     domain,
+    companySignIn,
     versions,
     busy,
     error,
@@ -239,7 +244,12 @@ export function DeploymentPage({ projectId, name }: { projectId: string; name: s
                 </button>
                 <span className="muted">
                   {" "}
-                  · {published.access === "private" ? "needs the password" : "open to anyone"}
+                  ·{" "}
+                  {published.access === "private"
+                    ? "needs the password"
+                    : published.access === "company"
+                      ? "company sign-in"
+                      : "open to anyone"}
                 </span>
               </dd>
             </>
@@ -282,6 +292,7 @@ export function DeploymentPage({ projectId, name }: { projectId: string; name: s
           projectId={projectId}
           name={name}
           domain={domain}
+          companySignIn={companySignIn}
           published={published}
           busy={busy}
           act={act}
@@ -311,6 +322,7 @@ function Address({
   projectId,
   name,
   domain,
+  companySignIn,
   published,
   busy,
   act,
@@ -319,6 +331,8 @@ function Address({
   projectId: string;
   name: string;
   domain: string | null;
+  /** Whether the server has a company sign-in provider connected. */
+  companySignIn: boolean;
   published: PublishedApp | null;
   busy: boolean;
   act: (work: () => Promise<unknown>) => Promise<void>;
@@ -332,7 +346,22 @@ function Address({
   const [newName, setNewName] = useState("");
   const [changed, setChanged] = useState(false);
   const [shownPassword, setShownPassword] = useState<string | null | undefined>(undefined);
+  const [editingGroups, setEditingGroups] = useState(false);
+  const [groups, setGroups] = useState("");
   const empty = password === "";
+  // Company sign-in chosen before a provider is connected: say where to.
+  const [needsSignIn, setNeedsSignIn] = useState(false);
+  const companyOption = (
+    <option value="company">
+      {companySignIn ? "Company sign-in" : "Company sign-in (set up first)"}
+    </option>
+  );
+  const setUpSignIn = needsSignIn && !companySignIn && (
+    <p className="muted shell-card__text">
+      Company sign-in lets people open it with their work account, such as Microsoft or Google.
+      Connect your company&apos;s sign-in in Settings → Server first.
+    </p>
+  );
 
   const stop = (
     <button className="shell-card__link" disabled={busy} onClick={onStop}>
@@ -359,7 +388,9 @@ function Address({
         setChanged(true);
         setPassword("");
       });
-    const choose = (next: Access) =>
+    const choose = (next: Access) => {
+      setNeedsSignIn(next === "company" && !companySignIn);
+      if (next === "company" && !companySignIn) return;
       void act(() =>
         setAppAccess(projectId, next).catch((e) => {
           // Never had a password: ask for one, then make it private.
@@ -367,6 +398,18 @@ function Address({
           else throw e;
         }),
       );
+    };
+    const saveGroups = () =>
+      void act(async () => {
+        await setAppGroups(
+          projectId,
+          groups
+            .split(",")
+            .map((group) => group.trim())
+            .filter(Boolean),
+        );
+        setEditingGroups(false);
+      });
     return (
       <>
         <label className="muted deploy-access">
@@ -378,8 +421,36 @@ function Address({
           >
             <option value="public">Anyone, no password</option>
             <option value="private">Only with a password</option>
+            {companyOption}
           </select>
         </label>
+        {setUpSignIn}
+        {published.access === "company" && (
+          <p className="muted shell-card__text">
+            People sign in with their company account.{" "}
+            {published.groups.length === 0
+              ? "Anyone at the company can open it."
+              : `Only ${published.groups.join(", ")} can open it.`}
+          </p>
+        )}
+        {published.access === "company" && editingGroups && (
+          <div className="row deploy-actions">
+            <input
+              aria-label="Groups"
+              placeholder="Groups, such as sales, finance"
+              autoFocus
+              value={groups}
+              onChange={(e) => setGroups(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && saveGroups()}
+            />
+            <button disabled={busy} onClick={saveGroups}>
+              Save
+            </button>
+            <button className="ghost" onClick={() => setEditingGroups(false)}>
+              Cancel
+            </button>
+          </div>
+        )}
         {published.access === "private" && (
           <p className="muted shell-card__text">
             People sign in with the username <strong>{published.name}</strong> and the password you
@@ -463,6 +534,18 @@ function Address({
           </div>
         )}
         <div className="row deploy-links">
+          {published.access === "company" && !editingGroups && (
+            <button
+              className="shell-card__link"
+              disabled={busy}
+              onClick={() => {
+                setGroups(published.groups.join(", "));
+                setEditingGroups(true);
+              }}
+            >
+              Choose groups
+            </button>
+          )}
           {published.access === "private" && !changing && (
             <button
               className="shell-card__link"
@@ -532,11 +615,20 @@ function Address({
       </label>
       <label className="muted deploy-access">
         Who can open it
-        <select value={access} onChange={(e) => setAccess(e.target.value as Access)}>
+        <select
+          value={access}
+          onChange={(e) => {
+            const next = e.target.value as Access;
+            setNeedsSignIn(next === "company" && !companySignIn);
+            setAccess(next);
+          }}
+        >
           <option value="private">Only with a password</option>
           <option value="public">Anyone, no password</option>
+          {companyOption}
         </select>
       </label>
+      {setUpSignIn}
       {access === "private" && (
         <label className="muted">
           Password, to share with the people you want
@@ -552,7 +644,12 @@ function Address({
         </label>
       )}
       <button
-        disabled={busy || !address.trim() || (access === "private" && empty)}
+        disabled={
+          busy ||
+          !address.trim() ||
+          (access === "private" && empty) ||
+          (access === "company" && !companySignIn)
+        }
         onClick={() =>
           void act(() =>
             publishApp(projectId, address, access, access === "private" ? password : undefined),

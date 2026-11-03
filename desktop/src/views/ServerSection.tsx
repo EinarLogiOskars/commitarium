@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { connectedServer } from "../connection";
 import {
+  connectSignIn,
+  disconnectSignIn,
   hostUpdate,
   hostVersion,
   installHostUpdate,
@@ -10,6 +12,7 @@ import {
   publishing as readPublishing,
   setDomain,
   type PublishingOverview,
+  type ConnectSignIn,
   forgetServer,
   renameServer,
   revokeDevice,
@@ -101,6 +104,145 @@ function DomainSection() {
           {busy ? "Checking…" : overview?.domain ? "Change" : "Use this domain"}
         </button>
       </div>
+      {error && <p className="set__note">{error}</p>}
+    </section>
+  );
+}
+
+const NO_PROVIDER: ConnectSignIn = { issuer: "", client_id: "", client_secret: "" };
+
+// Company sign-in for deployed apps (COMPANY_SIGN_IN_PLAN.md): the company's
+// provider, connected once for the server. Nothing of it runs until then.
+function SignInSection() {
+  const [overview, setOverview] = useState<PublishingOverview | null>(null);
+  const [asked, setAsked] = useState<ConnectSignIn>(NO_PROVIDER);
+  const [editing, setEditing] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const refresh = useCallback(() => {
+    void readPublishing()
+      .then(setOverview)
+      .catch((e) => setError(String(e)));
+  }, []);
+  useEffect(refresh, [refresh]);
+
+  const run = async (work: () => Promise<unknown>) => {
+    setBusy(true);
+    setError(null);
+    try {
+      await work();
+      refresh();
+      return true;
+    } catch (e) {
+      setError(String(e));
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!overview?.domain) return null;
+  const provider = overview.sign_in;
+  const redirect = provider?.redirect_url ?? `https://sign-in.${overview.domain}/oauth2/callback`;
+  const field = (key: keyof ConnectSignIn) => ({
+    value: asked[key] ?? "",
+    autoCapitalize: "off",
+    autoCorrect: "off",
+    spellCheck: false,
+    onChange: (e: React.ChangeEvent<HTMLInputElement>) =>
+      setAsked((current) => ({ ...current, [key]: e.target.value })),
+  });
+  const connect = () =>
+    void run(() => connectSignIn(asked)).then((done) => {
+      if (!done) return;
+      setEditing(false);
+      setAsked(NO_PROVIDER);
+    });
+
+  return (
+    <section className="set__section">
+      <h3 className="set__heading">Company sign-in</h3>
+      {provider && !editing ? (
+        <>
+          <p className="set__note">
+            Apps can let people sign in with their company account, through {provider.issuer}.
+          </p>
+          <p className="muted set__note">
+            Registered sign-in address: <code>{redirect}</code>
+          </p>
+          <div className="set__row">
+            <button
+              disabled={busy}
+              onClick={() => {
+                setAsked({
+                  ...NO_PROVIDER,
+                  issuer: provider.issuer,
+                  client_id: provider.client_id,
+                });
+                setEditing(true);
+              }}
+            >
+              Change
+            </button>
+            <button className="ghost" disabled={busy} onClick={() => void run(disconnectSignIn)}>
+              Disconnect
+            </button>
+          </div>
+        </>
+      ) : (
+        <>
+          <p className="muted set__note">
+            Let people open deployed apps with their company account (Microsoft, Google, Okta,
+            authentik and others), and choose which groups may open each app. In your company&apos;s
+            sign-in provider, add an application for Commitarium with this sign-in address:{" "}
+            <code>{redirect}</code>. Then give its details here.
+          </p>
+          <input
+            aria-label="Issuer"
+            placeholder="Issuer, such as https://login.example.com"
+            {...field("issuer")}
+          />
+          <input aria-label="Client ID" placeholder="Client ID" {...field("client_id")} />
+          <input
+            aria-label="Client secret"
+            placeholder="Client secret"
+            type="password"
+            {...field("client_secret")}
+          />
+          <details>
+            <summary className="muted">More</summary>
+            <input
+              aria-label="Scopes"
+              placeholder="Scopes (openid email profile)"
+              {...field("scopes")}
+            />
+            <input
+              aria-label="Groups claim"
+              placeholder="Groups claim (groups)"
+              {...field("groups_claim")}
+            />
+          </details>
+          <div className="set__row">
+            <button
+              disabled={
+                busy ||
+                !asked.issuer.trim() ||
+                !asked.client_id.trim() ||
+                !asked.client_secret.trim()
+              }
+              onClick={connect}
+            >
+              {busy ? "Checking…" : "Connect"}
+            </button>
+            {editing && (
+              <button className="ghost" onClick={() => setEditing(false)}>
+                Cancel
+              </button>
+            )}
+          </div>
+        </>
+      )}
       {error && <p className="set__note">{error}</p>}
     </section>
   );
@@ -252,6 +394,7 @@ function ConnectedServer({ server, running }: { server: string; running: boolean
       </section>
 
       <DomainSection />
+      <SignInSection />
 
       <section className="set__section">
         <h3 className="set__heading">Devices</h3>
