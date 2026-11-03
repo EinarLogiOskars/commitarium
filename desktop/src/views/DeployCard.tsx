@@ -244,7 +244,12 @@ export function DeploymentPage({ projectId, name }: { projectId: string; name: s
                 </button>
                 <span className="muted">
                   {" "}
-                  · {published.access === "private" ? "needs the password" : "open to anyone"}
+                  ·{" "}
+                  {published.access === "private"
+                    ? "needs the password"
+                    : published.access === "company"
+                      ? "company sign-in"
+                      : "open to anyone"}
                 </span>
               </dd>
             </>
