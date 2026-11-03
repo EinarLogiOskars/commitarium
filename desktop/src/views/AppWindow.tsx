@@ -102,7 +102,8 @@ export function AppWindow({ projectId }: { projectId: string }) {
   }, [projectId, start, app, stopped]);
 
   // While the app is still being built, the window says how far along it is:
-  // on the waiting screen, then in a corner over the app once it runs.
+  // on the waiting screen until its P0 items are done, then in a corner over
+  // the app.
   const [conversation, setConversation] = useState<Conversation | null>(null);
   useEffect(() => {
     const look = () =>
@@ -154,7 +155,14 @@ export function AppWindow({ projectId }: { projectId: string }) {
     }
   };
 
-  const revealed = !!url && loadedUrl === url;
+  // The app shows once its P0 items, what it needs to be usable at all, are
+  // done: before that it would be an empty shell. Later work goes on in the
+  // corner card.
+  const coreOpen =
+    launch === "vision" ||
+    launch === "setup" ||
+    (building && !!goal?.items.some((item) => !item.done && item.label.startsWith("P0.")));
+  const revealed = !!url && loadedUrl === url && !coreOpen;
   // Once per address: a theme changed later must not reload the app.
   const address = useMemo(() => (url ? withTheme(url) : null), [url]);
   const nextItem = goal?.items.find((item) => !item.done);
@@ -194,7 +202,7 @@ export function AppWindow({ projectId }: { projectId: string }) {
                 />
               )}
               <p className="muted note">
-                It opens here as soon as it runs. Mayka asks if anything needs you.
+                It opens here as soon as it can be used. Mayka asks if anything needs you.
               </p>
             </>
           ) : status?.state === "failed" || error ? (
