@@ -1,4 +1,9 @@
-import type { AssistantAction, AssistantMessage, AssistantQuestion } from "../api/assistant";
+import type {
+  AssistantAction,
+  AssistantActionType,
+  AssistantMessage,
+  AssistantQuestion,
+} from "../api/assistant";
 import type { VisionPlanning } from "../api/types";
 
 // Planning as a mode of the chat (ADR-039): where a chat stands with its
@@ -210,4 +215,47 @@ export function pickedByKey(key: string, options: number): number | null {
   if (!/^[1-9]$/.test(key)) return null;
   const index = Number(key) - 1;
   return index <= options ? index : null;
+}
+
+/** Cards there is only one of at a time: a newer one replaces the last. */
+const ONE_AT_A_TIME = new Set<AssistantActionType>([
+  "create_app",
+  "plan_project",
+  "write_vision",
+  "set_up_stack",
+  "design_stack",
+  "apply_stack",
+  "set_up_preview",
+  "start_planning",
+  "build_plan",
+  "deploy_app",
+  "start_autopilot",
+]);
+
+/** Why a proposed card cannot be acted on now, by its id: a newer card of
+ * the same kind replaced it, or Mayka is answering a message written after
+ * it, which may change it. */
+export function heldCards(
+  messages: AssistantMessage[],
+  actions: AssistantAction[],
+  answering: boolean,
+): Map<string, string> {
+  const position = new Map(messages.map((message, index) => [message.id, index]));
+  const at = (action: AssistantAction) => position.get(action.message_id) ?? -1;
+  const lastUser = messages.map((message) => message.role).lastIndexOf("user");
+  const held = new Map<string, string>();
+  for (const action of actions) {
+    if (action.status !== "proposed") continue;
+    const newer = actions.some(
+      (other) =>
+        other !== action &&
+        other.type === action.type &&
+        ONE_AT_A_TIME.has(action.type) &&
+        at(other) > at(action),
+    );
+    if (newer) held.set(action.id, "Replaced by Mayka's newer proposal.");
+    else if (answering && at(action) < lastUser)
+      held.set(action.id, "Waiting for Mayka's answer to your message…");
+  }
+  return held;
 }

@@ -2583,6 +2583,23 @@ func (starter *RemoteLeadStarter) ensureSubmittedPlanArtifact(
 	return err
 }
 
+// submittedChecklist is the submitted plan's structured checklist as text,
+// or empty when it is not stored for this plan version.
+func (starter *RemoteLeadStarter) submittedChecklist(ctx context.Context, run execution.Run) string {
+	if starter.artifacts == nil {
+		return ""
+	}
+	current, err := starter.artifacts.GetFeatureArtifact(ctx, run.FeatureID, featureartifact.KindImplementationPlan)
+	if err != nil {
+		return ""
+	}
+	plan := featureartifact.ImplementationPlan{}
+	if json.Unmarshal([]byte(current.Document), &plan) != nil || plan.PlanVersion != run.PlanVersion {
+		return ""
+	}
+	return plan.Markdown()
+}
+
 type remoteLeadRequest struct {
 	runID                     string
 	commandID                 string
@@ -4307,6 +4324,7 @@ func (starter *RemoteLeadStarter) launchAdmitted(request remoteLeadRequest) {
 		request.request.WorkspaceAccess = workerhttp.WorkspaceAccessReadWrite
 	}
 	starter.withAttachments(ctx, &request.request)
+	starter.withEarlyPlanningNote(ctx, &request)
 	starter.withRoundCapGuidance(&request)
 	attempt, _, putErr := starter.worker.PutAttempt(ctx, request.identity, request.request)
 	if putErr != nil {
@@ -6755,8 +6773,10 @@ func (starter *RemoteLeadStarter) continueSubmittedPlan(
 				Role: workerhttp.RoleReviewer, WorkspaceID: prepared.ID,
 			},
 			ProviderSessionID: reviewer.ProviderSessionID,
-			Instructions:      planApprovalInstructions(plan.Text, leadParticipant(run.AgentProviders)),
-			OutputContract:    workerhttp.OutputContractPlanApproval,
+			Instructions: planApprovalInstructions(
+				plan.Text, starter.submittedChecklist(ctx, run), leadParticipant(run.AgentProviders),
+			),
+			OutputContract: workerhttp.OutputContractPlanApproval,
 		},
 	}
 	if err := request.request.Validate(request.identity); err != nil {

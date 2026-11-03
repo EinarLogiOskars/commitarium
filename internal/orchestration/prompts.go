@@ -559,13 +559,19 @@ func implementationReadinessInstructions(
 		"\nMerge-readiness audit marker:\n" + marker
 }
 
-func planApprovalInstructions(plan string, lead string) string {
-	return lead + " submitted the final plan below, and implementation starts only once you approve " +
+// planApprovalInstructions give the reviewer the plan and its structured
+// checklist in full: a sandboxed reviewer may have no network to fetch them.
+func planApprovalInstructions(plan string, checklist string, lead string) string {
+	text := lead + " submitted the final plan below, and implementation starts only once you approve " +
 		"it. Check that it matches what you agreed: every settled point is reflected, nothing was " +
-		"dropped or changed, and the steps are sound. The structured checklist is available with " +
-		"'commitarium-artifact plan show'. Do not reopen points you already settled. Return action " +
+		"dropped or changed, and the steps are sound. The plan and its checklist together are the " +
+		"plan: a settled point in either counts. Do not reopen points you already settled. Return action " +
 		"'approve' with a one-line confirmation, or 'request_changes' with exactly what differs from " +
 		"what you agreed; " + lead + " will then revise and resubmit.\n\n" + lead + "'s final plan:\n" + plan
+	if checklist = strings.TrimSpace(checklist); checklist != "" {
+		text += "\n\nIts structured checklist, which implementation follows step by step:\n" + checklist
+	}
+	return text
 }
 
 // briefGoal renders the handoff brief as the work order's accepted goal, which

@@ -2,10 +2,12 @@ package orchestration
 
 import (
 	"context"
+	"strings"
 
 	"github.com/EinarLogiOskars/commitarium/internal/execution"
 	"github.com/EinarLogiOskars/commitarium/internal/feature"
 	"github.com/EinarLogiOskars/commitarium/internal/worker"
+	"github.com/EinarLogiOskars/commitarium/internal/workerhttp"
 )
 
 // Early planning (ADR-037): a work order that builds on work not merged yet
@@ -99,3 +101,37 @@ const heldReviewInstructions = "\n\nThis work order planned early and brought ma
 	"lead's to justify; review the lead's own changes. If the lead's publication comment has a '## Plan " +
 	"update' section, check that change against the merged code and the agreed plan; the rest of the plan " +
 	"stands as agreed."
+
+// earlyPlanningNote tells the agents planning a work order early how to: the
+// work it builds on is not merged yet, so waiting for it only spends rounds.
+func earlyPlanningNote(follows string) string {
+	return "\n\nThis work order is planning early (ADR-037): “" + follows + "”, which it builds on, is " +
+		"still being built and has not merged. Do not wait for it: plan now against that work as its brief and " +
+		"the accepted goal describe it, and name in the plan what you assume of its code (routes, types, file " +
+		"names). Before implementing, the lead brings main in and checks the plan against the merged code, " +
+		"adjusting it where it no longer fits; that check, not this discussion, settles the details of the " +
+		"unmerged code. A missing merge is not a reason to keep the plan open or withhold approval."
+}
+
+// withEarlyPlanningNote adds earlyPlanningNote to a planning turn of a work
+// order that would wait before implementing.
+func (starter *RemoteLeadStarter) withEarlyPlanningNote(ctx context.Context, request *remoteLeadRequest) {
+	if request.planningStage == planningStageNone || starter.holds == nil {
+		return
+	}
+	assignment := request.request.Assignment
+	reason, held := starter.holds.ImplementationHold(ctx, assignment.ProjectID, assignment.FeatureID)
+	if !held {
+		return
+	}
+	// Waiting for a free slot is not waiting for code: only "once “X” has merged."
+	what, _ := execution.ImplementationHoldWhat(reason)
+	_, rest, found := strings.Cut(what, "once “")
+	follows, _, closed := strings.Cut(rest, "”")
+	if !found || !closed {
+		return
+	}
+	if instructions := request.request.Instructions + earlyPlanningNote(follows); len(instructions) <= workerhttp.MaxInstructionsBytes {
+		request.request.Instructions = instructions
+	}
+}

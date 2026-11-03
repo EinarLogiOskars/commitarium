@@ -3,6 +3,7 @@ import type { DockerProbe } from "../ipc";
 import { openExternal, chooseThisComputer } from "../ipc";
 import { connectedServer } from "../connection";
 import "./BootScreen.css";
+import { BrandMark } from "./BrandMark";
 
 /**
  * Full-screen startup splash in the app's Geist look: a centred mark and
@@ -50,7 +51,7 @@ export function BootScreen({
     <main className="boot">
       <div className="boot__band">
         <div className="boot__inner">
-          <span className="boot__mark" aria-hidden />
+          <BrandMark size={34} className="boot__mark" />
           <h1 className="boot__title">Commitarium</h1>
 
           {needsAction ? (

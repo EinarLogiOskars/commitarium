@@ -31,3 +31,19 @@ export function openAssistantOn(focus: AssistantFocus, message: string, scope?: 
     new CustomEvent(OPEN_ASSISTANT, { detail: { focus, send: message, scope } }),
   );
 }
+
+/** Asks the shell for a new chat outside any project. */
+export const NEW_CHAT_ON = "commitarium:new-chat-on";
+
+/**
+ * Starts a new chat outside any project, focused on an item and opened with
+ * message, for help that belongs to no project (such as company sign-in for
+ * the server). Without a chat list (Developer mode off) the assistant that
+ * is open takes it.
+ */
+export function startChatOn(focus: AssistantFocus, message: string) {
+  const taken = !window.dispatchEvent(
+    new CustomEvent(NEW_CHAT_ON, { cancelable: true, detail: { focus, send: message } }),
+  );
+  if (!taken) openAssistantOn(focus, message);
+}

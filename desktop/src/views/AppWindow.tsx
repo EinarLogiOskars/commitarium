@@ -1,11 +1,13 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getProject } from "../api/projects";
 import { listFeatures, setUpPreview, tellAssistantPreviewFailed } from "../api/features";
 import { getPreviewStatus, onPreviewStatusChanged, startPreview, type PreviewStatus } from "../ipc";
 import { isStopped, primaryUrl } from "./usePreview";
 import { AssistantDrawer, SignInNotice } from "./AssistantDrawer";
+import { RippleField } from "./RippleField";
+import { shownTheme } from "../settings/theme";
 import { agentName, useAgents } from "./useAgents";
-import { getConversation, type Conversation } from "../api/assistant";
+import { getConversation, type AutopilotGoal, type Conversation } from "../api/assistant";
 import type { Feature, Project } from "../api/types";
 import { ContainerEvidence } from "./ContainerEvidence";
 import { plainFailure } from "./previewEvidence";
@@ -99,8 +101,9 @@ export function AppWindow({ projectId }: { projectId: string }) {
     return () => clearInterval(timer);
   }, [projectId, start, app, stopped]);
 
-  // While the app is still being built, the window says how far along it is
-  // instead of showing a preview that has nothing to run yet.
+  // While the app is still being built, the window says how far along it is:
+  // on the waiting screen until its P0 items are done, then in a corner over
+  // the app.
   const [conversation, setConversation] = useState<Conversation | null>(null);
   useEffect(() => {
     const look = () =>
@@ -114,6 +117,12 @@ export function AppWindow({ projectId }: { projectId: string }) {
   const launch = conversation?.launch?.stage;
   const goal = conversation?.goal?.status === "active" ? conversation.goal : null;
   const building = launch === "vision" || launch === "setup" || (launch === "building" && !!goal);
+
+  // The app comes in once its page has loaded: the waiting screen fades
+  // out over it, so it never blinks in, nor flashes white half-loaded.
+  const [loadedUrl, setLoadedUrl] = useState<string | null>(null);
+  const [faded, setFaded] = useState<string | null>(null);
+  const [showProgress, setShowProgress] = useState(false);
 
   const name = project?.name ?? "App";
   const agents = useAgents();
@@ -146,21 +155,27 @@ export function AppWindow({ projectId }: { projectId: string }) {
     }
   };
 
-  return (
-    <div className="app-window">
-      {url ? (
-        <iframe
-          key={url}
-          className="app-window__frame"
-          src={url}
-          title={name}
-          // Same-site with this page (ADR-029), so it may not navigate it
-          // away: everything but top navigation.
-          sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads allow-pointer-lock"
-          allow="clipboard-read; clipboard-write; fullscreen"
-        />
-      ) : (
+  // The app shows once its P0 items, what it needs to be usable at all, are
+  // done: before that it would be an empty shell. Later work goes on in the
+  // corner card.
+  const coreOpen =
+    launch === "vision" ||
+    launch === "setup" ||
+    (building && !!goal?.items.some((item) => !item.done && item.label.startsWith("P0.")));
+  const revealed = !!url && loadedUrl === url && !coreOpen;
+  // Once per address: a theme changed later must not reload the app.
+  const address = useMemo(() => (url ? withTheme(url) : null), [url]);
+  const nextItem = goal?.items.find((item) => !item.done);
+  // The waiting screen, over the app while it loads, then fading out.
+  const waiting =
+    url && faded === url ? null : (
+      <div
+        className={`app-window__cover ${revealed ? "app-window__cover--leaving" : ""}`}
+        onTransitionEnd={(e) => revealed && e.target === e.currentTarget && setFaded(url)}
+      >
         <div className="app-window__state">
+          {/* While it is being made or started, not when it needs the user. */}
+          {(building || !(status?.state === "failed" || error || stopped)) && <RippleField />}
           <h1>{name}</h1>
           {building ? (
             <>
@@ -171,15 +186,13 @@ export function AppWindow({ projectId }: { projectId: string }) {
                     ? "Setting it up…"
                     : `Building · ${goal?.items.filter((i) => i.done).length ?? 0} of ${goal?.items.length ?? 0}`}
               </p>
-              {goal && (
-                <ul className="app-window__items">
-                  {goal.items.map((item) => (
-                    <li key={item.id} className={item.done ? "app-window__item--done" : ""}>
-                      {item.done ? "✓" : "·"} {item.title}
-                    </li>
-                  ))}
-                </ul>
+              {launch === "setup" && (
+                <p className="muted note">
+                  First the project&apos;s skeleton: a minimal app on its stack that starts, the
+                  base everything is built on. This takes a few minutes.
+                </p>
               )}
+              {goal && <BuildChecklist goal={goal} />}
               {conversation?.sign_in?.needs_user && (
                 <SignInNotice
                   agentId={conversation.sign_in.agent}
@@ -187,7 +200,7 @@ export function AppWindow({ projectId }: { projectId: string }) {
                 />
               )}
               <p className="muted note">
-                It opens here as soon as it runs. Mayka asks if anything needs you.
+                It opens here as soon as it can be used. Mayka asks if anything needs you.
               </p>
             </>
           ) : status?.state === "failed" || error ? (
@@ -232,6 +245,33 @@ export function AppWindow({ projectId }: { projectId: string }) {
             <p className="muted app-window__starting">Starting {name}…</p>
           )}
         </div>
+      </div>
+    );
+
+  return (
+    <div className="app-window">
+      {url && (
+        <iframe
+          key={url}
+          className={`app-window__frame ${loadedUrl === url ? "" : "app-window__frame--loading"}`}
+          src={address ?? url}
+          title={name}
+          onLoad={() => setLoadedUrl(url)}
+          // Same-site with this page (ADR-029), so it may not navigate it
+          // away: everything but top navigation.
+          sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads allow-pointer-lock"
+          allow="clipboard-read; clipboard-write; fullscreen"
+        />
+      )}
+      {waiting}
+      {revealed && building && goal && (
+        <div className="app-window__progress">
+          <button className="ghost" onClick={() => setShowProgress((was) => !was)}>
+            Building · {goal.items.filter((i) => i.done).length} of {goal.items.length}
+            {nextItem && <span className="muted"> · {nextItem.title}</span>}
+          </button>
+          {showProgress && <BuildChecklist goal={goal} />}
+        </div>
       )}
       <AssistantDrawer
         scope={projectId}
@@ -242,5 +282,47 @@ export function AppWindow({ projectId }: { projectId: string }) {
         screenshot
       />
     </div>
+  );
+}
+
+/** The app's address with Commitarium's theme as a hint: an app built here
+ * starts from it, then keeps a setting of its own. */
+function withTheme(url: string): string {
+  try {
+    const address = new URL(url);
+    address.searchParams.set("theme", shownTheme());
+    return address.toString();
+  } catch {
+    return url;
+  }
+}
+
+/** The build's items: P0, what the app needs to be usable, then a line where
+ * it opens, then the rest. The first is the foundation the plan builds the
+ * features on (WidePlan), so it takes longest. */
+function BuildChecklist({ goal }: { goal: AutopilotGoal }) {
+  const core = goal.items.filter((item) => item.label.startsWith("P0."));
+  const later = goal.items.filter((item) => !item.label.startsWith("P0."));
+  const row = (item: AutopilotGoal["items"][number], first: boolean) => (
+    <li key={item.id} className={item.done ? "app-window__item--done" : ""}>
+      {item.done ? "✓" : "·"} {item.title}
+      {first && !item.done && (
+        <span className="muted app-window__item-note">
+          The foundation the features build on, so it takes longest.
+        </span>
+      )}
+    </li>
+  );
+  return (
+    <ul className="app-window__items">
+      {core.map((item, index) => row(item, index === 0))}
+      {core.length > 0 && later.length > 0 && (
+        <li className="app-window__usable">
+          Usable from here. Changes keep arriving after that, and the app may restart now and then
+          while they do.
+        </li>
+      )}
+      {later.map((item, index) => row(item, core.length === 0 && index === 0))}
+    </ul>
   );
 }
