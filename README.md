@@ -42,6 +42,7 @@ repository. Work with Mayka the way you would with a small team:
   mode writes a bigger change as commit-sized slices first.
 - **Independent review.** A lead agent builds; a reviewer, ideally from another
   provider, challenges the plan and the code. No model signs off on its own work.
+  Neither job is tied to a provider: Mayka picks the pair for each work order.
 - **Real pull requests.** Every change is a pull request in a private Forgejo on
   your machine, the whole discussion kept as an audit trail. Nothing reaches
   your repository until you sync it.
@@ -183,8 +184,8 @@ your approval depends on the project's mode and merge policy.
 - Docker Desktop with Docker Compose on macOS or Windows
 - Docker Engine with the Compose v2 plugin on Linux
 - A Claude or Codex subscription, or an API key for either (both providers work
-  best: lead and reviewer then come
-  from different providers)
+  best, so lead and reviewer can come from different providers; either agent can
+  do either job, and Mayka picks the pair for each work order)
 - Git on the host. On macOS, the first use prompts you to install Apple's
   Command Line Tools
 
