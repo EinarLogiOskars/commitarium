@@ -29,12 +29,23 @@ struct Manifest {
     version: String,
 }
 
-fn numbers(version: &str) -> Vec<u32> {
-    version
-        .trim_start_matches('v')
-        .split('.')
-        .map(|part| part.parse().unwrap_or(0))
-        .collect()
+/// A version's numbers, then whether it is a release, then a release
+/// candidate's numbers: 0.11.0-rc.1 comes after 0.10.0 and before 0.11.0.
+fn numbers(version: &str) -> (Vec<u32>, bool, Vec<u32>) {
+    let parts = |text: &str| -> Vec<u32> {
+        text.split('.')
+            .filter_map(|part| {
+                part.trim_start_matches(|c: char| !c.is_ascii_digit())
+                    .parse()
+                    .ok()
+            })
+            .collect()
+    };
+    let version = version.trim_start_matches('v');
+    match version.split_once('-') {
+        Some((release, candidate)) => (parts(release), false, parts(candidate)),
+        None => (parts(version), true, Vec::new()),
+    }
 }
 
 fn is_newer(latest: &str, current: &str) -> bool {
@@ -120,6 +131,11 @@ mod tests {
         assert!(is_newer("v1.0.0", "0.9.3"));
         assert!(!is_newer("0.9.3", "0.9.3"));
         assert!(!is_newer("0.9.2", "0.9.3"));
+        // A release candidate comes between the release before and its own.
+        assert!(is_newer("0.11.0-rc.1", "0.10.0"));
+        assert!(is_newer("0.11.0", "0.11.0-rc.1"));
+        assert!(is_newer("0.11.0-rc.2", "0.11.0-rc.1"));
+        assert!(!is_newer("0.10.0", "0.11.0-rc.1"));
     }
 
     #[test]

@@ -166,6 +166,15 @@ install it, from Settings > Server. It waits while work orders run.
 
 If an update goes wrong, run the install line again. It keeps your data.
 
+To install a given release instead of the latest, such as a release
+candidate, take the install line from that release and name its version:
+
+```bash
+curl -fsSL https://github.com/EinarLogiOskars/commitarium/releases/download/v0.11.0-rc.1/install-host.sh | sudo sh -s -- --version 0.11.0-rc.1
+```
+
+A server on a release candidate is offered the release once it is out.
+
 ## What runs where
 
 Your code, agent sign-ins and Forgejo all live on the server, so back it up.
