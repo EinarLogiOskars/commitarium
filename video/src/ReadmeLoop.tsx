@@ -72,10 +72,11 @@ const DRAWER_TO = DRAWER_FROM + 10;
 // You show Mayka what to change: the +, Screenshot the app, and a flash
 // while the drawer steps aside for it.
 const PLUS_AT = DRAWER_TO + 12;
-const PICK_AT = PLUS_AT + 26;
+// Held long enough to read the menu, and which choice is taken.
+const PICK_AT = PLUS_AT + 56;
 const CAPTURE_AT = PICK_AT + 8;
-const SHOT_IN = CAPTURE_AT + 14;
-const TYPE_2_FROM = SHOT_IN + 12;
+const SHOT_IN = CAPTURE_AT + 16;
+const TYPE_2_FROM = SHOT_IN + 22;
 const TYPE_2_TO = TYPE_2_FROM + 45;
 const SEND_2 = TYPE_2_TO + 10;
 const REPLY_2_AT = SEND_2 + 24;
@@ -431,7 +432,7 @@ function PlantPal({ frame }: { frame: number }) {
               </div>
               <div style={{ padding: "0 14px 14px" }}>
                 {/* The menu's choice, pointed at before it is picked. */}
-                {frame >= PICK_AT - 10 && frame < PICK_AT + 2 && (
+                {frame >= PICK_AT - 28 && frame < PICK_AT + 2 && (
                   <style>{`.composer-menu__list li:last-child .composer-menu__item { background: var(--accent-soft); }`}</style>
                 )}
                 {shot && (
