@@ -1,8 +1,10 @@
 #!/bin/sh
 # Installs Commitarium's host as a service on a Linux server, or repairs and
-# upgrades one. Data is kept. Run with --uninstall to remove the service.
+# upgrades one. Data is kept. Run with --uninstall to remove the service,
+# or --version to install a given release, such as a release candidate.
 #
 #   curl -fsSL https://github.com/EinarLogiOskars/commitarium/releases/latest/download/install-host.sh | sudo sh
+#   curl -fsSL …/releases/download/v0.11.0-rc.1/install-host.sh | sudo sh -s -- --version 0.11.0-rc.1
 set -eu
 
 REPOSITORY="EinarLogiOskars/commitarium"
@@ -21,6 +23,8 @@ BINARY="$DATA_DIR/bin/commitarium-host"
 MINIMUM_DISK_GB=20
 MINIMUM_MEMORY_GB=2
 READY_SECONDS=900
+# The latest release, unless --version names one.
+VERSION=""
 
 say() { printf '%s\n' "$*"; }
 stop() {
@@ -86,7 +90,11 @@ create_user() {
 }
 
 download_host() {
-  base="https://github.com/${REPOSITORY}/releases/latest/download"
+  if [ -n "$VERSION" ]; then
+    base="https://github.com/${REPOSITORY}/releases/download/v${VERSION#v}"
+  else
+    base="https://github.com/${REPOSITORY}/releases/latest/download"
+  fi
   file="commitarium-host-linux-${ARCHITECTURE}"
   folder=$(mktemp -d)
   trap 'rm -rf "$folder"' EXIT
@@ -182,10 +190,20 @@ uninstall() {
   say "To stop the stack: sudo docker compose -p commitarium down"
 }
 
-if [ "${1:-}" = "--uninstall" ]; then
-  uninstall
-  exit 0
-fi
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --uninstall)
+      uninstall
+      exit 0
+      ;;
+    --version)
+      [ $# -ge 2 ] || stop "--version needs a version, such as 0.11.0-rc.1."
+      VERSION="$2"
+      shift 2
+      ;;
+    *) stop "unknown option $1." ;;
+  esac
+done
 
 check_machine
 check_docker
