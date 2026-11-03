@@ -821,6 +821,12 @@ export const createServerBackup = (): Promise<BackupResult> => hostPost("/v1/bac
 export const restoreServerBackup = (name: string): Promise<BackupResult> =>
   hostPost("/v1/backups/restore", { name });
 
+/** What a server's backups are doing: its stack is stopped meanwhile. */
+export type BackupUnderway = "backup" | "restore" | null;
+
+export const backupUnderway = async (): Promise<BackupUnderway> =>
+  (await hostGet<{ underway: BackupUnderway }>("/v1/backups/underway")).underway;
+
 export const onBackupProgress = (handler: (step: string) => void): Promise<UnlistenFn> =>
   listen<{ step: string }>("backup_progress", (event) => handler(event.payload.step));
 
