@@ -82,6 +82,12 @@ h3,
 h4,
 .site-title {
   letter-spacing: -0.02em;
+  gap: 0.6rem;
+}
+
+/* The mark sits beside the name at about the height of its capitals' line. */
+.site-title img {
+  height: 1.6rem;
 }
 
 /* Sidebar: a quiet selected row, as in the app, not an inverted block. */
