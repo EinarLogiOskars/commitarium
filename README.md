@@ -2,9 +2,17 @@
 
 **Think it, and it’s yours.**
 
-Describe any app, and Commitarium builds it, runs it, and changes it whenever
-you want. Or bring your own code, and work with a team of AI agents that plan,
-build and review every change.
+**Commitarium is an AI coding harness that works like a disciplined team.**
+Every change is planned, built, reviewed by a second model, tested, and merged
+through a pull request, using the Claude and Codex accounts you already have.
+
+**It opens as a desktop app with nothing to configure.** Install it, sign in
+your agents, and describe an app or bring your own repository.
+
+**On your own server, it ships your work too.** Put Commitarium on a VPS or a
+homelab and it keeps working while your laptop is closed, and deploys your apps
+at their own addresses, with HTTPS, behind a password or your company's
+sign-in, backed up every night.
 
 [![CI](https://github.com/EinarLogiOskars/commitarium/actions/workflows/ci.yml/badge.svg)](https://github.com/EinarLogiOskars/commitarium/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/EinarLogiOskars/commitarium?label=release)](https://github.com/EinarLogiOskars/commitarium/releases)
