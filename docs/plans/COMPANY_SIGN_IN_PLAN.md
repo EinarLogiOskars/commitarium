@@ -40,7 +40,7 @@ account, and each app chooses which groups may open it.
   `groups` claim); the guides say how for each provider.
 - **Who is signing in reaches the app** in request headers, which no visitor
   can forge (Caddy removes them from every request first):
-  `X-Commitarium-User`, `X-Commitarium-Email`, `X-Commitarium-Name`,
+  `X-Commitarium-User`, `X-Commitarium-Email`, `X-Commitarium-Username`,
   `X-Commitarium-Groups` (comma-separated). An app needs no login code;
   Mayka uses the headers when asked to show who is signed in or to hide
   things from a group.
@@ -109,6 +109,9 @@ Made while the user was away; each is easy to change.
 
 ## Tests owed to the user
 
-- C1 is tested end to end on a computer with a test provider. Owed: a real
-  provider (Google Workspace or Entra ID) on the user's server, with a real
-  certificate.
+- C1 is tested end to end on a computer: `scripts/try-company-sign-in.sh`
+  runs Caddy with the host's config, the gate, a mock provider and an echo
+  app, and showed the redirect to sign in, the identity reaching the app (a
+  forged header replaced), a 403 page for another group, and anyone at the
+  company when the app lists no groups. Owed: a real provider (Google
+  Workspace or Entra ID) on the user's server, with a real certificate.

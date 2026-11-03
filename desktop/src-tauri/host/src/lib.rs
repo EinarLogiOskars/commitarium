@@ -29,3 +29,4 @@ pub mod server;
 pub mod server_backups;
 #[cfg(unix)]
 pub mod service;
+pub mod sign_in;
