@@ -186,6 +186,12 @@ export function AppWindow({ projectId }: { projectId: string }) {
                     ? "Setting it up…"
                     : `Building · ${goal?.items.filter((i) => i.done).length ?? 0} of ${goal?.items.length ?? 0}`}
               </p>
+              {launch === "setup" && (
+                <p className="muted note">
+                  First the project&apos;s skeleton: a minimal app on its stack that starts, the
+                  base everything is built on. This takes a few minutes.
+                </p>
+              )}
               {goal && <BuildChecklist goal={goal} />}
               {conversation?.sign_in?.needs_user && (
                 <SignInNotice
@@ -292,7 +298,8 @@ function withTheme(url: string): string {
 }
 
 /** The build's items: P0, what the app needs to be usable, then a line where
- * it opens, then the rest. The first item is the base the others build on. */
+ * it opens, then the rest. The first is the foundation the plan builds the
+ * features on (WidePlan), so it takes longest. */
 function BuildChecklist({ goal }: { goal: AutopilotGoal }) {
   const core = goal.items.filter((item) => item.label.startsWith("P0."));
   const later = goal.items.filter((item) => !item.label.startsWith("P0."));
@@ -301,7 +308,7 @@ function BuildChecklist({ goal }: { goal: AutopilotGoal }) {
       {item.done ? "✓" : "·"} {item.title}
       {first && !item.done && (
         <span className="muted app-window__item-note">
-          The base the rest builds on; usually the longest step.
+          The foundation the features build on, so it takes longest.
         </span>
       )}
     </li>
