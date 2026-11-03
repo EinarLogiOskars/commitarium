@@ -5,7 +5,7 @@ sidebar:
   order: 2
 ---
 
-This page gets Commitarium onto your computer and running.
+This page gets Commitarium up and running on your computer.
 
 ## What you need
 
