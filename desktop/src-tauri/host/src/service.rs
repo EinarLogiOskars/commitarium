@@ -117,6 +117,7 @@ pub fn serve(data_dir: PathBuf) -> Result<(), String> {
         starting.restore_deployments();
     });
     shared.keep_publishing();
+    shared.keep_nightly_backups();
 
     wait_for_stop()?;
     shared.stop_previews_and_logins();

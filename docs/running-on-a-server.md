@@ -58,6 +58,15 @@ Commitarium gets a certificate for each address by itself. Ports 80 and 443
 must be open, as well as 7443. You can also ask Mayka to deploy; she asks you
 first.
 
+## Backups
+
+A server backs itself up each night while no agent is working, and keeps the
+last seven, in `backups/` in its data directory: projects, chats, agents'
+history and deployed apps' data. Settings > Backup lists them, makes one now,
+and restores one. They stay on the server, so they do not survive losing it;
+a git remote (Sync) keeps a copy of the code elsewhere. Agent sign-ins and
+device keys are not in a backup.
+
 ## Reaching the server
 
 **With Tailscale.** This is the best choice for a server at home, because it

@@ -272,6 +272,7 @@ export function AppSettings({
             : null
         }
         onBusyChange={setBackupBusy}
+        running={busy}
       />
     ),
     about: (

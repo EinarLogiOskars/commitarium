@@ -2,6 +2,7 @@
 //! the desktop app so it can also run without one (ADR-040).
 
 pub mod agents;
+pub mod backup;
 pub mod bootstrap;
 pub mod bridge;
 pub mod cleanup;
@@ -26,4 +27,5 @@ pub mod publishing;
 pub mod runtime;
 pub mod server;
 #[cfg(unix)]
+pub mod server_backups;
 pub mod service;
