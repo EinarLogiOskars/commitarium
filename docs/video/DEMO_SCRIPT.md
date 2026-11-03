@@ -48,6 +48,7 @@ getting it onto your computer."
 4. Open it, drag to Applications, first launch: Gatekeeper's prompt, Open
    anyway (say why: not code-signed, buildable from source).
 5. The first start: checking Docker, pulling images, starting the stack.
+   Say it takes a few minutes the first time, then cut the wait.
 
 Check: it opens on Apps with "No apps yet"; Settings > About shows 0.11.0.
 
@@ -60,10 +61,16 @@ connect it."
 
 1. Agents: add an agent, name it, choose Claude, sign in in the browser.
 2. Add a second, Codex. Say why two providers: one builds, the other
-   reviews, so no model signs off its own work.
-3. Usage limits on each agent; the assistant spreads work by what is left.
+   reviews, so no model signs off its own work. Say the first agent of a
+   provider takes a couple of minutes to set up, then cut the wait.
+3. Mayka: Agents > Mayka, choose the agent and model she runs on, Save.
+   Say she writes the plans and every work order, so a strong model pays
+   off here.
+4. Each agent's usage appears once it has worked (show it in part 3); Mayka
+   spreads work by what is left.
 
-Check: both agents show as connected with their usage.
+Check: both agents show as connected; Mayka's model list fills in by
+itself right after the agent is added, and Save works at once.
 
 Cut: "Next video: your first app, from one sentence."
 
@@ -78,8 +85,10 @@ Opens with: "Agents are connected; now let's make something."
 4. Ask for a change from inside the app: "Add a thirst bar to each plant."
    Watch it change.
 
-Check: the app builds and opens without help; the change lands and the app
-reloads with it.
+Check: the app builds and opens without help, fading in from the waiting
+screen, with its progress in a corner while the build goes on; it starts in
+the same theme as Commitarium and has its own light/dark setting; the change
+lands and the app reloads with it; the agents now show their usage.
 
 Cut: "Next video opens the hood: Developer mode."
 
