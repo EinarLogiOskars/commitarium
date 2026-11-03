@@ -40,7 +40,6 @@ export function ComposerBox({
   submitDisabled,
   submitLabel,
   submitIcon = "send",
-  menuOpen,
 }: {
   value: string;
   onChange: (value: string) => void;
@@ -54,9 +53,6 @@ export function ComposerBox({
   onFiles?: (files: File[]) => void;
   filesDisabled?: boolean;
   options?: ComposerOption[];
-  /** Holds the + menu open or shut, for the README's animation, which
-   * draws frames one at a time; the app leaves it to the +. */
-  menuOpen?: boolean;
   /** Controls beside the +, such as who the message goes to. */
   leading?: ReactNode;
   onSubmit: () => void;
@@ -80,12 +76,7 @@ export function ComposerBox({
 
   return (
     <div className={`composer-box${disabled ? " composer-box--disabled" : ""}`}>
-      <PlusMenu
-        onFiles={onFiles}
-        filesDisabled={filesDisabled}
-        options={options}
-        shown={menuOpen}
-      />
+      <PlusMenu onFiles={onFiles} filesDisabled={filesDisabled} options={options} />
       {leading}
       <textarea
         ref={(el) => {
@@ -119,21 +110,17 @@ function PlusMenu({
   onFiles,
   filesDisabled,
   options,
-  shown,
 }: {
   onFiles?: (files: File[]) => void;
   filesDisabled?: boolean;
   options: ComposerOption[];
-  shown?: boolean;
 }) {
-  const [opened, setOpen] = useState(false);
-  const open = shown ?? opened;
+  const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement | null>(null);
   const input = useRef<HTMLInputElement | null>(null);
 
-  // Closing on a click elsewhere or Escape: only a menu the + opened.
   useEffect(() => {
-    if (!opened) return;
+    if (!open) return;
     const onDown = (e: MouseEvent) => {
       if (!root.current?.contains(e.target as Node)) setOpen(false);
     };
@@ -149,7 +136,7 @@ function PlusMenu({
       window.removeEventListener("mousedown", onDown);
       window.removeEventListener("keydown", onKey, true);
     };
-  }, [opened]);
+  }, [open]);
 
   const items: ComposerOption[] = [
     ...(onFiles && !filesDisabled

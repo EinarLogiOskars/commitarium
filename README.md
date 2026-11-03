@@ -11,7 +11,7 @@ want.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/media/commitarium-dark.gif">
-  <img alt="Commitarium building an app from one sentence, then changing it from a screenshot of the app" src="docs/media/commitarium.gif">
+  <img alt="Commitarium building an app from one sentence, then changing it on request" src="docs/media/commitarium.gif">
 </picture>
 
 <sub>*Sped up. In reality, an app like this takes about half an hour to build,
