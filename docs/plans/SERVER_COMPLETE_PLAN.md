@@ -1,6 +1,6 @@
 # Server Mode, Complete: Implementation Plan (0.10.0)
 
-**Status:** agreed 2026-11-02. S1 built and tested on a server except restore; S2 reworked into a linked repository the user pulls from and pushes to, after the push mirror proved able to overwrite the remote; S1 to S7 built; waiting for the user's test, then 0.10.0. Finishes what
+**Status:** agreed 2026-11-02; done 2026-11-03. S1 to S7 built, tested on the user's server and computer, and released in 0.10.0. S2 became a linked repository the user pulls from and pushes to, after the push mirror proved able to overwrite the remote. Finishes what
 [REMOTE_HOST_PLAN.md](REMOTE_HOST_PLAN.md) left for after its milestone, so a
 server can be the only place a user's work lives. Released together as 0.10.0;
 company sign-in follows as 0.11.0.
