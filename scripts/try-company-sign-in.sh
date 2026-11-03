@@ -25,7 +25,11 @@ json.dump(c,open(p,"w"))
 P
 docker run -d --name si-caddy --network sitest -v $S/caddy.json:/c.json:ro caddy:2.9.1 caddy run --config /c.json >/dev/null
 docker run -d --name si-app --network container:si-caddy traefik/whoami:v1.10 --port 3000 >/dev/null
-docker run -d --name si-gate --network container:si-caddy -e OAUTH2_PROXY_CLIENT_SECRET=secret -e OAUTH2_PROXY_COOKIE_SECRET=cccccccccccccccccccccccccccccccc quay.io/oauth2-proxy/oauth2-proxy:v7.12.0 $(cat $S/gate-args | tr '\n' ' ') >/dev/null
+# One argument per line: some hold spaces.
+OLD_IFS=$IFS; IFS='
+'
+docker run -d --name si-gate --network container:si-caddy -e OAUTH2_PROXY_CLIENT_SECRET=secret -e OAUTH2_PROXY_COOKIE_SECRET=cccccccccccccccccccccccccccccccc quay.io/oauth2-proxy/oauth2-proxy:v7.12.0 $(cat $S/gate-args) >/dev/null
+IFS=$OLD_IFS
 sleep 6
 IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' si-caddy)
 curl() { docker run --rm --network sitest -v $S:/w curlimages/curl:8.11.1 -sk --resolve todo.example.test:443:$IP --resolve sign-in.example.test:443:$IP "$@"; }
