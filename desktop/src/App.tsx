@@ -1,11 +1,17 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { coordinatorReachable } from "./api/health";
 import { useAttention } from "./attention/useAttention";
 import { useNotifier } from "./attention/useNotifier";
 import { useDesktopSettings } from "./settings/useDesktopSettings";
 import { useBoot } from "./boot/useBoot";
 import { BootScreen } from "./views/BootScreen";
-import { exitPromptShown, onExitConfirmationRequested, restartApp } from "./ipc";
+import {
+  backupUnderway,
+  exitPromptShown,
+  onExitConfirmationRequested,
+  restartApp,
+  type BackupUnderway,
+} from "./ipc";
 import { AppSettings } from "./views/AppSettings";
 import { ExitConfirm } from "./views/ExitConfirm";
 import { Inbox } from "./views/Inbox";
@@ -62,6 +68,9 @@ function App() {
   const placeName = usePlaceName();
   const [dismissedWarning, setDismissedWarning] = useState<string | null>(null);
   const [reachable, setReachable] = useState(false);
+  // A server's backup or restore stops its stack for a while: said as such,
+  // not as a server the app cannot reach.
+  const [underway, setUnderway] = useState<BackupUnderway>(null);
   const [entered, setEntered] = useState(false);
   const [autoEntered, setAutoEntered] = useState(false);
   const [projectId, setProjectId] = useState<string | null>(null);
@@ -159,8 +168,27 @@ function App() {
     enabled: desktop.settings.notifications_enabled,
   });
 
+  // One missed answer is a blip (a busy server, a moment on the network): the
+  // app counts as unreachable only after two in a row, so it does not flicker
+  // and reload every view. A check still in flight is not stacked on.
+  const missed = useRef(0);
+  const checking = useRef(false);
   const checkHealth = useCallback(async () => {
-    setReachable(await coordinatorReachable());
+    if (checking.current) return;
+    checking.current = true;
+    try {
+      if (await coordinatorReachable()) {
+        missed.current = 0;
+        setReachable(true);
+        setUnderway(null);
+        return;
+      }
+      missed.current += 1;
+      setUnderway(await backupUnderway().catch(() => null));
+      if (missed.current >= 2) setReachable(false);
+    } finally {
+      checking.current = false;
+    }
   }, []);
 
   useEffect(() => {
@@ -201,11 +229,19 @@ function App() {
     />
   );
 
-  const pillClass = `pill pill--${reachable ? "ok" : "bad"}`;
+  const pillState = reachable ? "ok" : underway ? "warn" : "bad";
+  const pillClass = `pill pill--${pillState}`;
   const pillInner = (
     <>
-      <span className={`dot dot--${reachable ? "ok" : "bad"}`} />
-      {placeName} · {reachable ? "reachable" : "unreachable"}
+      <span className={`dot dot--${pillState}`} />
+      {placeName} ·{" "}
+      {reachable
+        ? "reachable"
+        : underway === "restore"
+          ? "restoring a backup"
+          : underway === "backup"
+            ? "backing up"
+            : "unreachable"}
     </>
   );
   // On the system screen the pill is a plain status badge. In the workspace it
