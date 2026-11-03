@@ -708,6 +708,22 @@ pub fn coordinator_connection(app: AppHandle) -> Option<WindowConnection> {
     })
 }
 
+/// The local address of the shown server's Forgejo, for the browser
+/// (SERVER_COMPLETE_PLAN.md, S4); `None` on this computer, where Forgejo is
+/// on its own port.
+#[tauri::command]
+pub async fn forgejo_address(app: AppHandle) -> Result<Option<String>, String> {
+    let Some(bridge) = app
+        .state::<Host>()
+        .remote()
+        .and_then(Result::ok)
+        .and_then(|c| c.bridge)
+    else {
+        return Ok(None);
+    };
+    bridge.forgejo_url().await.map(Some)
+}
+
 #[tauri::command]
 pub async fn host_connection(app: AppHandle) -> Result<HostConnection, String> {
     connected(&app).await

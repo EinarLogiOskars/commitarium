@@ -3,6 +3,7 @@
 // mirrors the commands registered in src-tauri/src/lib.rs and the routes in
 // src-tauri/host/src/server.rs.
 
+import { connectedServer } from "./connection";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { fetch } from "@tauri-apps/plugin-http";
@@ -353,7 +354,17 @@ export const loadUiState = <T = unknown>(): Promise<T | null> => invoke("load_ui
 export const saveUiState = (state: unknown): Promise<void> => invoke("save_ui_state", { state });
 
 // Open a URL in the user's default browser (used for the Docker install link).
-export const openExternal = (url: string): Promise<void> => openUrl(url);
+/** Forgejo's own addresses: on a server, the bridge stands in for them. */
+const FORGEJO_HERE = /^http:\/\/(127\.0\.0\.1|localhost):3001(?=\/|$)/;
+
+export const openExternal = async (url: string): Promise<void> => {
+  if (connectedServer() && FORGEJO_HERE.test(url)) {
+    // The server's Forgejo reaches the browser through the bridge (S4).
+    const base = await invoke<string | null>("forgejo_address");
+    if (base) return openUrl(url.replace(FORGEJO_HERE, base));
+  }
+  return openUrl(url);
+};
 
 // --- Project import (host-side) ---
 

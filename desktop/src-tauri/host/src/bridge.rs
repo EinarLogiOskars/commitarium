@@ -35,6 +35,8 @@ struct Shared {
     origins: Mutex<Vec<String>>,
     /// A preview's port on the server, and the local port standing for it.
     tunnels: Mutex<HashMap<u16, u16>>,
+    /// The local port that stands for the server's Forgejo, once asked for.
+    forgejo: tokio::sync::Mutex<Option<u16>>,
 }
 
 #[derive(Clone)]
@@ -68,6 +70,7 @@ impl Bridge {
             host: format!("127.0.0.1:{port}"),
             origins: Mutex::new(origins),
             tunnels: Mutex::default(),
+            forgejo: tokio::sync::Mutex::default(),
         });
         tokio::spawn(accept(listener, shared.clone()));
         Ok(Self { shared, port })
@@ -92,6 +95,27 @@ impl Bridge {
 
     pub fn coordinator_url(&self) -> String {
         format!("http://127.0.0.1:{}/coordinator", self.port)
+    }
+
+    /// A local address for the server's Forgejo, the audit viewer's pages
+    /// (SERVER_COMPLETE_PLAN.md, S4), for the browser. Like Forgejo on this
+    /// computer, it is open to local processes and asks for its own login:
+    /// no token is added, so the browser only gets the viewer's read access.
+    pub async fn forgejo_url(&self) -> Result<String, String> {
+        let mut forgejo = self.shared.forgejo.lock().await;
+        if let Some(port) = *forgejo {
+            return Ok(format!("{LOCAL_PREVIEW}{port}"));
+        }
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .map_err(|e| format!("listen: {e}"))?;
+        let port = listener
+            .local_addr()
+            .map_err(|e| format!("listen: {e}"))?
+            .port();
+        *forgejo = Some(port);
+        tokio::spawn(carry_forgejo(listener, self.shared.clone(), port));
+        Ok(format!("{LOCAL_PREVIEW}{port}"))
     }
 
     /// Points each preview address in a status at a local port that reaches it.
@@ -202,6 +226,79 @@ fn allowed(shared: &Shared, headers: &HeaderMap, path: &str) -> bool {
     let holds_access = same(token, &shared.token)
         || (path.starts_with("/coordinator/") && same(token, &shared.coordinator_token));
     text(HOST) == Some(shared.host.as_str()) && known_origin && holds_access
+}
+
+async fn carry_forgejo(listener: TcpListener, shared: Arc<Shared>, port: u16) {
+    while let Ok((stream, _)) = listener.accept().await {
+        let shared = shared.clone();
+        tokio::spawn(async move {
+            let service = service_fn(move |request| {
+                let shared = shared.clone();
+                async move {
+                    Ok::<_, std::convert::Infallible>(forward_forgejo(&shared, request, port).await)
+                }
+            });
+            let _ = hyper::server::conn::http1::Builder::new()
+                .serve_connection(TokioIo::new(stream), service)
+                .await;
+        });
+    }
+}
+
+/// Forgejo names itself by its address on the server; the browser knows it
+/// by this port.
+const FORGEJO_SELF: &[&str] = &["http://localhost:3001", "http://127.0.0.1:3001"];
+
+async fn forward_forgejo(shared: &Shared, request: Request<Incoming>, port: u16) -> Reply {
+    let (parts, body) = request.into_parts();
+    let path = parts
+        .uri
+        .path_and_query()
+        .map_or("/", |path| path.as_str())
+        .to_string();
+    let mut headers = parts.headers;
+    for name in [AUTHORIZATION, HOST, CONNECTION, TRANSFER_ENCODING] {
+        headers.remove(name);
+    }
+    let body = BodyStream::new(body).filter_map(|frame| async {
+        match frame {
+            Ok(frame) => frame.into_data().ok().map(Ok),
+            Err(error) => Some(Err(error)),
+        }
+    });
+    let sent = shared
+        .client
+        .request(parts.method, format!("{}/forgejo{path}", shared.server))
+        .headers(headers)
+        .body(reqwest::Body::wrap_stream(body))
+        .send()
+        .await;
+    let Ok(response) = sent else {
+        return plain(StatusCode::BAD_GATEWAY);
+    };
+    let status = response.status();
+    let mut headers = response.headers().clone();
+    for name in [CONNECTION, TRANSFER_ENCODING] {
+        headers.remove(name);
+    }
+    if let Some(location) = headers
+        .get(hyper::header::LOCATION)
+        .and_then(|value| value.to_str().ok())
+    {
+        let here = format!("{LOCAL_PREVIEW}{port}");
+        let moved = FORGEJO_SELF
+            .iter()
+            .fold(location.to_string(), |at, own| at.replace(own, &here));
+        if let Ok(value) = moved.parse() {
+            headers.insert(hyper::header::LOCATION, value);
+        }
+    }
+    let mut reply = Response::new(BodyExt::boxed(StreamBody::new(
+        response.bytes_stream().map_ok(Frame::data),
+    )));
+    *reply.status_mut() = status;
+    *reply.headers_mut() = headers;
+    reply
 }
 
 async fn answer(shared: &Shared, request: Request<Incoming>) -> Reply {

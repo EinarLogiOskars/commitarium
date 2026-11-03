@@ -17,6 +17,7 @@ permissions = [
   "allow-stack-down",
   "allow-stack-update",
   "allow-host-connection",
+  "allow-forgejo-address",
   "allow-coordinator-connection",
   "allow-connection-mode",
   "allow-use-this-computer",
