@@ -1,7 +1,7 @@
 # Company Sign-in: Implementation Plan (0.11.0)
 
-**Status:** shape agreed with the user 2026-11-03. C1 to C4 built as stacked
-PRs for the user to review. Builds on [PUBLISHING_PLAN.md](PUBLISHING_PLAN.md).
+**Status:** agreed 2026-11-03; done 2026-11-03. C1 to C4 built, tested on
+a computer and on the user's server, and released in 0.11.0. Builds on [PUBLISHING_PLAN.md](PUBLISHING_PLAN.md).
 
 A deployed app on a server can be opened by anyone, or only with a password.
 Company sign-in adds a third choice: people sign in with their company
