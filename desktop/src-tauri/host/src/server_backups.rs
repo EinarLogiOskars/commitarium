@@ -51,6 +51,9 @@ pub struct ServerBackups {
     data_dir: PathBuf,
     /// One backup or restore at a time.
     running: Arc<Mutex<()>>,
+    /// Which one is under way, for the app to tell a stopped stack from a
+    /// server it cannot reach.
+    underway: Arc<Mutex<Option<&'static str>>>,
 }
 
 /// What a backup needs of the host to stop and start the stack.
@@ -66,6 +69,18 @@ impl ServerBackups {
             dir: data_dir.join(DIR),
             data_dir: data_dir.to_path_buf(),
             running: Arc::default(),
+            underway: Arc::default(),
+        }
+    }
+
+    /// "backup" or "restore" while one runs.
+    pub fn underway(&self) -> Option<&'static str> {
+        self.underway.lock().ok().and_then(|underway| *underway)
+    }
+
+    fn mark(&self, what: Option<&'static str>) {
+        if let Ok(mut underway) = self.underway.lock() {
+            *underway = what;
         }
     }
 
@@ -101,7 +116,10 @@ impl ServerBackups {
         let _held = self.running.lock().map_err(|_| "a backup is unavailable")?;
         fs::create_dir_all(&self.dir).map_err(|e| format!("create {}: {e}", self.dir.display()))?;
         let destination = self.dir.join(format!("{PREFIX}{}", now()));
-        let result = self.with_context(stack, |ctx| backup::create(ctx, &destination))?;
+        self.mark(Some("backup"));
+        let result = self.with_context(stack, |ctx| backup::create(ctx, &destination));
+        self.mark(None);
+        let result = result?;
         self.prune();
         Ok(result)
     }
@@ -113,7 +131,10 @@ impl ServerBackups {
         }
         let _held = self.running.lock().map_err(|_| "a backup is unavailable")?;
         let source = self.dir.join(name);
-        self.with_context(stack, |ctx| backup::restore(ctx, &source))
+        self.mark(Some("restore"));
+        let result = self.with_context(stack, |ctx| backup::restore(ctx, &source));
+        self.mark(None);
+        result
     }
 
     fn with_context<T>(
