@@ -77,6 +77,7 @@ import {
   planChanges,
   planChangeShows,
   passedOverQuestions,
+  heldCards,
   planCommand,
   planMenuLabel,
   planPhase,
@@ -569,6 +570,9 @@ export function ChatView({
 
   // Questions the user has since written past fade, still answerable.
   const passedOver = passedOverQuestions(conversation?.messages ?? []);
+  // Cards a newer one replaced, or that wait for Mayka's answer to a
+  // message written after them, cannot be acted on.
+  const held = heldCards(conversation?.messages ?? [], conversation?.actions ?? [], running);
 
   // A created app or project that did not start keeps its card, with Try
   // again. Where Mayka builds everything, what Commitarium applies by itself
@@ -694,6 +698,7 @@ export function ChatView({
       onOpenOrder={onOpenOrder}
       visionLabel={visionItems.get(action.vision_item_id)}
       plain={builds}
+      held={held.get(action.id)}
     />
   );
 
@@ -1138,9 +1143,12 @@ function ActionCard({
   onOpenOrder,
   visionLabel,
   plain,
+  held,
 }: {
   scope: ChatTarget;
   action: AssistantAction;
+  /** Why it cannot be acted on now, in place of its buttons. */
+  held?: string;
   /** "P0.2 Title" for the vision item a new work order delivers. */
   visionLabel?: string;
   /** Where the assistant builds everything, a card is only what needs the
@@ -1158,6 +1166,7 @@ function ActionCard({
   const [busy, setBusy] = useState<null | "approve" | "start" | "dismiss">(null);
   const [error, setError] = useState<string | null>(null);
   const pending = action.status === "proposed";
+  const actionable = pending && !held;
   // A new or started work order's agents and models are the user's to
   // change before approving (ADR-027); another agent moves its model to one
   // its provider offers. Premium is judged on what they choose.
@@ -1306,12 +1315,13 @@ function ActionCard({
                 : [`${APPLY_LABEL[action.type]} ${what}?`, APPLY_LABEL[action.type]];
     return (
       <div
-        className="assistant-action assistant-action--proposed"
+        className={`assistant-action assistant-action--proposed ${held ? "assistant-action--held" : ""}`}
         title={[action.description, `Why: ${action.reason}`].filter(Boolean).join("\n\n")}
       >
         <p className="assistant-action__desc">{question}</p>
         {error && <div className="banner banner--error">{error}</div>}
-        <div className="row">
+        {held && <p className="muted assistant-action__held">{held}</p>}
+        <div className="row" hidden={!!held}>
           <button
             className="primary"
             onClick={() =>
@@ -1346,7 +1356,7 @@ function ActionCard({
     <div
       className={`assistant-action assistant-action--${action.status} ${
         stacked ? "assistant-action--stacked" : ""
-      }`}
+      } ${held ? "assistant-action--held" : ""}`}
     >
       <div className="assistant-action__head">
         <strong>{heading}</strong>
@@ -1513,7 +1523,7 @@ function ActionCard({
       </ul>
       <p className="muted assistant-action__reason">Why: {action.reason}</p>
       {action.result && <p className="muted">{action.result}</p>}
-      {pending && premium.length > 0 && (
+      {actionable && premium.length > 0 && (
         <label className="toggle assistant-action__premium">
           <input
             type="checkbox"
@@ -1539,7 +1549,8 @@ function ActionCard({
           </div>
         </>
       )}
-      {pending && (
+      {pending && held && <p className="muted assistant-action__held">{held}</p>}
+      {actionable && (
         <div className="row">
           {action.type === "create_work_order" && action.brief ? (
             <button
