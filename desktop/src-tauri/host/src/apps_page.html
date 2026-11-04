@@ -59,6 +59,9 @@
   }
   .bar a:hover, .bar button:hover { background: var(--hover); }
   .bar .outside { color: var(--muted); }
+  .bar .again { background: var(--blue); color: #ffffff; }
+  .bar .again:hover { background: var(--blue); opacity: 0.9; }
+  .bar .again[hidden] { display: none; }
 </style>
 </head>
 <body>
@@ -72,6 +75,7 @@
     allow="camera; microphone; geolocation; clipboard-read; clipboard-write; fullscreen; screen-wake-lock"></iframe>
   <nav class="bar" aria-label="Apps">
     <button type="button" id="back">&larr; Apps</button>
+    <button type="button" class="again" id="again" hidden>Sign in again</button>
     <a class="outside" id="outside" target="_blank" rel="noopener">Open on its own &#8599;</a>
   </nav>
 </div>
@@ -88,6 +92,37 @@
     return words.charAt(0).toUpperCase() + words.slice(1);
   };
 
+  // Behind company sign-in, a session can run out while an app is open. The
+  // app in the frame would then be sent to the provider's sign-in page,
+  // which providers refuse to show in a frame. So the page checks first:
+  // through Caddy, an expired session answers with the gate's redirect.
+  async function signedIn() {
+    try {
+      const response = await fetch("/api/session", { redirect: "manual", cache: "no-store" });
+      return !(response.type === "opaqueredirect" || response.status === 401);
+    } catch {
+      return true; // Offline or restarting: nothing to ask of the person.
+    }
+  }
+
+  // Signing in happens at the top level, and the gate brings the person
+  // back to this same address, so the app opens again.
+  const signInAgain = () => {
+    try { sessionStorage.setItem("signing-in", String(Date.now())); } catch {}
+    location.reload();
+  };
+  // Just back from signing in and still not signed in: ask rather than
+  // reload again and again.
+  const justTried = () => {
+    try { return Date.now() - Number(sessionStorage.getItem("signing-in")) < 15000; }
+    catch { return false; }
+  };
+
+  async function checkWhileOpen() {
+    if (!document.getElementById("frame").classList.contains("open")) return;
+    if (!(await signedIn())) document.getElementById("again").hidden = false;
+  }
+
   function showList() {
     document.getElementById("frame").classList.remove("open");
     document.getElementById("app").removeAttribute("src");
@@ -103,11 +138,15 @@
     document.title = title(app.name);
   }
 
-  function route() {
+  async function route() {
     const name = decodeURIComponent(location.pathname.slice(1));
     const app = apps.find((candidate) => candidate.name === name);
-    if (app && app.live) showApp(app);
-    else showList();
+    if (!app || !app.live) return showList();
+    if (!(await signedIn())) {
+      if (!justTried()) return signInAgain();
+      document.getElementById("again").hidden = false;
+    }
+    showApp(app);
   }
 
   function render() {
@@ -154,7 +193,13 @@
     history.pushState(null, "", "/");
     showList();
   });
+  document.getElementById("again").addEventListener("click", signInAgain);
   window.addEventListener("popstate", route);
+  setInterval(checkWhileOpen, 2 * 60 * 1000);
+  // A phone puts the page away for hours; check when it comes back.
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") checkWhileOpen();
+  });
 
   document.getElementById("where").textContent = location.host.replace(/^apps\./, "");
   fetch("/api/apps", { credentials: "same-origin" })

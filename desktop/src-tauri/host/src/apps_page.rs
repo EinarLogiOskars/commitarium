@@ -43,7 +43,12 @@ fn answer(request: Request, publishing: &Publishing, deployments: &Deployments) 
         .find(|header| header.field.equiv("X-Commitarium-Groups"))
         .map(|header| header.value.as_str().to_string());
     let path = request.url().split('?').next().unwrap_or("/").to_string();
-    let response = if path == "/api/apps" {
+    let response = if path == "/api/session" {
+        // Reaching here means Caddy let the request through: behind company
+        // sign-in, the session is still good. An expired one never gets
+        // here; the page sees the gate's redirect instead (A2).
+        json(200, r#"{"signed_in":true}"#)
+    } else if path == "/api/apps" {
         match publishing.catalog(deployments, groups.as_deref()) {
             Ok(Some(apps)) => json(200, &serde_json::json!({ "apps": apps }).to_string()),
             Ok(None) => json(404, r#"{"error":"the apps page is off"}"#),
