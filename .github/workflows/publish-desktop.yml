@@ -110,6 +110,9 @@ jobs:
           - runner: ubuntu-24.04
             target: x86_64-unknown-linux-musl
             file: commitarium-host-linux-x86_64
+            # Only one job uploads the install script: two uploading the same
+            # file at once raced and one failed with a 404.
+            extra: scripts/install-host.sh
           - runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-musl
             file: commitarium-host-linux-aarch64
@@ -137,7 +140,7 @@ jobs:
           cp "desktop/src-tauri/target/${{ matrix.target }}/release/commitarium-host" "${{ matrix.file }}"
           sha256sum "${{ matrix.file }}" > "${{ matrix.file }}.sha256"
           npx --yes @tauri-apps/cli@2 signer sign "${{ matrix.file }}"
-          gh release upload "${GITHUB_REF_NAME}" "${{ matrix.file }}" "${{ matrix.file }}.sha256" "${{ matrix.file }}.sig" scripts/install-host.sh --clobber
+          gh release upload "${GITHUB_REF_NAME}" "${{ matrix.file }}" "${{ matrix.file }}.sha256" "${{ matrix.file }}.sig" ${{ matrix.extra }} --clobber
 
   verify-updater:
     needs: publish
