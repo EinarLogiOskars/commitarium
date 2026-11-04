@@ -116,7 +116,11 @@ fn keychain_identity() -> Result<Identity, String> {
                 .map_err(|e| format!("save the device key: {e}"))?;
             Ok(identity)
         }
-        Err(error) => Err(format!("read the keychain: {error}")),
+        Err(error) => Err(format!(
+            "macOS did not let Commitarium read this computer's key for your server from the \
+             keychain. If a keychain prompt appears, enter your Mac password and choose Always \
+             Allow, then Re-check. ({error})"
+        )),
     }
 }
 

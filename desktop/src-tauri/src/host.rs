@@ -341,6 +341,24 @@ fn wait_for<T: Send>(work: impl Future<Output = T> + Send) -> T {
     })
 }
 
+/// How long leaving waits for the host to stop its previews and logins.
+const LEAVING_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Waits for `work` as wait_for does, but gives up after `limit`. Leaving
+/// runs on the main thread, and a web view request finishing at that moment
+/// waits for the main thread too, which can hold up the runtime the work
+/// needs: without a limit the app froze on "Installing…" instead of
+/// restarting. Work cut short carries on in the background until the app
+/// exits.
+fn wait_at_most(limit: Duration, work: impl Future<Output = ()> + Send + 'static) {
+    let (done, finished) = mpsc::channel();
+    thread::spawn(move || {
+        tauri::async_runtime::block_on(work);
+        let _ = done.send(());
+    });
+    let _ = finished.recv_timeout(limit);
+}
+
 pub(crate) fn post_blocking(app: &AppHandle, path: &str, body: Value) -> Result<Value, String> {
     wait_for(post(app, path, body))
 }
@@ -355,7 +373,7 @@ async fn post_if_running(connection: &HostConnection, path: &str) -> Result<Valu
 pub(crate) fn wind_down(app: &AppHandle) {
     let host = app.state::<Host>().inner().clone();
     if let Some(connection) = host.local_running() {
-        wait_for(async {
+        wait_at_most(LEAVING_TIMEOUT, async move {
             let _ = post_if_running(&connection, "/v1/previews/stop-all").await;
             let _ = post_if_running(&connection, "/v1/profiles/shutdown").await;
         });
@@ -390,7 +408,9 @@ pub(crate) fn stop_logins_and_stack(app: &AppHandle) {
 pub(crate) fn stop_for_update(app: &AppHandle) {
     let host = app.state::<Host>().inner().clone();
     if let Some(connection) = host.local_running() {
-        let _ = wait_for(post_if_running(&connection, "/v1/profiles/shutdown"));
+        wait_at_most(LEAVING_TIMEOUT, async move {
+            let _ = post_if_running(&connection, "/v1/profiles/shutdown").await;
+        });
     }
     host.stop();
 }
@@ -742,6 +762,13 @@ pub async fn host_connection(app: AppHandle) -> Result<HostConnection, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn leaving_does_not_wait_for_work_that_never_finishes() {
+        let started = std::time::Instant::now();
+        wait_at_most(Duration::from_millis(200), std::future::pending());
+        assert!(started.elapsed() < Duration::from_secs(2));
+    }
 
     /// One fake host that answers every request the same way.
     fn host_answering(status: u16, body: &'static str) -> HostConnection {
