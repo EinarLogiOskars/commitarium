@@ -1,8 +1,8 @@
 # Homelab Mode: Direction and Plan
 
-**Status:** direction agreed 2026-11-04 in conversation; detailed and
-being built 2026-11-04 (the user away, said to go on), on top of the
-[apps page](APPS_PAGE_PLAN.md). Choices marked *(proposed)* are mine, for
+**Status:** direction agreed 2026-11-04 in conversation; detailed and built
+2026-11-04 (the user away, said to go on) on branch `claude/homelab`, on top
+of the [apps page](APPS_PAGE_PLAN.md). H1–H4 built, not yet live-tested. Choices marked *(proposed)* are mine, for
 the user to confirm in review. Builds on
 [REMOTE_HOST_PLAN.md](REMOTE_HOST_PLAN.md) and ADR-040.
 
@@ -100,8 +100,9 @@ the user to confirm in review. Builds on
   so coming back needs no new sign-in.
 - **The first deploy** on a server with no domain asks who reaches the
   apps, before the apps page offer.
-- **Backups** carry the Tailscale container's state volume with the rest;
-  a restore onto a new machine may need a new sign-in, which the app shows.
+- **Backups** do not carry Tailscale's state for now: a restored server
+  signs in to Tailscale again, through the same link the app shows. Apps'
+  ports are in `publishing.json`, which backups carry, so addresses stay.
 
 ## Live tests owed
 
