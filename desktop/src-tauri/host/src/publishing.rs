@@ -80,6 +80,28 @@ struct AppRoute {
     /// at the company.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     groups: Vec<String>,
+    /// Whether the apps page lists it (APPS_PAGE_PLAN.md): yes unless the
+    /// owner hides it, say while it is a work in progress.
+    #[serde(default = "listed_by_default", skip_serializing_if = "is_listed")]
+    listed: bool,
+}
+
+fn listed_by_default() -> bool {
+    true
+}
+
+fn is_listed(listed: &bool) -> bool {
+    *listed
+}
+
+/// The apps page at `apps.<domain>`: who may open it, as for an app.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct AppsPage {
+    access: Access,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    password_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    password: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -90,6 +112,9 @@ struct Settings {
     /// The company's sign-in provider, once connected.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     sign_in: Option<Provider>,
+    /// The apps page, once turned on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    apps_page: Option<AppsPage>,
 }
 
 /// A published app as a client sees it.
@@ -102,6 +127,24 @@ pub struct PublishedApp {
     /// Whether its deployment runs, so the address answers with the app.
     live: bool,
     groups: Vec<String>,
+    /// Whether the apps page lists it.
+    listed: bool,
+}
+
+/// The apps page as a client sees it.
+#[derive(Serialize)]
+pub struct AppsPageShown {
+    access: Access,
+    url: String,
+}
+
+/// An app as the apps page shows it to the person looking.
+#[derive(Debug, PartialEq, Serialize)]
+pub struct CatalogApp {
+    name: String,
+    url: String,
+    access: Access,
+    live: bool,
 }
 
 #[derive(Serialize)]
@@ -114,6 +157,8 @@ pub struct Overview {
     sign_in: Option<sign_in::Connected>,
     /// authentik on this server, and what it needs.
     authentik: authentik::Status,
+    /// The apps page, when it is on.
+    apps_page: Option<AppsPageShown>,
 }
 
 /// What publishing an app answers: its address.
@@ -174,8 +219,15 @@ impl Publishing {
                         .unwrap_or_default(),
                     live: running.contains_key(project_id),
                     groups: route.groups.clone(),
+                    listed: route.listed,
                 })
                 .collect(),
+            apps_page: settings.apps_page.as_ref().and_then(|page| {
+                Some(AppsPageShown {
+                    access: page.access,
+                    url: address(APPS_PAGE_NAME, settings.domain.as_deref()?),
+                })
+            }),
             sign_in: settings
                 .sign_in
                 .as_ref()
@@ -257,11 +309,12 @@ impl Publishing {
         if access == Access::Company && settings.sign_in.is_none() {
             return Err(NO_PROVIDER.into());
         }
-        let groups = settings
+        let (groups, listed) = settings
             .apps
             .get(project_id)
-            .map(|route| route.groups.clone())
-            .unwrap_or_default();
+            .map_or((Vec::new(), true), |route| {
+                (route.groups.clone(), route.listed)
+            });
         settings.apps.insert(
             project_id.to_string(),
             AppRoute {
@@ -270,6 +323,7 @@ impl Publishing {
                 password_hash,
                 password,
                 groups,
+                listed,
             },
         );
         self.write(&settings)?;
@@ -417,6 +471,13 @@ impl Publishing {
                 using.join(", ")
             ));
         }
+        if settings
+            .apps_page
+            .as_ref()
+            .is_some_and(|page| page.access == Access::Company)
+        {
+            return Err("the apps page uses company sign-in: choose who can open it first".into());
+        }
         settings.sign_in = None;
         self.write(&settings)?;
         if self.authentik.installed() {
@@ -434,6 +495,81 @@ impl Publishing {
             .get(project_id)
             .ok_or("this app is not published")?;
         Ok(route.password.clone())
+    }
+
+    /// Turns the apps page on with who may open it, or off with `None`. A
+    /// password page needs a password the first time, as a private app does.
+    pub fn set_apps_page(
+        &self,
+        access: Option<Access>,
+        password: Option<&str>,
+    ) -> Result<(), String> {
+        let hash = password.map(hashed).transpose()?;
+        let _held = self
+            .applied
+            .lock()
+            .map_err(|_| "publishing is unavailable")?;
+        let mut settings = self.read()?;
+        let Some(access) = access else {
+            settings.apps_page = None;
+            return self.write(&settings);
+        };
+        if settings.domain.is_none() {
+            return Err("set this server's domain in Settings first".into());
+        }
+        if access == Access::Company && settings.sign_in.is_none() {
+            return Err(NO_PROVIDER.into());
+        }
+        let previous = settings.apps_page.take();
+        let (password_hash, password) = match (hash, previous) {
+            (Some(hash), _) => (Some(hash), password.map(str::to_string)),
+            (None, Some(page)) if page.password_hash.is_some() => {
+                (page.password_hash, page.password)
+            }
+            (None, _) if access == Access::Private => {
+                return Err("choose a password for who may open it".into())
+            }
+            (None, _) => (None, None),
+        };
+        settings.apps_page = Some(AppsPage {
+            access,
+            password_hash,
+            password,
+        });
+        self.write(&settings)
+    }
+
+    /// The apps page's password, for its owner to share again.
+    pub fn apps_page_password(&self) -> Result<Option<String>, String> {
+        let settings = self.read()?;
+        let page = settings.apps_page.ok_or("the apps page is off")?;
+        Ok(page.password)
+    }
+
+    /// Lists an app on the apps page, or hides it there.
+    pub fn set_listed(&self, project_id: &str, listed: bool) -> Result<(), String> {
+        let _held = self
+            .applied
+            .lock()
+            .map_err(|_| "publishing is unavailable")?;
+        let mut settings = self.read()?;
+        let route = settings
+            .apps
+            .get_mut(project_id)
+            .ok_or("this app is not published")?;
+        route.listed = listed;
+        self.write(&settings)
+    }
+
+    /// The apps the apps page shows to someone with these groups, when the
+    /// page is behind company sign-in. `None` when it is off.
+    pub fn catalog(
+        &self,
+        deployments: &Deployments,
+        groups: Option<&str>,
+    ) -> Result<Option<Vec<CatalogApp>>, String> {
+        let settings = self.read()?;
+        Ok(catalog(&settings, &deployments.running_ports(), groups))
     }
 
     pub fn unpublish(&self, project_id: &str) -> Result<(), String> {
@@ -489,6 +625,105 @@ impl Publishing {
         *applied = Some(body);
         Ok(())
     }
+}
+
+/// The apps page's address name; `apps` is kept from apps for it.
+const APPS_PAGE_NAME: &str = "apps";
+
+/// What the apps page lists. Behind company sign-in, a person sees only what
+/// they can open: public apps, and company apps open to everyone or to one
+/// of their groups. Hiding is a courtesy: each app keeps its own gate.
+fn catalog(
+    settings: &Settings,
+    running: &BTreeMap<String, u16>,
+    groups: Option<&str>,
+) -> Option<Vec<CatalogApp>> {
+    let page = settings.apps_page.as_ref()?;
+    let domain = settings.domain.as_deref()?;
+    let theirs: Vec<&str> = groups
+        .unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|group| !group.is_empty())
+        .collect();
+    let mut apps: Vec<CatalogApp> = settings
+        .apps
+        .iter()
+        .filter(|(_, route)| route.listed)
+        .filter(|(_, route)| {
+            page.access != Access::Company
+                || match route.access {
+                    Access::Public => true,
+                    Access::Private => false,
+                    Access::Company => {
+                        route.groups.is_empty()
+                            || route
+                                .groups
+                                .iter()
+                                .any(|group| theirs.contains(&group.as_str()))
+                    }
+                }
+        })
+        .map(|(project_id, route)| CatalogApp {
+            name: route.name.clone(),
+            url: address(&route.name, domain),
+            access: route.access,
+            live: running.contains_key(project_id),
+        })
+        .collect();
+    apps.sort_by(|a, b| a.name.cmp(&b.name));
+    Some(apps)
+}
+
+/// The apps page's route: its own gate or password, as chosen, then the
+/// host's page.
+fn apps_page_route(settings: &Settings, apps_page: &AppsPage, domain: &str) -> Value {
+    let host = format!("{APPS_PAGE_NAME}.{domain}");
+    let mut handle = vec![sign_in::strip_identity()];
+    match (apps_page.access, &apps_page.password_hash) {
+        (Access::Company, _) if settings.sign_in.is_none() => {
+            return json!({"match": [{"host": [host]}], "handle": [page(503, NO_SIGN_IN)], "terminal": true});
+        }
+        (Access::Company, _) => {
+            handle.push(sign_in::caddy_gate(domain, &[], page(403, NOT_YOURS)));
+        }
+        (Access::Private, Some(hash)) => handle.push(basic_auth(APPS_PAGE_NAME, hash)),
+        _ => {}
+    }
+    handle.push(json!({
+        "handler": "reverse_proxy",
+        "upstreams": [{"dial": format!("127.0.0.1:{}", crate::apps_page::PORT)}],
+    }));
+    json!({"match": [{"host": [host]}], "handle": handle, "terminal": true})
+}
+
+/// Lets only the apps page show a listed app in a frame. Anything the app
+/// says about framing itself still counts: browsers apply every policy.
+fn framed_by_apps_page(domain: &str) -> Value {
+    json!({
+        "handler": "headers",
+        "response": {
+            "delete": ["X-Frame-Options"],
+            "add": {"Content-Security-Policy": [
+                format!("frame-ancestors 'self' https://{APPS_PAGE_NAME}.{domain}")
+            ]},
+            "deferred": true,
+        },
+    })
+}
+
+fn basic_auth(realm: &str, hash: &str) -> Value {
+    json!({
+        "handler": "authentication",
+        "providers": {"http_basic": {
+            "hash": {"algorithm": "bcrypt"},
+            "realm": realm,
+            "accounts": [{
+                "username": realm,
+                "password": base64::engine::general_purpose::STANDARD.encode(hash),
+            }],
+        }},
+    })
 }
 
 fn address(name: &str, domain: &str) -> String {
@@ -586,17 +821,10 @@ fn caddy_config(settings: &Settings, running: &BTreeMap<String, u16>, authentik:
                 ));
             }
             if let (Access::Private, Some(hash)) = (route.access, &route.password_hash) {
-                handle.push(json!({
-                    "handler": "authentication",
-                    "providers": {"http_basic": {
-                        "hash": {"algorithm": "bcrypt"},
-                        "realm": route.name,
-                        "accounts": [{
-                            "username": route.name,
-                            "password": base64::engine::general_purpose::STANDARD.encode(hash),
-                        }],
-                    }},
-                }));
+                handle.push(basic_auth(&route.name, hash));
+            }
+            if route.listed && settings.apps_page.is_some() {
+                handle.insert(1, framed_by_apps_page(domain));
             }
             match running.get(project_id) {
                 Some(port) => handle.push(json!({
@@ -610,6 +838,9 @@ fn caddy_config(settings: &Settings, running: &BTreeMap<String, u16>, authentik:
             json!({"match": [{"host": [host]}], "handle": handle, "terminal": true})
         })
         .collect();
+    if let Some(page) = &settings.apps_page {
+        routes.insert(0, apps_page_route(settings, page, domain));
+    }
     if settings.sign_in.is_some() {
         routes.insert(0, sign_in::caddy_route(domain));
     }
@@ -761,6 +992,7 @@ mod tests {
             domain: Some("example.com".into()),
             apps: BTreeMap::new(),
             sign_in: None,
+            apps_page: None,
         };
         settings.apps.insert(
             "prj_todo".into(),
@@ -770,6 +1002,7 @@ mod tests {
                 password_hash: Some("$2b$12$hash".into()),
                 password: Some("tasks".into()),
                 groups: Vec::new(),
+                listed: true,
             },
         );
         settings.apps.insert(
@@ -780,6 +1013,7 @@ mod tests {
                 password_hash: None,
                 password: None,
                 groups: Vec::new(),
+                listed: true,
             },
         );
         settings
@@ -950,6 +1184,181 @@ mod tests {
         assert!(publishing.read().unwrap().sign_in.is_none());
     }
 
+    fn provider() -> Provider {
+        Provider {
+            issuer: "https://login.example.com".into(),
+            client_id: "commitarium".into(),
+            client_secret: "secret".into(),
+            scopes: None,
+            groups_claim: None,
+            cookie_secret: "c".repeat(32),
+        }
+    }
+
+    /// todo (password), blog (public), plus sales-only and team-wide company
+    /// apps, all running.
+    fn company_settings() -> (Settings, BTreeMap<String, u16>) {
+        let mut settings = settings();
+        settings.sign_in = Some(provider());
+        for (id, name, groups) in [
+            ("prj_crm", "crm", vec!["sales".to_string()]),
+            ("prj_wiki", "wiki", vec![]),
+        ] {
+            settings.apps.insert(
+                id.into(),
+                AppRoute {
+                    name: name.into(),
+                    access: Access::Company,
+                    password_hash: None,
+                    password: None,
+                    groups,
+                    listed: true,
+                },
+            );
+        }
+        let running = settings.apps.keys().map(|id| (id.clone(), 3000)).collect();
+        (settings, running)
+    }
+
+    fn names(apps: &[CatalogApp]) -> Vec<&str> {
+        apps.iter().map(|app| app.name.as_str()).collect()
+    }
+
+    #[test]
+    fn the_apps_page_lists_only_listed_apps_and_is_off_until_turned_on() {
+        let (mut settings, running) = company_settings();
+        assert!(catalog(&settings, &running, None).is_none());
+        settings.apps_page = Some(AppsPage {
+            access: Access::Public,
+            password_hash: None,
+            password: None,
+        });
+        settings.apps.get_mut("prj_crm").unwrap().listed = false;
+        let apps = catalog(&settings, &running, None).unwrap();
+        // Open to anyone: every listed app, locks and all.
+        assert_eq!(names(&apps), ["blog", "todo", "wiki"]);
+        assert_eq!(apps[1].url, "https://todo.example.com");
+        assert_eq!(apps[1].access, Access::Private);
+    }
+
+    #[test]
+    fn behind_company_sign_in_each_person_sees_what_they_can_open() {
+        let (mut settings, running) = company_settings();
+        settings.apps_page = Some(AppsPage {
+            access: Access::Company,
+            password_hash: None,
+            password: None,
+        });
+        // No password apps: the page cannot know who has the password.
+        let outsider = catalog(&settings, &running, Some("it")).unwrap();
+        assert_eq!(names(&outsider), ["blog", "wiki"]);
+        let seller = catalog(&settings, &running, Some("it, sales")).unwrap();
+        assert_eq!(names(&seller), ["blog", "crm", "wiki"]);
+        let nobody = catalog(&settings, &running, None).unwrap();
+        assert_eq!(names(&nobody), ["blog", "wiki"]);
+    }
+
+    #[test]
+    fn the_apps_page_is_served_behind_its_gate_and_frames_only_listed_apps() {
+        let (mut settings, running) = company_settings();
+        settings.apps.get_mut("prj_crm").unwrap().listed = false;
+        // Off: no route, and no app gets the framing rule.
+        let config = caddy_config(&settings, &running, false);
+        assert!(config.to_string().find("apps.example.com").is_none());
+        settings.apps_page = Some(AppsPage {
+            access: Access::Company,
+            password_hash: None,
+            password: None,
+        });
+        let config = caddy_config(&settings, &running, false);
+        let page = route(&config, "apps.example.com");
+        assert_eq!(page["handle"][0]["handler"], "headers");
+        // Anyone at the company: the gate with no groups.
+        assert_eq!(page["handle"][1]["rewrite"]["uri"], "/oauth2/auth");
+        assert_eq!(
+            page["handle"][2]["upstreams"][0]["dial"],
+            format!("127.0.0.1:{}", crate::apps_page::PORT)
+        );
+        let wiki = route(&config, "wiki.example.com");
+        assert_eq!(
+            wiki["handle"][1]["response"]["add"]["Content-Security-Policy"][0],
+            "frame-ancestors 'self' https://apps.example.com"
+        );
+        let crm = route(&config, "crm.example.com");
+        assert!(crm.to_string().find("frame-ancestors").is_none());
+        // Behind a password, as a private app is.
+        settings.apps_page = Some(AppsPage {
+            access: Access::Private,
+            password_hash: Some("$2b$12$hash".into()),
+            password: Some("apps".into()),
+        });
+        let config = caddy_config(&settings, &running, false);
+        let page = route(&config, "apps.example.com");
+        assert_eq!(page["handle"][1]["handler"], "authentication");
+        assert_eq!(
+            page["handle"][1]["providers"]["http_basic"]["accounts"][0]["username"],
+            "apps"
+        );
+    }
+
+    #[test]
+    fn turning_the_apps_page_on_checks_its_access_and_keeps_its_password() {
+        let data = tempfile::tempdir().unwrap();
+        let publishing = Publishing::new(data.path());
+        publishing.write(&settings()).unwrap();
+        assert_eq!(
+            publishing
+                .set_apps_page(Some(Access::Company), None)
+                .unwrap_err(),
+            NO_PROVIDER
+        );
+        assert!(publishing
+            .set_apps_page(Some(Access::Private), None)
+            .is_err());
+        publishing
+            .set_apps_page(Some(Access::Private), Some("open sesame"))
+            .unwrap();
+        // Opening it to anyone, then closing it again, needs no new password.
+        publishing
+            .set_apps_page(Some(Access::Public), None)
+            .unwrap();
+        publishing
+            .set_apps_page(Some(Access::Private), None)
+            .unwrap();
+        assert_eq!(
+            publishing.apps_page_password().unwrap().as_deref(),
+            Some("open sesame")
+        );
+        publishing.set_listed("prj_todo", false).unwrap();
+        assert!(!publishing.read().unwrap().apps["prj_todo"].listed);
+        publishing.set_apps_page(None, None).unwrap();
+        assert!(publishing.read().unwrap().apps_page.is_none());
+    }
+
+    #[test]
+    fn sign_in_stays_while_the_apps_page_uses_it() {
+        let data = tempfile::tempdir().unwrap();
+        let publishing = Publishing::new(data.path());
+        let mut settings = settings();
+        settings.sign_in = Some(provider());
+        publishing.write(&settings).unwrap();
+        publishing
+            .set_apps_page(Some(Access::Company), None)
+            .unwrap();
+        assert!(publishing
+            .disconnect_sign_in()
+            .unwrap_err()
+            .contains("apps page"));
+    }
+
+    #[test]
+    fn an_app_saved_before_the_apps_page_is_listed() {
+        let route: AppRoute = serde_json::from_str(r#"{"name":"todo","access":"public"}"#).unwrap();
+        assert!(route.listed);
+        let saved = serde_json::to_string(&route).unwrap();
+        assert!(!saved.contains("listed"));
+    }
+
     /// Writes a company app's Caddy config and gate arguments for a live
     /// run against a test provider: `SIGN_IN_TEST_DIR=… cargo test -- --ignored`.
     #[test]
@@ -986,6 +1395,7 @@ mod tests {
             domain: Some("example.test".into()),
             apps: BTreeMap::new(),
             sign_in: Some(provider.clone()),
+            apps_page: None,
         };
         settings.apps.insert(
             "prj_todo".into(),
@@ -995,6 +1405,7 @@ mod tests {
                 password_hash: None,
                 password: None,
                 groups,
+                listed: true,
             },
         );
         let running = BTreeMap::from([("prj_todo".to_string(), 3000)]);

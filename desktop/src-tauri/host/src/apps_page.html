@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Apps</title>
+<style>
+  :root {
+    --bg: #fafafa; --card: #ffffff; --text: #171717; --muted: #666666;
+    --border: #eaeaea; --hover: #f2f2f2; --blue: #0070f3; --tile: #171717; --tile-text: #ffffff;
+    --overlay: rgba(255, 255, 255, 0.86);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #000000; --card: #0a0a0a; --text: #ededed; --muted: #a1a1a1;
+      --border: #242424; --hover: #1a1a1a; --blue: #3b8eff; --tile: #ededed; --tile-text: #0a0a0a;
+      --overlay: rgba(10, 10, 10, 0.86);
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: var(--bg); color: var(--text);
+    font: 15px/1.5 Geist, -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  main { max-width: 960px; margin: 0 auto; padding: 48px 16px 64px; }
+  h1 { font-size: 28px; font-weight: 600; letter-spacing: -0.02em; margin: 0 0 4px; }
+  .where { color: var(--muted); margin: 0 0 32px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
+  .app {
+    display: flex; align-items: center; gap: 12px; padding: 14px;
+    background: var(--card); border: 1px solid var(--border); border-radius: 12px;
+    color: inherit; text-decoration: none; transition: background 0.15s, border-color 0.15s;
+  }
+  .app:hover { background: var(--hover); }
+  .app:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+  .app[aria-disabled="true"] { opacity: 0.55; pointer-events: none; }
+  .tile {
+    flex: none; width: 40px; height: 40px; border-radius: 10px; display: grid; place-items: center;
+    background: var(--tile); color: var(--tile-text); font-weight: 600; font-size: 17px;
+  }
+  .name { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .note { color: var(--muted); font-size: 13px; display: flex; align-items: center; gap: 4px; }
+  .empty, .error { color: var(--muted); padding: 32px 0; }
+  .frame { position: fixed; inset: 0; display: none; background: var(--bg); }
+  .frame.open { display: block; }
+  .frame iframe { width: 100%; height: 100%; border: 0; display: block; }
+  .bar {
+    position: fixed; left: 12px; bottom: calc(12px + env(safe-area-inset-bottom));
+    display: flex; gap: 2px; padding: 4px; border-radius: 999px;
+    background: var(--overlay); border: 1px solid var(--border);
+    backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  }
+  .bar a, .bar button {
+    font: inherit; font-size: 13px; color: var(--text); background: none; border: 0;
+    padding: 6px 12px; border-radius: 999px; cursor: pointer; text-decoration: none;
+  }
+  .bar a:hover, .bar button:hover { background: var(--hover); }
+  .bar .outside { color: var(--muted); }
+</style>
+</head>
+<body>
+<main id="list">
+  <h1>Apps</h1>
+  <p class="where" id="where"></p>
+  <div class="grid" id="apps"></div>
+</main>
+<div class="frame" id="frame">
+  <iframe id="app" title="App"
+    allow="camera; microphone; geolocation; clipboard-read; clipboard-write; fullscreen; screen-wake-lock"></iframe>
+  <nav class="bar" aria-label="Apps">
+    <button type="button" id="back">&larr; Apps</button>
+    <a class="outside" id="outside" target="_blank" rel="noopener">Open on its own &#8599;</a>
+  </nav>
+</div>
+<script>
+  "use strict";
+  const lock = '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" ' +
+    'stroke-width="1.5" aria-hidden="true"><rect x="3" y="7" width="10" height="7" rx="1.5"/>' +
+    '<path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2"/></svg>';
+  const notes = { private: "Password", company: "Company sign-in" };
+  let apps = [];
+
+  const title = (name) => {
+    const words = name.replace(/-/g, " ");
+    return words.charAt(0).toUpperCase() + words.slice(1);
+  };
+
+  function showList() {
+    document.getElementById("frame").classList.remove("open");
+    document.getElementById("app").removeAttribute("src");
+    document.getElementById("list").hidden = false;
+    document.title = "Apps";
+  }
+
+  function showApp(app) {
+    document.getElementById("list").hidden = true;
+    document.getElementById("app").src = app.url;
+    document.getElementById("outside").href = app.url;
+    document.getElementById("frame").classList.add("open");
+    document.title = title(app.name);
+  }
+
+  function route() {
+    const name = decodeURIComponent(location.pathname.slice(1));
+    const app = apps.find((candidate) => candidate.name === name);
+    if (app && app.live) showApp(app);
+    else showList();
+  }
+
+  function render() {
+    const grid = document.getElementById("apps");
+    grid.replaceChildren();
+    if (apps.length === 0) {
+      const empty = document.createElement("p");
+      empty.className = "empty";
+      empty.textContent = "No apps here yet.";
+      grid.append(empty);
+      return;
+    }
+    for (const app of apps) {
+      const link = document.createElement("a");
+      link.className = "app";
+      link.href = "/" + encodeURIComponent(app.name);
+      if (!app.live) link.setAttribute("aria-disabled", "true");
+      const tile = document.createElement("span");
+      tile.className = "tile";
+      tile.textContent = app.name.charAt(0).toUpperCase();
+      const text = document.createElement("span");
+      text.style.minWidth = "0";
+      const name = document.createElement("div");
+      name.className = "name";
+      name.textContent = title(app.name);
+      const note = document.createElement("div");
+      note.className = "note";
+      if (!app.live) note.textContent = "Not running";
+      else if (notes[app.access]) note.innerHTML = lock + " " + notes[app.access];
+      else note.textContent = new URL(app.url).host;
+      text.append(name, note);
+      link.append(tile, text);
+      link.addEventListener("click", (event) => {
+        if (event.metaKey || event.ctrlKey || event.shiftKey) return;
+        event.preventDefault();
+        history.pushState(null, "", link.href);
+        route();
+      });
+      grid.append(link);
+    }
+  }
+
+  document.getElementById("back").addEventListener("click", () => {
+    history.pushState(null, "", "/");
+    showList();
+  });
+  window.addEventListener("popstate", route);
+
+  document.getElementById("where").textContent = location.host.replace(/^apps\./, "");
+  fetch("/api/apps", { credentials: "same-origin" })
+    .then((response) => (response.ok ? response.json() : Promise.reject(response.status)))
+    .then((body) => {
+      apps = body.apps;
+      render();
+      route();
+    })
+    .catch(() => {
+      const error = document.createElement("p");
+      error.className = "error";
+      error.textContent = "The apps could not be loaded. Try again in a moment.";
+      document.getElementById("apps").replaceChildren(error);
+    });
+</script>
+</body>
+</html>

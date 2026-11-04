@@ -118,6 +118,7 @@ impl Shared {
         self.publishing
             .clone()
             .keep_in_sync(self.deployments.clone());
+        crate::apps_page::serve(self.publishing.clone(), self.deployments.clone());
     }
 
     /// A backup each night, on a server: the app on this computer backs up
@@ -387,6 +388,19 @@ struct SetAccess {
     access: PublishAccess,
 }
 
+/// The apps page: who may open it, or `None` to turn it off.
+#[derive(Deserialize)]
+struct SetAppsPage {
+    access: Option<PublishAccess>,
+    password: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct SetListed {
+    project_id: String,
+    listed: bool,
+}
+
 #[derive(Deserialize)]
 struct SetGroups {
     project_id: String,
@@ -583,6 +597,21 @@ fn respond_to_post(path: &str, body: &[u8], shared: &Shared) -> Reply {
         "/v1/publishing/reveal" => with_body(body, |asked: ProjectRequest| {
             shared.on_a_server()?;
             shared.publishing.app_password(&asked.project_id)
+        }),
+        "/v1/publishing/apps-page" => with_body(body, |set: SetAppsPage| {
+            shared.on_a_server()?;
+            shared
+                .publishing
+                .set_apps_page(set.access, set.password.as_deref())
+        }),
+        "/v1/publishing/apps-page/reveal" => respond_with(
+            shared
+                .on_a_server()
+                .and_then(|()| shared.publishing.apps_page_password()),
+        ),
+        "/v1/publishing/listed" => with_body(body, |set: SetListed| {
+            shared.on_a_server()?;
+            shared.publishing.set_listed(&set.project_id, set.listed)
         }),
         "/v1/publishing/unpublish" => with_body(body, |asked: ProjectRequest| {
             shared.on_a_server()?;
