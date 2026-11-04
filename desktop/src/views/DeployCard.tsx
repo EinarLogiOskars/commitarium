@@ -757,8 +757,8 @@ function AppsPageOffer({
     <div className="deploy-offer">
       <p className="shell-card__text">
         <strong>Turn on an apps page?</strong> apps.{domain} lists your apps in one place, to open
-        in any browser or on a phone. It would be {how}, like this app; you can change that in
-        Settings → Server.
+        in any browser or on a phone. It would be {how}, like this app. Either way, you can turn
+        it on, change it or turn it off any time in Settings → Server → Apps page.
       </p>
       {access === "private" && (
         <input
