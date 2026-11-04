@@ -1,7 +1,9 @@
 # Homelab Mode: Direction and Plan
 
-**Status:** direction agreed 2026-11-04 in conversation; planned in detail
-after the [apps page](APPS_PAGE_PLAN.md) is built. Builds on
+**Status:** direction agreed 2026-11-04 in conversation; detailed and
+being built 2026-11-04 (the user away, said to go on), on top of the
+[apps page](APPS_PAGE_PLAN.md). Choices marked *(proposed)* are mine, for
+the user to confirm in review. Builds on
 [REMOTE_HOST_PLAN.md](REMOTE_HOST_PLAN.md) and ADR-040.
 
 ## What was decided
@@ -50,17 +52,64 @@ after the [apps page](APPS_PAGE_PLAN.md) is built. Builds on
    keeps working away from home.
 4. Tailscale on the phone, then the apps page: home.
 
-## To settle in the detailed plan
+## How it works
 
-- **Switching later.** Moving between the two changes every app's address.
-  The app says so and asks first; company sign-in must be disconnected
-  before going private.
-- **The first deploy.** A server stays undecided until its first deploy;
-  the offer planned for the apps page asks this question first.
-- **Ports per app.** How ports are given out and kept, and how Caddy (or
-  `tailscale serve`) serves them with the Tailscale certificate.
-- **Backups and restore** of the Tailscale state, or signing in again
-  after a restore.
+- **Tailscale as a container** *(proposed)*. The host runs as a service
+  user that cannot install system software, so it runs Tailscale the way it
+  runs Caddy and authentik: a container, `commitarium-tailscale`
+  (`tailscale/tailscale:v1.104.2`, host network, `/dev/net/tun`, its state
+  in a volume), started when the user chooses Only my devices. If the
+  server already runs Tailscale itself, as the docs suggest for pairing,
+  Commitarium uses that one instead and starts nothing.
+- **Status from Tailscale's own socket.** The host reads Tailscale's local
+  status (signed in or not, its sign-in link, the machine's name and
+  address, and whether HTTPS certificates are on for the tailnet) from its
+  socket. The app shows each state in plain words with one action:
+  **Sign in to Tailscale** (the link), **Turn on HTTPS in Tailscale** (a
+  link to its admin page: certificates are a one-time switch there, which
+  only the tailnet owner can flip), or ready, with the address.
+- **Caddy on the Tailscale name.** Caddy gets certificates for
+  `<machine>.<tailnet>.ts.net` from Tailscale itself (it does so for any
+  `.ts.net` name when it can reach the socket, which is mounted into its
+  container). It listens only on the Tailscale address, so nothing is
+  served on the home network or the internet. The apps page is at
+  `https://<machine>.<tailnet>.ts.net`, and each published app on a port of
+  its own from 8001, kept with the app so its address never changes.
+- **Apps are open or behind a password**, as decided. Company sign-in is not
+  offered, and switching to private is refused while an app or the apps
+  page uses it.
+- **The desktop app follows.** Once Tailscale is ready, Settings offers
+  **Connect through Tailscale**: the app checks it reaches the server at its
+  Tailscale address, then keeps that address. The server's identity is
+  pinned by its certificate, not its address, so nothing is paired again.
+
+## Steps
+
+| Step | What | Done when |
+|---|---|---|
+| H1 | The setting and Tailscale | Settings → Server chooses who reaches the apps; private starts Tailscale and shows its state, sign-in link and address |
+| H2 | Serving on the Tailscale name | The apps page and published apps answer on the Tailscale name with Tailscale's certificates, apps on their own ports, nothing else exposed |
+| H3 | In the app | The Deployment page and the apps page settings work without a domain; the first deploy asks who reaches the apps |
+| H4 | The desktop app follows; Mayka | Connect through Tailscale; Mayka explains the choice and the Tailscale steps |
+
+## Settled while detailing
+
+- **Switching later.** Moving between the two changes every app's address:
+  the app says so and asks first. Company sign-in must be disconnected
+  before going private. Going back to the internet keeps Tailscale's state,
+  so coming back needs no new sign-in.
+- **The first deploy** on a server with no domain asks who reaches the
+  apps, before the apps page offer.
+- **Backups** carry the Tailscale container's state volume with the rest;
+  a restore onto a new machine may need a new sign-in, which the app shows.
+
+## Live tests owed
+
+- Signing in through the link, with the user's own Tailscale account.
+- HTTPS certificates switched on, and Caddy getting the certificate.
+- The apps page and an app on a phone with Tailscale.
+- A server that already runs Tailscale.
+- Connect through Tailscale from the Mac, then away from home.
 
 ## Later, maybe
 
