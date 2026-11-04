@@ -10,8 +10,12 @@
 // Kept apart from the component so a frame can be drawn at any moment.
 
 const SPACING = 26;
-/** The beat a drop lands at, and how long its wave lives, in seconds. */
-const EVERY = 1.6;
+/** The beat a drop lands at, in seconds. */
+const EVERY = 3.6;
+/** How fast a wave plays out: its shape is worked out in wave time, which
+ * runs at this share of real time. */
+const PACE = 0.5;
+/** How long a drop's wave lives, in wave time. */
 const LIFE = 5;
 /** How far a wave would spread, as a share of the field's larger side, and
  * how quickly it slows on the way (seconds). */
@@ -40,10 +44,12 @@ function wave(d: number, age: number, size: number) {
   return Math.exp(-age / 1.8) * fade * envelope * Math.cos((2 * Math.PI * behind) / length);
 }
 
-/** The ages of the drops whose waves are alive t seconds in. */
+/** The ages, in wave time, of the drops whose waves are alive t seconds in. */
 function dropAges(t: number) {
   const ages: number[] = [];
-  for (let n = Math.floor(t / EVERY); n >= 0 && t - n * EVERY < LIFE; n--) ages.push(t - n * EVERY);
+  for (let n = Math.floor(t / EVERY); n >= 0 && (t - n * EVERY) * PACE < LIFE; n--) {
+    ages.push((t - n * EVERY) * PACE);
+  }
   return ages;
 }
 
