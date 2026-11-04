@@ -37,6 +37,10 @@ function useDeployment(projectId: string) {
   const [versions, setVersions] = useState<Version[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // A failed read, as while the server restarts for an update: shown until
+  // a later read succeeds, unlike an action's error, which stays until the
+  // next action.
+  const [readError, setReadError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -45,8 +49,9 @@ function useDeployment(projectId: string) {
       setPublished(overview.apps.find((app) => app.project_id === projectId) ?? null);
       setDomain(overview.domain);
       setCompanySignIn(overview.sign_in !== null);
+      setReadError(null);
     } catch (e) {
-      setError(String(e));
+      setReadError(String(e));
     }
   }, [projectId]);
 
@@ -117,7 +122,7 @@ function useDeployment(projectId: string) {
     companySignIn,
     versions,
     busy,
-    error,
+    error: error ?? readError,
     act,
     label,
     current,
