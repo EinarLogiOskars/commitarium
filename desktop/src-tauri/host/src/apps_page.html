@@ -201,7 +201,8 @@
     if (document.visibilityState === "visible") checkWhileOpen();
   });
 
-  document.getElementById("where").textContent = location.host.replace(/^apps\./, "");
+  // The page's own name is the first label; the rest is the server's domain.
+  document.getElementById("where").textContent = location.host.split(".").slice(1).join(".");
   fetch("/api/apps", { credentials: "same-origin" })
     .then((response) => (response.ok ? response.json() : Promise.reject(response.status)))
     .then((body) => {

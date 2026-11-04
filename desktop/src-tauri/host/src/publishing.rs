@@ -86,6 +86,10 @@ struct AppRoute {
     listed: bool,
 }
 
+fn default_apps_page_name() -> String {
+    APPS_PAGE_NAME.to_string()
+}
+
 fn listed_by_default() -> bool {
     true
 }
@@ -94,9 +98,12 @@ fn is_listed(listed: &bool) -> bool {
     *listed
 }
 
-/// The apps page at `apps.<domain>`: who may open it, as for an app.
+/// The apps page at `<name>.<domain>`, `apps` unless the owner chose
+/// another name: who may open it, as for an app.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 struct AppsPage {
+    #[serde(default = "default_apps_page_name")]
+    name: String,
     access: Access,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     password_hash: Option<String>,
@@ -134,6 +141,7 @@ pub struct PublishedApp {
 /// The apps page as a client sees it.
 #[derive(Serialize)]
 pub struct AppsPageShown {
+    name: String,
     access: Access,
     url: String,
 }
@@ -224,8 +232,9 @@ impl Publishing {
                 .collect(),
             apps_page: settings.apps_page.as_ref().and_then(|page| {
                 Some(AppsPageShown {
+                    name: page.name.clone(),
                     access: page.access,
-                    url: address(APPS_PAGE_NAME, settings.domain.as_deref()?),
+                    url: address(&page.name, settings.domain.as_deref()?),
                 })
             }),
             sign_in: settings
@@ -283,6 +292,15 @@ impl Publishing {
             .any(|(other, route)| other != project_id && route.name == name)
         {
             return Err(format!("{name} is already another app's address"));
+        }
+        if settings
+            .apps_page
+            .as_ref()
+            .is_some_and(|page| page.name == name)
+        {
+            return Err(format!(
+                "{name} is the apps page's address. Choose another name."
+            ));
         }
         let here = server_address().ok_or("this server's address is unknown")?;
         let url = address(&name, &domain);
@@ -503,8 +521,10 @@ impl Publishing {
         &self,
         access: Option<Access>,
         password: Option<&str>,
+        name: Option<&str>,
     ) -> Result<(), String> {
         let hash = password.map(hashed).transpose()?;
+        let asked_name = name.map(valid_page_name).transpose()?;
         let _held = self
             .applied
             .lock()
@@ -521,6 +541,14 @@ impl Publishing {
             return Err(NO_PROVIDER.into());
         }
         let previous = settings.apps_page.take();
+        let previous_name = previous.as_ref().map(|page| page.name.clone());
+        let name = asked_name
+            .or_else(|| previous_name.clone())
+            .unwrap_or_else(default_apps_page_name);
+        if previous_name.as_deref() != Some(name.as_str()) {
+            let domain = settings.domain.as_deref().unwrap_or_default();
+            name_is_free(&settings, &name, domain)?;
+        }
         let (password_hash, password) = match (hash, previous) {
             (Some(hash), _) => (Some(hash), password.map(str::to_string)),
             (None, Some(page)) if page.password_hash.is_some() => {
@@ -532,11 +560,31 @@ impl Publishing {
             (None, _) => (None, None),
         };
         settings.apps_page = Some(AppsPage {
+            name,
             access,
             password_hash,
             password,
         });
         self.write(&settings)
+    }
+
+    /// Whether the apps page could live at this name: asked before offering
+    /// it, so a name the company already uses is found first.
+    pub fn check_apps_page_name(&self, name: &str) -> Result<(), String> {
+        let name = valid_page_name(name)?;
+        let settings = self.read()?;
+        let domain = settings
+            .domain
+            .as_deref()
+            .ok_or("set this server's domain in Settings first")?;
+        if settings
+            .apps_page
+            .as_ref()
+            .is_some_and(|page| page.name == name)
+        {
+            return Ok(());
+        }
+        name_is_free(&settings, &name, domain)
     }
 
     /// The apps page's password, for its owner to share again.
@@ -627,8 +675,47 @@ impl Publishing {
     }
 }
 
-/// The apps page's address name; `apps` is kept from apps for it.
+/// The apps page's address name unless the owner chose another; `apps` is
+/// kept from apps for it.
 const APPS_PAGE_NAME: &str = "apps";
+
+/// A name for the apps page: an app's rules, except that `apps` is its own.
+fn valid_page_name(name: &str) -> Result<String, String> {
+    let trimmed = name.trim().to_ascii_lowercase();
+    if trimmed == APPS_PAGE_NAME {
+        return Ok(trimmed);
+    }
+    valid_name(name)
+}
+
+/// The apps page may take a name no app has, that points at this server:
+/// one the company uses elsewhere has its own record, which the wildcard
+/// does not cover.
+fn name_is_free(settings: &Settings, name: &str, domain: &str) -> Result<(), String> {
+    if settings.apps.values().any(|route| route.name == name) {
+        return Err(format!(
+            "{name} is already an app's address. Choose another name."
+        ));
+    }
+    if !points_here(&format!("{name}.{domain}")) {
+        return Err(format!(
+            "{name}.{domain} points somewhere else, so it is used elsewhere. Choose another \
+             name."
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(not(test))]
+fn points_here(host: &str) -> bool {
+    server_address().is_some_and(|here| resolves_to(host, here))
+}
+
+/// Tests have no DNS: a name under `elsewhere-` is the one used elsewhere.
+#[cfg(test)]
+fn points_here(host: &str) -> bool {
+    !host.starts_with("elsewhere-")
+}
 
 /// What the apps page lists. Behind company sign-in, a person sees only what
 /// they can open: public apps, and company apps open to everyone or to one
@@ -678,7 +765,7 @@ fn catalog(
 /// The apps page's route: its own gate or password, as chosen, then the
 /// host's page.
 fn apps_page_route(settings: &Settings, apps_page: &AppsPage, domain: &str) -> Value {
-    let host = format!("{APPS_PAGE_NAME}.{domain}");
+    let host = format!("{}.{domain}", apps_page.name);
     let mut handle = vec![sign_in::strip_identity()];
     match (apps_page.access, &apps_page.password_hash) {
         (Access::Company, _) if settings.sign_in.is_none() => {
@@ -687,7 +774,7 @@ fn apps_page_route(settings: &Settings, apps_page: &AppsPage, domain: &str) -> V
         (Access::Company, _) => {
             handle.push(sign_in::caddy_gate(domain, &[], page(403, NOT_YOURS)));
         }
-        (Access::Private, Some(hash)) => handle.push(basic_auth(APPS_PAGE_NAME, hash)),
+        (Access::Private, Some(hash)) => handle.push(basic_auth(&apps_page.name, hash)),
         _ => {}
     }
     handle.push(json!({
@@ -699,13 +786,13 @@ fn apps_page_route(settings: &Settings, apps_page: &AppsPage, domain: &str) -> V
 
 /// Lets only the apps page show a listed app in a frame. Anything the app
 /// says about framing itself still counts: browsers apply every policy.
-fn framed_by_apps_page(domain: &str) -> Value {
+fn framed_by_apps_page(page: &str, domain: &str) -> Value {
     json!({
         "handler": "headers",
         "response": {
             "delete": ["X-Frame-Options"],
             "add": {"Content-Security-Policy": [
-                format!("frame-ancestors 'self' https://{APPS_PAGE_NAME}.{domain}")
+                format!("frame-ancestors 'self' https://{page}.{domain}")
             ]},
             "deferred": true,
         },
@@ -823,8 +910,8 @@ fn caddy_config(settings: &Settings, running: &BTreeMap<String, u16>, authentik:
             if let (Access::Private, Some(hash)) = (route.access, &route.password_hash) {
                 handle.push(basic_auth(&route.name, hash));
             }
-            if route.listed && settings.apps_page.is_some() {
-                handle.insert(1, framed_by_apps_page(domain));
+            if let (true, Some(page)) = (route.listed, &settings.apps_page) {
+                handle.insert(1, framed_by_apps_page(&page.name, domain));
             }
             match running.get(project_id) {
                 Some(port) => handle.push(json!({
@@ -1229,6 +1316,7 @@ mod tests {
         let (mut settings, running) = company_settings();
         assert!(catalog(&settings, &running, None).is_none());
         settings.apps_page = Some(AppsPage {
+            name: "apps".into(),
             access: Access::Public,
             password_hash: None,
             password: None,
@@ -1245,6 +1333,7 @@ mod tests {
     fn behind_company_sign_in_each_person_sees_what_they_can_open() {
         let (mut settings, running) = company_settings();
         settings.apps_page = Some(AppsPage {
+            name: "apps".into(),
             access: Access::Company,
             password_hash: None,
             password: None,
@@ -1266,6 +1355,7 @@ mod tests {
         let config = caddy_config(&settings, &running, false);
         assert!(config.to_string().find("apps.example.com").is_none());
         settings.apps_page = Some(AppsPage {
+            name: "apps".into(),
             access: Access::Company,
             password_hash: None,
             password: None,
@@ -1288,6 +1378,7 @@ mod tests {
         assert!(crm.to_string().find("frame-ancestors").is_none());
         // Behind a password, as a private app is.
         settings.apps_page = Some(AppsPage {
+            name: "apps".into(),
             access: Access::Private,
             password_hash: Some("$2b$12$hash".into()),
             password: Some("apps".into()),
@@ -1308,22 +1399,22 @@ mod tests {
         publishing.write(&settings()).unwrap();
         assert_eq!(
             publishing
-                .set_apps_page(Some(Access::Company), None)
+                .set_apps_page(Some(Access::Company), None, None)
                 .unwrap_err(),
             NO_PROVIDER
         );
         assert!(publishing
-            .set_apps_page(Some(Access::Private), None)
+            .set_apps_page(Some(Access::Private), None, None)
             .is_err());
         publishing
-            .set_apps_page(Some(Access::Private), Some("open sesame"))
+            .set_apps_page(Some(Access::Private), Some("open sesame"), None)
             .unwrap();
         // Opening it to anyone, then closing it again, needs no new password.
         publishing
-            .set_apps_page(Some(Access::Public), None)
+            .set_apps_page(Some(Access::Public), None, None)
             .unwrap();
         publishing
-            .set_apps_page(Some(Access::Private), None)
+            .set_apps_page(Some(Access::Private), None, None)
             .unwrap();
         assert_eq!(
             publishing.apps_page_password().unwrap().as_deref(),
@@ -1331,8 +1422,55 @@ mod tests {
         );
         publishing.set_listed("prj_todo", false).unwrap();
         assert!(!publishing.read().unwrap().apps["prj_todo"].listed);
-        publishing.set_apps_page(None, None).unwrap();
+        publishing.set_apps_page(None, None, None).unwrap();
         assert!(publishing.read().unwrap().apps_page.is_none());
+    }
+
+    #[test]
+    fn the_apps_page_can_take_another_name_that_is_free() {
+        let data = tempfile::tempdir().unwrap();
+        let publishing = Publishing::new(data.path());
+        publishing.write(&settings()).unwrap();
+        // A name the company uses elsewhere, or an app's, is found first.
+        assert!(publishing
+            .check_apps_page_name("elsewhere-apps")
+            .unwrap_err()
+            .contains("points somewhere else"));
+        assert!(publishing
+            .check_apps_page_name("todo")
+            .unwrap_err()
+            .contains("already an app's address"));
+        assert!(publishing.check_apps_page_name("www").is_err());
+        publishing.check_apps_page_name("apps").unwrap();
+        publishing
+            .set_apps_page(Some(Access::Public), None, Some("Tools"))
+            .unwrap();
+        let settings = publishing.read().unwrap();
+        assert_eq!(settings.apps_page.as_ref().unwrap().name, "tools");
+        // Changing who may open it keeps its name.
+        publishing
+            .set_apps_page(Some(Access::Private), Some("pw"), None)
+            .unwrap();
+        assert_eq!(publishing.read().unwrap().apps_page.unwrap().name, "tools");
+        // Its route and the framing rule follow the name.
+        let mut settings = publishing.read().unwrap();
+        let running = BTreeMap::from([("prj_blog".to_string(), 3000)]);
+        let config = caddy_config(&settings, &running, false);
+        route(&config, "tools.example.com");
+        assert_eq!(
+            route(&config, "blog.example.com")["handle"][1]["response"]["add"]
+                ["Content-Security-Policy"][0],
+            "frame-ancestors 'self' https://tools.example.com"
+        );
+        // An app cannot take the apps page's name.
+        assert!(publishing
+            .publish("prj_new", "tools", Access::Public, None)
+            .map(|_| ())
+            .unwrap_err()
+            .contains("apps page"));
+        // A page saved before names were chosen is at apps.
+        settings.apps_page = serde_json::from_str(r#"{"access":"public"}"#).unwrap();
+        assert_eq!(settings.apps_page.unwrap().name, "apps");
     }
 
     #[test]
@@ -1343,7 +1481,7 @@ mod tests {
         settings.sign_in = Some(provider());
         publishing.write(&settings).unwrap();
         publishing
-            .set_apps_page(Some(Access::Company), None)
+            .set_apps_page(Some(Access::Company), None, None)
             .unwrap();
         assert!(publishing
             .disconnect_sign_in()

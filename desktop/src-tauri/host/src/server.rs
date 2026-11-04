@@ -393,6 +393,14 @@ struct SetAccess {
 struct SetAppsPage {
     access: Option<PublishAccess>,
     password: Option<String>,
+    /// Its address name; `None` keeps the one it has, or `apps`.
+    #[serde(default)]
+    name: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct AppsPageName {
+    name: String,
 }
 
 #[derive(Deserialize)]
@@ -600,9 +608,15 @@ fn respond_to_post(path: &str, body: &[u8], shared: &Shared) -> Reply {
         }),
         "/v1/publishing/apps-page" => with_body(body, |set: SetAppsPage| {
             shared.on_a_server()?;
-            shared
-                .publishing
-                .set_apps_page(set.access, set.password.as_deref())
+            shared.publishing.set_apps_page(
+                set.access,
+                set.password.as_deref(),
+                set.name.as_deref(),
+            )
+        }),
+        "/v1/publishing/apps-page/check" => with_body(body, |asked: AppsPageName| {
+            shared.on_a_server()?;
+            shared.publishing.check_apps_page_name(&asked.name)
         }),
         "/v1/publishing/apps-page/reveal" => respond_with(
             shared

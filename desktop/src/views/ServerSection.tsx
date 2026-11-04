@@ -362,6 +362,7 @@ function AppsPageSection() {
   const [password, setPassword] = useState("");
   const [askPassword, setAskPassword] = useState(false);
   const [shownPassword, setShownPassword] = useState<string | null | undefined>(undefined);
+  const [name, setName] = useState("apps");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -369,6 +370,7 @@ function AppsPageSection() {
     void readPublishing()
       .then((found) => {
         setOverview(found);
+        setName(found.apps_page?.name ?? "apps");
         setAccess(found.apps_page?.access ?? (found.sign_in ? "company" : "private"));
       })
       .catch((e) => setError(String(e)));
@@ -392,6 +394,8 @@ function AppsPageSection() {
 
   if (!overview?.domain) return null;
   const page = overview.apps_page;
+  const shownName = name.trim().toLowerCase() || "apps";
+  const renamed = page !== null && shownName !== page.name;
   const choices = ACCESS_CHOICES.filter(
     (choice) => choice.value !== "company" || overview.sign_in || page?.access === "company",
   );
@@ -435,8 +439,41 @@ function AppsPageSection() {
       <h3 className="set__heading">Apps page</h3>
       <p className="muted set__note">
         One address that lists this server&apos;s apps and opens them, in any browser and on a
-        phone: apps.{overview.domain}. People use the apps there; nothing of Commitarium is shown.
+        phone. People use the apps there; nothing of Commitarium is shown.
       </p>
+      <label className="muted">
+        Address
+        <span className="deploy-address__name">
+          <input
+            aria-label="Apps page address"
+            value={name}
+            autoCapitalize="off"
+            autoCorrect="off"
+            spellCheck={false}
+            onChange={(e) => setName(e.target.value)}
+          />
+          <span className="muted">.{overview.domain}</span>
+        </span>
+      </label>
+      {renamed && (
+        <>
+          <p className="sync-card__error">
+            {page.url.replace("https://", "")} stops working once you change it. Anyone with the old
+            link needs the new one.
+          </p>
+          <div className="set__row">
+            <button
+              disabled={busy || !name.trim()}
+              onClick={() => void run(() => setAppsPage(page.access, undefined, name))}
+            >
+              Change address
+            </button>
+            <button className="ghost" onClick={() => setName(page.name)}>
+              Cancel
+            </button>
+          </div>
+        </>
+      )}
       {page && (
         <p className="set__note">
           On at{" "}
@@ -463,7 +500,8 @@ function AppsPageSection() {
       )}
       {access === "private" && (
         <p className="muted set__note">
-          People sign in with the username <strong>apps</strong> and the password you choose.
+          People sign in with the username <strong>{page?.name ?? shownName}</strong> and the
+          password you choose.
         </p>
       )}
       {access === "private" && (!page || askPassword) && passwordField}
@@ -516,8 +554,8 @@ function AppsPageSection() {
           </button>
         ) : (
           <button
-            disabled={busy || (access === "private" && !password)}
-            onClick={() => void run(() => setAppsPage(access, password))}
+            disabled={busy || !name.trim() || (access === "private" && !password)}
+            onClick={() => void run(() => setAppsPage(access, password, name))}
           >
             Turn on
           </button>

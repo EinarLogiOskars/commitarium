@@ -118,6 +118,8 @@ export interface PublishedApp {
 
 /** The apps page at apps.<domain> (APPS_PAGE_PLAN.md), when it is on. */
 export interface AppsPage {
+  /** Its address name: apps, unless the owner chose another. */
+  name: string;
   access: Access;
   url: string;
 }
@@ -207,8 +209,15 @@ export const setAppGroups = (projectId: string, groups: string[]): Promise<void>
   hostPost("/v1/publishing/groups", { project_id: projectId, groups });
 /** Turns the apps page on with who may open it, or off with null. A password
  * page needs a password the first time. */
-export const setAppsPage = (access: Access | null, password?: string): Promise<void> =>
-  hostPost("/v1/publishing/apps-page", { access, password: password || null });
+export const setAppsPage = (
+  access: Access | null,
+  password?: string,
+  name?: string,
+): Promise<void> =>
+  hostPost("/v1/publishing/apps-page", { access, password: password || null, name: name || null });
+/** Rejects with why the apps page could not live at this name. */
+export const checkAppsPageName = (name: string): Promise<void> =>
+  hostPost("/v1/publishing/apps-page/check", { name });
 export const revealAppsPagePassword = (): Promise<string | null> =>
   hostPost("/v1/publishing/apps-page/reveal");
 export const setListed = (projectId: string, listed: boolean): Promise<void> =>

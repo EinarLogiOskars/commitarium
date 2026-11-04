@@ -10,6 +10,7 @@ import {
   setAppPassword,
   setAppsPage,
   setListed,
+  checkAppsPageName,
   openExternal,
   publishApp,
   publishing as readPublishing,
@@ -738,6 +739,18 @@ function AppsPageOffer({
 }) {
   const [hidden, setHidden] = useState(() => asked(domain));
   const [password, setPassword] = useState("");
+  const [name, setName] = useState("apps");
+  // Whether apps.<domain> is free: a company may use it already. Asked once,
+  // so the offer says so before Turn on rather than after.
+  const [taken, setTaken] = useState<string | null>(null);
+  useEffect(() => {
+    if (hidden) return;
+    let live = true;
+    checkAppsPageName("apps").catch((e) => live && setTaken(String(e)));
+    return () => {
+      live = false;
+    };
+  }, [hidden]);
   if (hidden) return null;
   const dismiss = () => {
     try {
@@ -756,10 +769,28 @@ function AppsPageOffer({
   return (
     <div className="deploy-offer">
       <p className="shell-card__text">
-        <strong>Turn on an apps page?</strong> apps.{domain} lists your apps in one place, to open
-        in any browser or on a phone. It would be {how}, like this app. Either way, you can turn it
-        on, change it or turn it off any time in Settings → Server → Apps page.
+        <strong>Turn on an apps page?</strong> One address lists your apps in one place, to open in
+        any browser or on a phone. It would be {how}, like this app. Either way, you can turn it on,
+        change it or turn it off any time in Settings → Server → Apps page.
       </p>
+      {taken && <p className="muted shell-card__text">{taken}</p>}
+      <label className="muted">
+        Address
+        <span className="deploy-address__name">
+          <input
+            aria-label="Apps page address"
+            value={name}
+            autoCapitalize="off"
+            autoCorrect="off"
+            spellCheck={false}
+            onChange={(e) => {
+              setName(e.target.value);
+              setTaken(null);
+            }}
+          />
+          <span className="muted">.{domain}</span>
+        </span>
+      </label>
       {access === "private" && (
         <input
           aria-label="Apps page password"
@@ -774,10 +805,10 @@ function AppsPageOffer({
       <div className="row deploy-actions">
         <button
           className="primary"
-          disabled={busy || (access === "private" && !password)}
+          disabled={busy || !name.trim() || (access === "private" && !password)}
           onClick={() =>
             void act(async () => {
-              await setAppsPage(access, access === "private" ? password : undefined);
+              await setAppsPage(access, access === "private" ? password : undefined, name);
               dismiss();
             })
           }
