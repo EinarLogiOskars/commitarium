@@ -369,6 +369,13 @@ struct RestoreBackup {
 #[derive(Deserialize)]
 struct SetDomain {
     domain: String,
+    #[serde(default)]
+    records: crate::publishing::Records,
+}
+
+#[derive(Deserialize)]
+struct SetPlacement {
+    placement: crate::publishing::Placement,
 }
 
 #[derive(Deserialize)]
@@ -563,7 +570,11 @@ fn respond_to_post(path: &str, body: &[u8], shared: &Shared) -> Reply {
         }),
         "/v1/publishing/domain" => with_body(body, |set: SetDomain| {
             shared.on_a_server()?;
-            shared.publishing.set_domain(&set.domain)
+            shared.publishing.set_domain(&set.domain, set.records)
+        }),
+        "/v1/publishing/placement" => with_body(body, |set: SetPlacement| {
+            shared.on_a_server()?;
+            shared.publishing.set_placement(set.placement)
         }),
         "/v1/publishing/publish" => with_body(body, |publish: Publish| {
             shared.on_a_server()?;

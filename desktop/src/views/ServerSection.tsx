@@ -14,13 +14,16 @@ import {
   places as readPlaces,
   publishing as readPublishing,
   setDomain,
+  setPlacement,
   setReach,
+  PUBLISHING_CHANGED,
   moveServer,
   revealAppsPagePassword,
   setAppsPage,
   setListed,
   type Access,
-  type Reach,
+  type Placement,
+  type Records,
   type PublishingOverview,
   type ConnectSignIn,
   forgetServer,
@@ -44,6 +47,26 @@ function versionProblem(api: number): string | null {
     : "This app is too old for your server. Update the app.";
 }
 
+/** Tells every part of the Server settings that publishing changed. */
+function publishingChanged() {
+  window.dispatchEvent(new Event(PUBLISHING_CHANGED));
+}
+
+/** Reads now, and again whenever publishing changes anywhere in Settings. */
+function useFresh(refresh: () => void) {
+  useEffect(() => {
+    refresh();
+    window.addEventListener(PUBLISHING_CHANGED, refresh);
+    return () => window.removeEventListener(PUBLISHING_CHANGED, refresh);
+  }, [refresh]);
+}
+
+/** Opens a new chat with Mayka about serving apps from this server. */
+function askMaykaAboutServing(message: string, onLeave?: () => void) {
+  startChatOn({ kind: "serving" }, message);
+  onLeave?.();
+}
+
 // The servers this device knows, and the shown one's state, in Settings.
 export function ServerSection({ running, onLeave }: { running: boolean; onLeave?: () => void }) {
   const server = connectedServer();
@@ -64,10 +87,13 @@ export function ServerSection({ running, onLeave }: { running: boolean; onLeave?
 }
 
 // The server's base domain, under which deployed apps get their addresses
-// (PUBLISHING_PLAN.md). It is accepted once its wildcard record points here.
-function DomainSection() {
+// (PUBLISHING_PLAN.md), and how its DNS points here: one wildcard record,
+// checked before the domain is kept, or a record for each address, each
+// checked as it is used.
+function DomainSection({ onLeave }: { onLeave?: () => void }) {
   const [overview, setOverview] = useState<PublishingOverview | null>(null);
   const [domain, setDomainText] = useState("");
+  const [records, setRecords] = useState<Records>("wildcard");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -76,17 +102,18 @@ function DomainSection() {
       .then((found) => {
         setOverview(found);
         setDomainText(found.domain ?? "");
+        setRecords(found.records);
       })
       .catch((e) => setError(String(e)));
   }, []);
-  useEffect(refresh, [refresh]);
+  useFresh(refresh);
 
   const save = async () => {
     setBusy(true);
     setError(null);
     try {
-      await setDomain(domain);
-      refresh();
+      await setDomain(domain, records);
+      publishingChanged();
     } catch (e) {
       setError(String(e));
     } finally {
@@ -95,17 +122,49 @@ function DomainSection() {
   };
 
   const shown = domain.trim().replace(/^\*\./, "") || "example.com";
+  const address = overview?.server_address ?? "this server's address";
   // On a private network there is no domain: the Tailscale name stands in.
   if (overview?.reach === "private") return null;
+  const changed = !overview?.domain || shown !== overview.domain || records !== overview.records;
   return (
     <section className="set__section">
       <h3 className="set__heading">Domain</h3>
       <p className="muted set__note">
-        Deployed apps get an address under this domain, such as app.{shown}. At your DNS provider,
-        add an A record for <code>*.{shown}</code> with the value{" "}
-        <code>{overview?.server_address ?? "this server's address"}</code>. Names that already have
-        their own records stay where they are.
+        Deployed apps get an address under your domain, such as app.{shown}, and your DNS provider
+        points those addresses at this server. Choose how:
       </p>
+      <label className="set__row">
+        <input
+          type="radio"
+          name="records"
+          checked={records === "wildcard"}
+          onChange={() => setRecords("wildcard")}
+        />
+        <span>One record for every app (recommended)</span>
+      </label>
+      {records === "wildcard" && (
+        <p className="muted set__note">
+          Add an A record for <code>*.{shown}</code> with the value <code>{address}</code>, once.
+          Every app and the apps page then work without more DNS changes. Addresses that already
+          have their own records, such as www.{shown}, keep them.
+        </p>
+      )}
+      <label className="set__row">
+        <input
+          type="radio"
+          name="records"
+          checked={records === "each_name"}
+          onChange={() => setRecords("each_name")}
+        />
+        <span>A record for each address</span>
+      </label>
+      {records === "each_name" && (
+        <p className="muted set__note">
+          For when you would rather not add a wildcard. Each address you use needs an A record with
+          the value <code>{address}</code>, such as <code>apps.{shown}</code>. Commitarium tells you
+          which record to add when you give an app its address.
+        </p>
+      )}
       <div className="set__row">
         <input
           aria-label="Domain"
@@ -113,11 +172,27 @@ function DomainSection() {
           value={domain}
           onChange={(e) => setDomainText(e.target.value)}
         />
-        <button disabled={busy || !domain.trim()} onClick={() => void save()}>
+        <button disabled={busy || !domain.trim() || !changed} onClick={() => void save()}>
           {busy ? "Checking…" : overview?.domain ? "Change" : "Use this domain"}
         </button>
       </div>
       {error && <p className="set__note">{error}</p>}
+      <p className="muted set__note">
+        Not sure how to do this at your DNS provider?{" "}
+        <button
+          className="shell-card__link"
+          onClick={() =>
+            askMaykaAboutServing(
+              `Help me point ${domain.trim() ? `my domain ${shown}` : "my domain"} at this server ` +
+                `(${address}), with ${records === "wildcard" ? "one wildcard record" : "a record for each address"}.`,
+              onLeave,
+            )
+          }
+        >
+          Ask Mayka
+        </button>{" "}
+        to walk you through it.
+      </p>
     </section>
   );
 }
@@ -140,14 +215,14 @@ function SignInSection({ onLeave }: { onLeave?: () => void }) {
       .then(setOverview)
       .catch((e) => setError(String(e)));
   }, []);
-  useEffect(refresh, [refresh]);
+  useFresh(refresh);
 
   const run = async (work: () => Promise<unknown>) => {
     setBusy(true);
     setError(null);
     try {
       await work();
-      refresh();
+      publishingChanged();
       return true;
     } catch (e) {
       setError(String(e));
@@ -353,12 +428,135 @@ function SignInSection({ onLeave }: { onLeave?: () => void }) {
   );
 }
 
-// Who reaches the apps (HOMELAB_PLAN.md): anyone on the internet at the
-// server's domain, or only the owner's devices, on their Tailscale network,
-// with the steps Tailscale takes.
-function ReachSection() {
+const PLACES: { value: Placement; label: string }[] = [
+  { value: "home", label: "On a computer on my network" },
+  { value: "cloud", label: "On a server in the cloud, or a VPS" },
+  { value: "other", label: "Somewhere else, or not sure" },
+];
+
+// Asked once, the first time the server's settings open (HOMELAB_PLAN.md):
+// where the server is, so the app recommends how to serve its apps. The
+// answer is kept on the server; the settings it recommends stay below.
+function WhereSection({ onLeave }: { onLeave?: () => void }) {
   const [overview, setOverview] = useState<PublishingOverview | null>(null);
-  const [asked, setAsked] = useState<Reach | null>(null);
+  const [answered, setAnswered] = useState<Placement | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const refresh = useCallback(() => {
+    void readPublishing()
+      .then(setOverview)
+      .catch((e) => setError(String(e)));
+  }, []);
+  useFresh(refresh);
+
+  const run = async (work: () => Promise<unknown>) => {
+    setBusy(true);
+    setError(null);
+    try {
+      await work();
+      publishingChanged();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const answer = (placement: Placement) =>
+    void run(async () => {
+      await setPlacement(placement);
+      setAnswered(placement);
+    });
+
+  if (!overview) return null;
+  // Asked once: a server already serving apps, or already answered, skips it.
+  const fresh = overview.placement === null && !overview.domain && overview.reach !== "private";
+  if (!fresh && answered === null) return null;
+  return (
+    <section className="set__section">
+      <h3 className="set__heading">Where is this server?</h3>
+      {answered === null ? (
+        <>
+          <p className="muted set__note">
+            So Commitarium can recommend how your apps reach you and others. You can change anything
+            later.
+          </p>
+          <div className="set__actions">
+            {PLACES.map((place) => (
+              <button key={place.value} disabled={busy} onClick={() => answer(place.value)}>
+                {place.label}
+              </button>
+            ))}
+          </div>
+        </>
+      ) : answered === "home" ? (
+        <>
+          <p className="set__note">
+            Recommended: <strong>Homelab mode</strong>. Your apps are on a private network that only
+            your own devices reach, through Tailscale, at home and away. No domain, nothing open on
+            your router.
+          </p>
+          <div className="set__actions">
+            {overview.reach === "private" ? (
+              <p className="muted set__note">Homelab mode is on: its steps are below.</p>
+            ) : (
+              <button disabled={busy} onClick={() => void run(() => setReach("private"))}>
+                Turn on Homelab mode
+              </button>
+            )}
+            <button className="ghost" disabled={busy} onClick={() => setAnswered(null)}>
+              Back
+            </button>
+          </div>
+          <p className="muted set__note">You can change this later under Homelab, below.</p>
+        </>
+      ) : answered === "cloud" ? (
+        <>
+          <p className="set__note">
+            Recommended: <strong>your own domain</strong>. Your apps get addresses such as
+            app.yourcompany.com, for anyone on the internet, each open, behind a password, or behind
+            company sign-in. Set it under Domain, below: it explains the DNS record to add.
+          </p>
+          <div className="set__actions">
+            <button className="ghost" disabled={busy} onClick={() => setAnswered(null)}>
+              Back
+            </button>
+          </div>
+        </>
+      ) : (
+        <>
+          <p className="set__note">
+            Mayka can help you choose: tell her where it runs and who should open your apps.
+          </p>
+          <div className="set__actions">
+            <button
+              disabled={busy}
+              onClick={() =>
+                askMaykaAboutServing(
+                  "Help me choose how to serve apps from my Commitarium server.",
+                  onLeave,
+                )
+              }
+            >
+              Ask Mayka
+            </button>
+            <button className="ghost" disabled={busy} onClick={() => setAnswered(null)}>
+              Back
+            </button>
+          </div>
+        </>
+      )}
+      {error && <p className="set__note">{error}</p>}
+    </section>
+  );
+}
+
+// Homelab mode (HOMELAB_PLAN.md): off, apps are served at the server's own
+// domain, for anyone on the internet; on, only the owner's devices reach
+// them, on their Tailscale network, with the steps Tailscale takes.
+function HomelabSection() {
+  const [overview, setOverview] = useState<PublishingOverview | null>(null);
+  const [asked, setAsked] = useState<boolean | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [moved, setMoved] = useState(false);
@@ -368,7 +566,7 @@ function ReachSection() {
       .then(setOverview)
       .catch((e) => setError(String(e)));
   }, []);
-  useEffect(refresh, [refresh]);
+  useFresh(refresh);
   const waiting = overview?.reach === "private" && overview.tailscale?.state !== "ready";
   // Signing in and turning on HTTPS happen elsewhere: look again while waiting.
   useEffect(() => {
@@ -378,17 +576,17 @@ function ReachSection() {
   }, [waiting, refresh]);
 
   if (!overview) return null;
-  const reach = overview.reach;
+  const on = overview.reach === "private";
   const tailscale = overview.tailscale;
-  const switching = asked !== null && asked !== reach;
+  const switching = asked !== null && asked !== on;
   const change = async () => {
-    if (!asked) return;
+    if (asked === null) return;
     setBusy(true);
     setError(null);
     try {
-      await setReach(asked);
+      await setReach(asked ? "private" : "internet");
       setAsked(null);
-      refresh();
+      publishingChanged();
     } catch (e) {
       setError(String(e));
     } finally {
@@ -415,28 +613,34 @@ function ReachSection() {
 
   return (
     <section className="set__section">
-      <h3 className="set__heading">Who reaches your apps</h3>
-      <label className="muted deploy-access">
-        <select
-          value={asked ?? reach}
+      <h3 className="set__heading">Homelab</h3>
+      <label className="set__row">
+        <input
+          type="checkbox"
+          checked={asked ?? on}
           disabled={busy}
-          onChange={(e) => setAsked(e.target.value as Reach)}
-        >
-          <option value="internet">Anyone on the internet, at your own domain</option>
-          <option value="private">Only my devices, on a private network</option>
-        </select>
+          onChange={(e) => setAsked(e.target.checked)}
+        />
+        <span>Use this server as my homelab</span>
       </label>
+      {!switching && !on && (
+        <p className="muted set__note">
+          For a computer at home: your apps go on a private network that only your own devices
+          reach, through Tailscale, with no domain and nothing open on your router. Off, they are
+          served at your own domain, for anyone on the internet.
+        </p>
+      )}
       {switching && (
         <>
           <p className="set__note">
-            {asked === "private"
+            {asked
               ? "Your apps move to a private network that only your devices reach, through Tailscale: no domain, nothing open on your router. Every app gets a new address, and company sign-in is not offered there."
               : "Your apps move to addresses under your own domain, for anyone on the internet. Every app gets a new address."}
             {overview.apps.length > 0 && " Anyone with an old link needs the new one."}
           </p>
           <div className="set__row">
             <button disabled={busy} onClick={() => void change()}>
-              {busy ? "Switching…" : "Switch"}
+              {busy ? "Switching…" : asked ? "Turn on" : "Turn off"}
             </button>
             <button className="ghost" disabled={busy} onClick={() => setAsked(null)}>
               Cancel
@@ -444,7 +648,7 @@ function ReachSection() {
           </div>
         </>
       )}
-      {!switching && reach === "private" && (
+      {!switching && on && (
         <TailscaleSteps
           tailscale={tailscale}
           busy={busy}
@@ -568,7 +772,7 @@ function AppsPageSection() {
       })
       .catch((e) => setError(String(e)));
   }, []);
-  useEffect(refresh, [refresh]);
+  useFresh(refresh);
 
   const run = async (work: () => Promise<unknown>) => {
     setBusy(true);
@@ -577,7 +781,7 @@ function AppsPageSection() {
       await work();
       setPassword("");
       setAskPassword(false);
-      refresh();
+      publishingChanged();
     } catch (e) {
       setError(String(e));
     } finally {
@@ -917,8 +1121,9 @@ function ConnectedServer({
         <button onClick={() => void showPlace(null)}>Show this computer</button>
       </section>
 
-      <ReachSection />
-      <DomainSection />
+      <WhereSection onLeave={onLeave} />
+      <HomelabSection />
+      <DomainSection onLeave={onLeave} />
       <SignInSection onLeave={onLeave} />
       <AppsPageSection />
 

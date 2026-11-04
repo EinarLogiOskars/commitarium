@@ -16,7 +16,9 @@ use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::ErrorKind;
-use std::net::{IpAddr, ToSocketAddrs};
+use std::net::IpAddr;
+#[cfg(not(test))]
+use std::net::ToSocketAddrs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -105,6 +107,33 @@ fn is_internet(reach: &Reach) -> bool {
     *reach == Reach::Internet
 }
 
+/// How the domain's DNS points at the server: one wildcard record for every
+/// name, or a record for each name in use, for a company that keeps no
+/// wildcard.
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Records {
+    #[default]
+    Wildcard,
+    EachName,
+}
+
+fn is_wildcard(records: &Records) -> bool {
+    *records == Records::Wildcard
+}
+
+/// Where the owner said the server is, asked once when they first open it,
+/// so the app recommends how to serve the apps.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Placement {
+    /// A computer on their own network: homelab mode.
+    Home,
+    /// A server in the cloud: their own domain.
+    Cloud,
+    Other,
+}
+
 /// Where apps are served: under the domain, or on the Tailscale name.
 #[derive(Clone, Copy)]
 enum Base<'a> {
@@ -190,6 +219,10 @@ struct Settings {
     apps_page: Option<AppsPage>,
     #[serde(default, skip_serializing_if = "is_internet")]
     reach: Reach,
+    #[serde(default, skip_serializing_if = "is_wildcard")]
+    records: Records,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    placement: Option<Placement>,
 }
 
 impl Settings {
@@ -251,6 +284,9 @@ pub struct Overview {
     reach: Reach,
     /// Tailscale, in homelab mode.
     tailscale: Option<tailscale::Status>,
+    records: Records,
+    /// Where the owner said the server is, once asked.
+    placement: Option<Placement>,
 }
 
 /// What publishing an app answers: its address.
@@ -322,6 +358,8 @@ impl Publishing {
                 })
             }),
             reach: settings.reach,
+            records: settings.records,
+            placement: settings.placement,
             tailscale: tailnet.clone(),
             sign_in: settings
                 .sign_in
@@ -332,16 +370,18 @@ impl Publishing {
         })
     }
 
-    /// Sets the base domain once its wildcard record points here.
-    pub fn set_domain(&self, domain: &str) -> Result<(), String> {
+    /// Sets the base domain. With a wildcard, once it points here; with a
+    /// record for each name, each name is checked as it is used.
+    pub fn set_domain(&self, domain: &str, records: Records) -> Result<(), String> {
         let domain = normalized_domain(domain)?;
         let here = server_address().ok_or("this server's address is unknown")?;
-        let probe = format!("commitarium-check.{domain}");
-        if !resolves_to(&probe, here) {
+        if records == Records::Wildcard
+            && lookup(&format!("commitarium-check.{domain}"), here) != Lookup::Here
+        {
             return Err(format!(
                 "*.{domain} does not point at this server yet. At your DNS provider, add an \
                  A record for *.{domain} with the value {here}, then try again. New records \
-                 can take a few minutes."
+                 can take a few minutes. Or add a record for each address instead."
             ));
         }
         let _held = self
@@ -350,6 +390,18 @@ impl Publishing {
             .map_err(|_| "publishing is unavailable")?;
         let mut settings = self.read()?;
         settings.domain = Some(domain);
+        settings.records = records;
+        self.write(&settings)
+    }
+
+    /// Keeps where the owner said the server is.
+    pub fn set_placement(&self, placement: Placement) -> Result<(), String> {
+        let _held = self
+            .applied
+            .lock()
+            .map_err(|_| "publishing is unavailable")?;
+        let mut settings = self.read()?;
+        settings.placement = Some(placement);
         self.write(&settings)
     }
 
@@ -395,13 +447,7 @@ impl Publishing {
         }
         // On the private network, names are only labels: no DNS to check.
         if !private {
-            let here = server_address().ok_or("this server's address is unknown")?;
-            if !resolves_to(&format!("{name}.{domain}"), here) {
-                return Err(format!(
-                    "{name}.{domain} points somewhere else, so it is used elsewhere. Choose \
-                     another name."
-                ));
-            }
+            points_here(&name, &domain)?;
         }
         let previous = settings
             .apps
@@ -516,7 +562,9 @@ impl Publishing {
     /// changed provider keeps the cookie secret, so no one is signed out
     /// for nothing.
     pub fn connect_sign_in(&self, asked: sign_in::Connect) -> Result<sign_in::Connected, String> {
-        let kept = self.read()?.sign_in.map(|provider| provider.cookie_secret);
+        let settings = self.read()?;
+        sign_in_names_point_here(&settings, &[sign_in::NAME])?;
+        let kept = settings.sign_in.map(|provider| provider.cookie_secret);
         // Checked before the lock: it waits on the provider.
         let provider = Provider::connect(asked, kept)?;
         let _held = self
@@ -541,6 +589,7 @@ impl Publishing {
         if settings.sign_in.is_some() && !self.authentik.installed() {
             return Err("another provider is connected: disconnect it first".into());
         }
+        sign_in_names_point_here(&settings, &[sign_in::NAME, authentik::NAME])?;
         let connection = self.authentik.install(&domain)?;
         let _held = self
             .applied
@@ -869,24 +918,61 @@ fn name_is_free(settings: &Settings, name: &str, domain: &str) -> Result<(), Str
             "{name} is already an app's address. Choose another name."
         ));
     }
-    if !points_here(&format!("{name}.{domain}")) {
-        return Err(format!(
+    points_here(name, domain)
+}
+
+/// Where a name under the domain points.
+#[derive(Debug, PartialEq)]
+enum Lookup {
+    Here,
+    /// Somewhere else: the name is used elsewhere.
+    Elsewhere,
+    /// Nowhere yet: it needs its record.
+    Missing,
+}
+
+/// Whether name.domain points here, and if not, what to do about it.
+fn points_here(name: &str, domain: &str) -> Result<(), String> {
+    let here = server_address().ok_or("this server's address is unknown")?;
+    match lookup(&format!("{name}.{domain}"), here) {
+        Lookup::Here => Ok(()),
+        Lookup::Elsewhere => Err(format!(
             "{name}.{domain} points somewhere else, so it is used elsewhere. Choose another \
              name."
-        ));
+        )),
+        Lookup::Missing => Err(format!(
+            "{name}.{domain} does not point at this server yet. At your DNS provider, add an A \
+             record for {name}.{domain} with the value {here}, then try again. New records can \
+             take a few minutes."
+        )),
     }
-    Ok(())
 }
 
 #[cfg(not(test))]
-fn points_here(host: &str) -> bool {
-    server_address().is_some_and(|here| resolves_to(host, here))
+fn lookup(host: &str, here: IpAddr) -> Lookup {
+    match (host, 443).to_socket_addrs() {
+        Ok(mut addresses) => {
+            if addresses.any(|address| address.ip() == here) {
+                Lookup::Here
+            } else {
+                Lookup::Elsewhere
+            }
+        }
+        Err(_) => Lookup::Missing,
+    }
 }
 
-/// Tests have no DNS: a name under `elsewhere-` is the one used elsewhere.
+/// Tests have no DNS: a name under `elsewhere-` is used elsewhere, and one
+/// under `missing-` has no record.
 #[cfg(test)]
-fn points_here(host: &str) -> bool {
-    !host.starts_with("elsewhere-")
+fn lookup(host: &str, _here: IpAddr) -> Lookup {
+    if host.starts_with("elsewhere-") {
+        Lookup::Elsewhere
+    } else if host.starts_with("missing-") {
+        Lookup::Missing
+    } else {
+        Lookup::Here
+    }
 }
 
 /// What the apps page lists. Behind company sign-in, a person sees only what
@@ -1043,16 +1129,27 @@ fn hashed(password: &str) -> Result<String, String> {
 
 /// The address the server reaches the internet from: its public one on a
 /// VPS, which is where the wildcard record must point.
+#[cfg(not(test))]
 fn server_address() -> Option<IpAddr> {
     let socket = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
     socket.connect("1.1.1.1:53").ok()?;
     Some(socket.local_addr().ok()?.ip())
 }
 
-fn resolves_to(name: &str, here: IpAddr) -> bool {
-    (name, 443)
-        .to_socket_addrs()
-        .is_ok_and(|mut addresses| addresses.any(|address| address.ip() == here))
+#[cfg(test)]
+fn server_address() -> Option<IpAddr> {
+    Some(IpAddr::from([203, 0, 113, 7]))
+}
+
+/// The names company sign-in serves on, besides the apps': with a record
+/// for each name, each needs its own.
+fn sign_in_names_point_here(settings: &Settings, names: &[&str]) -> Result<(), String> {
+    match (&settings.domain, settings.records) {
+        (Some(domain), Records::EachName) => {
+            names.iter().try_for_each(|name| points_here(name, domain))
+        }
+        _ => Ok(()),
+    }
 }
 
 /// Caddy's whole configuration. A published app with a running deployment
@@ -1349,6 +1446,8 @@ mod tests {
             sign_in: None,
             apps_page: None,
             reach: Reach::Internet,
+            records: Records::Wildcard,
+            placement: None,
         };
         settings.apps.insert(
             "prj_todo".into(),
@@ -1706,6 +1805,47 @@ mod tests {
     }
 
     #[test]
+    fn a_domain_works_with_a_wildcard_or_a_record_for_each_name() {
+        let data = tempfile::tempdir().unwrap();
+        let publishing = Publishing::new(data.path());
+        // With a wildcard, it is checked before the domain is kept.
+        publishing
+            .set_domain("example.com", Records::Wildcard)
+            .unwrap();
+        // Without one, each name is checked as it is used, and a name with
+        // no record yet says which record to add.
+        publishing
+            .set_domain("missing-records.test", Records::EachName)
+            .unwrap();
+        let mut settings = publishing.read().unwrap();
+        assert_eq!(settings.records, Records::EachName);
+        settings.domain = Some("example.com".into());
+        publishing.write(&settings).unwrap();
+        assert!(publishing
+            .check_apps_page_name("missing-apps")
+            .unwrap_err()
+            .contains("add an A record for missing-apps.example.com"));
+        publishing.check_apps_page_name("apps").unwrap();
+        // Company sign-in's names need their records too.
+        settings.domain = Some("test".into());
+        let names = ["missing-x"];
+        assert!(sign_in_names_point_here(&settings, &names)
+            .unwrap_err()
+            .contains("missing-x.test"));
+        settings.records = Records::Wildcard;
+        assert!(sign_in_names_point_here(&settings, &names).is_ok());
+    }
+
+    #[test]
+    fn where_the_server_is_is_kept() {
+        let data = tempfile::tempdir().unwrap();
+        let publishing = Publishing::new(data.path());
+        assert_eq!(publishing.read().unwrap().placement, None);
+        publishing.set_placement(Placement::Home).unwrap();
+        assert_eq!(publishing.read().unwrap().placement, Some(Placement::Home));
+    }
+
+    #[test]
     fn the_apps_page_can_take_another_name_that_is_free() {
         let data = tempfile::tempdir().unwrap();
         let publishing = Publishing::new(data.path());
@@ -1715,6 +1855,11 @@ mod tests {
             .check_apps_page_name("elsewhere-apps")
             .unwrap_err()
             .contains("points somewhere else"));
+        // A name with no record yet says which record to add.
+        assert!(publishing
+            .check_apps_page_name("missing-apps")
+            .unwrap_err()
+            .contains("add an A record for missing-apps.example.com with the value 203.0.113.7"));
         assert!(publishing
             .check_apps_page_name("todo")
             .unwrap_err()
@@ -1911,6 +2056,8 @@ mod tests {
             sign_in: Some(provider.clone()),
             apps_page: None,
             reach: Reach::Internet,
+            records: Records::Wildcard,
+            placement: None,
         };
         settings.apps.insert(
             "prj_todo".into(),

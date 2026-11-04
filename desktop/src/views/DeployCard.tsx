@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { getWorkspace, listFeatures } from "../api/features";
-import { openAssistantOn } from "../attention/askAssistant";
+import { openAssistantOn, startChatOn } from "../attention/askAssistant";
 import {
   deploy,
   deployments as readDeployments,
@@ -151,6 +151,32 @@ function useDeployment(projectId: string) {
   };
 }
 
+/** What went wrong, with Mayka's help when it is a DNS record to add. */
+function DeployError({ error }: { error: string }) {
+  const record = error.includes("does not point at this server yet");
+  return (
+    <p className="sync-card__error">
+      {error}
+      {record && (
+        <>
+          {" "}
+          <button
+            className="shell-card__link"
+            onClick={() =>
+              startChatOn(
+                { kind: "serving" },
+                `Help me add this DNS record at my DNS provider. Commitarium says: ${error}`,
+              )
+            }
+          >
+            Ask Mayka to help
+          </button>
+        </>
+      )}
+    </p>
+  );
+}
+
 function DeployState({ shown }: { shown: ReturnType<typeof useDeployment> }) {
   const { current, state } = shown;
   return (
@@ -201,7 +227,7 @@ export function DeployCard({
         )
       )}
       {failure && <p className="sync-card__error">It did not start.</p>}
-      {error && <p className="sync-card__error">{error}</p>}
+      {error && <DeployError error={error} />}
       <div className="row deploy-actions">
         <button
           className="primary"
@@ -284,7 +310,7 @@ export function DeploymentPage({ projectId, name }: { projectId: string; name: s
         </dl>
       )}
       {failure && <p className="sync-card__error">It did not start: {failure}</p>}
-      {error && <p className="sync-card__error">{error}</p>}
+      {error && <DeployError error={error} />}
       <div className="row deploy-actions">
         <button
           className="primary"
@@ -428,7 +454,7 @@ function Address({
         <p className="muted shell-card__text">
           {privateNet
             ? "It gets an address once Tailscale is set up, in Settings → Server."
-            : "It has no address yet. In Settings → Server, choose who reaches your apps: anyone on the internet, at your own domain, or only your devices, through Tailscale."}
+            : "It has no address yet. In Settings → Server, set your domain, or turn on Homelab mode for a server at home."}
         </p>
         <div className="row deploy-links">{stop}</div>
       </>

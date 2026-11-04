@@ -145,6 +145,11 @@ export interface ConnectSignIn {
 /** Who reaches the apps (HOMELAB_PLAN.md): anyone on the internet at the
  * server's domain, or only the owner's devices, on their Tailscale network. */
 export type Reach = "internet" | "private";
+/** How the domain's DNS points at the server: one wildcard record, or a
+ * record for each address in use. */
+export type Records = "wildcard" | "each_name";
+/** Where the owner said the server is, asked once. */
+export type Placement = "home" | "cloud" | "other";
 
 /** Tailscale on the server, in the steps the owner goes through. */
 export interface TailscaleStatus {
@@ -169,6 +174,8 @@ export interface PublishingOverview {
   apps_page: AppsPage | null;
   reach: Reach;
   tailscale: TailscaleStatus | null;
+  records: Records;
+  placement: Placement | null;
 }
 
 /** authentik on the server, for a company without a sign-in provider. */
@@ -190,8 +197,12 @@ export const deploy = (projectId: string, commitId?: string): Promise<PreviewSta
 export const stopDeployment = (projectId: string): Promise<void> =>
   hostPost("/v1/deployments/stop", { project_id: projectId });
 export const publishing = (): Promise<PublishingOverview> => hostGet("/v1/publishing");
-export const setDomain = (domain: string): Promise<void> =>
-  hostPost("/v1/publishing/domain", { domain });
+export const setDomain = (domain: string, records: Records = "wildcard"): Promise<void> =>
+  hostPost("/v1/publishing/domain", { domain, records });
+export const setPlacement = (placement: Placement): Promise<void> =>
+  hostPost("/v1/publishing/placement", { placement });
+/** Tells the Server settings that publishing changed, so each part reads it again. */
+export const PUBLISHING_CHANGED = "commitarium:publishing-changed";
 /** A private app needs a password the first time; the user chooses it. */
 export const publishApp = (
   projectId: string,

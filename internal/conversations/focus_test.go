@@ -1,6 +1,7 @@
 package conversations
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -87,5 +88,34 @@ func TestTheSignInFocusCarriesTheSetup(t *testing.T) {
 		if !strings.Contains(instructions, want) {
 			t.Fatalf("instructions miss %q", want)
 		}
+	}
+}
+
+// A chat outside any project may be focused on the user's server, such as
+// serving their apps and their DNS, but not on a project's item.
+func TestAChatOutsideProjectsMayFocusOnTheServer(t *testing.T) {
+	service, worker := newTestService(t)
+	if _, err := service.SetFocus(t.Context(), TopLevel, &Focus{Kind: FocusStack}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("a top-level stack focus: %v", err)
+	}
+	conversation, err := service.SetFocus(t.Context(), TopLevel, &Focus{Kind: FocusServing})
+	if err != nil || conversation.Focus == nil || conversation.Focus.Label != "Serving your apps" {
+		t.Fatalf("focus = %+v, %v", conversation.Focus, err)
+	}
+	if _, err := service.Send(t.Context(), TopLevel, "Help me with my DNS.", "msg-1"); err != nil {
+		t.Fatal(err)
+	}
+	instructions := worker.puts[0].Instructions
+	for _, want := range []string{
+		"One wildcard record (recommended)",
+		`"DNS only" (grey cloud)`,
+		"Settings → Server → Homelab",
+	} {
+		if !strings.Contains(instructions, want) {
+			t.Fatalf("instructions miss %q", want)
+		}
+	}
+	if _, err := service.SetFocus(t.Context(), TopLevel, nil); err != nil {
+		t.Fatalf("clearing it: %v", err)
 	}
 }
