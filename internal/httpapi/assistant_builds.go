@@ -122,6 +122,11 @@ func (api *API) applyWriteBrief(
 		writeError(w, http.StatusConflict, "feature_not_draft", "only a draft work order gets a brief written")
 		return "", nil, false
 	}
+	// Writing early: what it builds on is not on main yet, so the writer is
+	// told not to ask about it, as the planners are.
+	if after := api.queuedStarts(ctx, projectID)[stored.ID]; after != "" {
+		description += briefEarlyNote(after)
+	}
 	helper := conversations.Helper{Kind: conversations.HelperBrief, WorkOrderID: stored.ID, Title: stored.Title}
 	path := helperPath(projectID, helper)
 	var session assistantSessionResponse
@@ -151,6 +156,17 @@ func (api *API) applyWriteBrief(
 	}
 	helper.ID = session.ID
 	return fmt.Sprintf("Writing the brief for “%s”.", stored.Title), &helper, true
+}
+
+// briefEarlyNote tells a brief writer whose work order starts after work
+// that has not merged how to write it: main does not have that work yet, and
+// asking whether to wait only holds the brief up.
+func briefEarlyNote(after string) string {
+	return "\n\nThis work order starts after “" + after + "”, which is still being built and has not merged, " +
+		"so main does not have it yet. Do not ask whether to wait for it or whether to build it here: write the " +
+		"brief against that work as planned (its title, the project's vision and what is said above describe it), " +
+		"and name in the brief what this work assumes of it (routes, data, file names). Before implementing, the " +
+		"lead brings main in and checks the plan against the merged code."
 }
 
 // applyAcceptBrief accepts the brief the brief writer proposed, as the

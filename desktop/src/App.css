@@ -5391,6 +5391,18 @@ select:focus {
   height: 100%;
   pointer-events: none;
 }
+/* The ripple's spheres: light blue on dark, deeper on light so they read. */
+.ripple-field {
+  color: rgb(2, 132, 199);
+}
+:root[data-theme="dark"] .ripple-field {
+  color: rgb(125, 211, 252);
+}
+@media (prefers-color-scheme: dark) {
+  :root[data-theme="system"] .ripple-field {
+    color: rgb(125, 211, 252);
+  }
+}
 .app-window__starting {
   animation: dot-pulse 1.6s ease-in-out infinite;
 }

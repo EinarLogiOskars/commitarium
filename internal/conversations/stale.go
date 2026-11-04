@@ -49,7 +49,7 @@ func (stored *record) settleStale(
 		if action.Status == ActionProposed && stored.Goal.covers(*action) {
 			action.LeftForUser = false
 			action.Status, action.Settled, action.Result, action.UpdatedAt = ActionApplied, true,
-				"No longer needed: autopilot has taken this on since.", at
+				"No longer needed: autopilot is on it.", at
 			settled = true
 			continue
 		}
@@ -132,14 +132,14 @@ func (service *Service) settleIfStale(ctx context.Context, scope string, action 
 }
 
 // covers reports whether a start_autopilot card is no longer needed: a goal
-// for the same priorities, or for the whole vision, started after it was
-// proposed, or finished them after it, so it waits on the user for nothing.
-// A goal the user stopped leaves the card to start it again.
+// for the same priorities, or for the whole vision, is running, started after
+// it was proposed, or finished them after it, so it waits on the user for
+// nothing. A goal the user stopped leaves the card to start it again.
 func (goal *Goal) covers(action Action) bool {
 	if goal == nil || action.Type != featureartifact.AssistantStartAutopilot ||
 		(goal.Level != AllPriorities && goal.Level != action.Priority) {
 		return false
 	}
 	finished := goal.Status == GoalDone && goal.EndedAt != nil && goal.EndedAt.After(action.UpdatedAt)
-	return finished || goal.StartedAt.After(action.UpdatedAt)
+	return goal.active() || finished || goal.StartedAt.After(action.UpdatedAt)
 }
