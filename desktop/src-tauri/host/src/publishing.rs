@@ -9,6 +9,7 @@ use crate::authentik::{self, Authentik};
 use crate::deployments::Deployments;
 use crate::docker;
 use crate::sign_in::{self, Provider};
+use crate::tailscale::{self, Tailscale};
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -84,6 +85,71 @@ struct AppRoute {
     /// owner hides it, say while it is a work in progress.
     #[serde(default = "listed_by_default", skip_serializing_if = "is_listed")]
     listed: bool,
+    /// Its port on the Tailscale name, in homelab mode: given once and kept,
+    /// so its address never changes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    port: Option<u16>,
+}
+
+/// Who reaches the apps (HOMELAB_PLAN.md): anyone on the internet, at the
+/// server's domain, or only the owner's devices, on their Tailscale network.
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Reach {
+    #[default]
+    Internet,
+    Private,
+}
+
+fn is_internet(reach: &Reach) -> bool {
+    *reach == Reach::Internet
+}
+
+/// Where apps are served: under the domain, or on the Tailscale name.
+#[derive(Clone, Copy)]
+enum Base<'a> {
+    Domain(&'a str),
+    Tailnet { name: &'a str },
+}
+
+impl Base<'_> {
+    fn app_url(&self, route: &AppRoute) -> String {
+        match self {
+            Base::Domain(domain) => address(&route.name, domain),
+            Base::Tailnet { name, .. } => match route.port {
+                Some(port) => format!("https://{name}:{port}"),
+                None => String::new(),
+            },
+        }
+    }
+
+    fn page_url(&self, page: &AppsPage) -> String {
+        match self {
+            Base::Domain(domain) => address(&page.name, domain),
+            Base::Tailnet { name, .. } => format!("https://{name}"),
+        }
+    }
+}
+
+/// The first port an app gets on the Tailscale name.
+const FIRST_APP_PORT: u16 = 8001;
+
+/// Gives every app without a port the next free one.
+fn assign_ports(settings: &mut Settings) {
+    let mut used: Vec<u16> = settings
+        .apps
+        .values()
+        .filter_map(|route| route.port)
+        .collect();
+    for route in settings.apps.values_mut() {
+        if route.port.is_none() {
+            let port = (FIRST_APP_PORT..)
+                .find(|port| !used.contains(port))
+                .unwrap_or(FIRST_APP_PORT);
+            used.push(port);
+            route.port = Some(port);
+        }
+    }
 }
 
 fn default_apps_page_name() -> String {
@@ -122,6 +188,21 @@ struct Settings {
     /// The apps page, once turned on.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     apps_page: Option<AppsPage>,
+    #[serde(default, skip_serializing_if = "is_internet")]
+    reach: Reach,
+}
+
+impl Settings {
+    /// Where apps are served now, if anywhere yet.
+    fn base<'a>(&'a self, tailnet: Option<&'a tailscale::Status>) -> Option<Base<'a>> {
+        match self.reach {
+            Reach::Internet => self.domain.as_deref().map(Base::Domain),
+            Reach::Private => {
+                let (name, _) = tailnet?.serving()?;
+                Some(Base::Tailnet { name })
+            }
+        }
+    }
 }
 
 /// A published app as a client sees it.
@@ -167,6 +248,9 @@ pub struct Overview {
     authentik: authentik::Status,
     /// The apps page, when it is on.
     apps_page: Option<AppsPageShown>,
+    reach: Reach,
+    /// Tailscale, in homelab mode.
+    tailscale: Option<tailscale::Status>,
 }
 
 /// What publishing an app answers: its address.
@@ -180,6 +264,7 @@ pub struct Publishing {
     file: PathBuf,
     caddy_dir: PathBuf,
     authentik: Authentik,
+    tailscale: Tailscale,
     /// Orders changes to the file, and holds the configuration last loaded.
     applied: Arc<Mutex<Option<String>>>,
 }
@@ -190,6 +275,7 @@ impl Publishing {
             file: data_dir.join(FILE),
             caddy_dir: data_dir.join(CADDY_DIR),
             authentik: Authentik::new(data_dir),
+            tailscale: Tailscale::new(data_dir),
             applied: Arc::default(),
         }
     }
@@ -211,6 +297,8 @@ impl Publishing {
     pub fn overview(&self, deployments: &Deployments) -> Result<Overview, String> {
         let settings = self.read()?;
         let running = deployments.running_ports();
+        let tailnet = (settings.reach == Reach::Private).then(|| self.tailscale.status());
+        let base = settings.base(tailnet.as_ref());
         Ok(Overview {
             server_address: server_address().map(|ip| ip.to_string()),
             apps: settings
@@ -220,11 +308,7 @@ impl Publishing {
                     project_id: project_id.clone(),
                     name: route.name.clone(),
                     access: route.access,
-                    url: settings
-                        .domain
-                        .as_deref()
-                        .map(|domain| address(&route.name, domain))
-                        .unwrap_or_default(),
+                    url: base.map(|base| base.app_url(route)).unwrap_or_default(),
                     live: running.contains_key(project_id),
                     groups: route.groups.clone(),
                     listed: route.listed,
@@ -234,9 +318,11 @@ impl Publishing {
                 Some(AppsPageShown {
                     name: page.name.clone(),
                     access: page.access,
-                    url: address(&page.name, settings.domain.as_deref()?),
+                    url: base?.page_url(page),
                 })
             }),
+            reach: settings.reach,
+            tailscale: tailnet.clone(),
             sign_in: settings
                 .sign_in
                 .as_ref()
@@ -282,10 +368,15 @@ impl Publishing {
             .lock()
             .map_err(|_| "publishing is unavailable")?;
         let mut settings = self.read()?;
-        let domain = settings
-            .domain
-            .clone()
-            .ok_or("set this server's domain in Settings first")?;
+        let private = settings.reach == Reach::Private;
+        let domain = match (&settings.domain, private) {
+            (_, true) => String::new(),
+            (Some(domain), false) => domain.clone(),
+            (None, false) => return Err("set this server's domain in Settings first".into()),
+        };
+        if private && access == Access::Company {
+            return Err(PRIVATE_NO_COMPANY.into());
+        }
         if settings
             .apps
             .iter()
@@ -302,13 +393,15 @@ impl Publishing {
                 "{name} is the apps page's address. Choose another name."
             ));
         }
-        let here = server_address().ok_or("this server's address is unknown")?;
-        let url = address(&name, &domain);
-        if !resolves_to(&format!("{name}.{domain}"), here) {
-            return Err(format!(
-                "{name}.{domain} points somewhere else, so it is used elsewhere. Choose \
-                 another name."
-            ));
+        // On the private network, names are only labels: no DNS to check.
+        if !private {
+            let here = server_address().ok_or("this server's address is unknown")?;
+            if !resolves_to(&format!("{name}.{domain}"), here) {
+                return Err(format!(
+                    "{name}.{domain} points somewhere else, so it is used elsewhere. Choose \
+                     another name."
+                ));
+            }
         }
         let previous = settings
             .apps
@@ -327,11 +420,11 @@ impl Publishing {
         if access == Access::Company && settings.sign_in.is_none() {
             return Err(NO_PROVIDER.into());
         }
-        let (groups, listed) = settings
+        let (groups, listed, port) = settings
             .apps
             .get(project_id)
-            .map_or((Vec::new(), true), |route| {
-                (route.groups.clone(), route.listed)
+            .map_or((Vec::new(), true, None), |route| {
+                (route.groups.clone(), route.listed, route.port)
             });
         settings.apps.insert(
             project_id.to_string(),
@@ -342,9 +435,19 @@ impl Publishing {
                 password,
                 groups,
                 listed,
+                port,
             },
         );
+        if private {
+            assign_ports(&mut settings);
+        }
         self.write(&settings)?;
+        let tailnet = private.then(|| self.tailscale.status());
+        let url = settings
+            .base(tailnet.as_ref())
+            .zip(settings.apps.get(project_id))
+            .map(|(base, route)| base.app_url(route))
+            .unwrap_or_default();
         Ok(Published { url })
     }
 
@@ -534,8 +637,12 @@ impl Publishing {
             settings.apps_page = None;
             return self.write(&settings);
         };
-        if settings.domain.is_none() {
+        let private = settings.reach == Reach::Private;
+        if settings.domain.is_none() && !private {
             return Err("set this server's domain in Settings first".into());
+        }
+        if access == Access::Company && private {
+            return Err(PRIVATE_NO_COMPANY.into());
         }
         if access == Access::Company && settings.sign_in.is_none() {
             return Err(NO_PROVIDER.into());
@@ -545,7 +652,8 @@ impl Publishing {
         let name = asked_name
             .or_else(|| previous_name.clone())
             .unwrap_or_else(default_apps_page_name);
-        if previous_name.as_deref() != Some(name.as_str()) {
+        // On the private network the page has the Tailscale name to itself.
+        if previous_name.as_deref() != Some(name.as_str()) && !private {
             let domain = settings.domain.as_deref().unwrap_or_default();
             name_is_free(&settings, &name, domain)?;
         }
@@ -573,6 +681,9 @@ impl Publishing {
     pub fn check_apps_page_name(&self, name: &str) -> Result<(), String> {
         let name = valid_page_name(name)?;
         let settings = self.read()?;
+        if settings.reach == Reach::Private {
+            return Ok(());
+        }
         let domain = settings
             .domain
             .as_deref()
@@ -617,7 +728,46 @@ impl Publishing {
         groups: Option<&str>,
     ) -> Result<Option<Vec<CatalogApp>>, String> {
         let settings = self.read()?;
-        Ok(catalog(&settings, &deployments.running_ports(), groups))
+        let tailnet = (settings.reach == Reach::Private).then(|| self.tailscale.status());
+        let Some(base) = settings.base(tailnet.as_ref()) else {
+            return Ok(None);
+        };
+        Ok(catalog(
+            &settings,
+            &deployments.running_ports(),
+            groups,
+            base,
+        ))
+    }
+
+    /// Chooses who reaches the apps. Private needs company sign-in gone
+    /// first, since it needs a domain on the internet; it gives every app its
+    /// port and starts Tailscale. Back to the internet stops Commitarium's
+    /// Tailscale, keeping its state for coming back.
+    pub fn set_reach(&self, reach: Reach) -> Result<(), String> {
+        let _held = self
+            .applied
+            .lock()
+            .map_err(|_| "publishing is unavailable")?;
+        let mut settings = self.read()?;
+        if reach == Reach::Private && settings.sign_in.is_some() {
+            return Err(
+                "disconnect company sign-in first: it needs your own domain, on the internet"
+                    .into(),
+            );
+        }
+        settings.reach = reach;
+        if reach == Reach::Private {
+            assign_ports(&mut settings);
+        }
+        self.write(&settings)?;
+        match reach {
+            Reach::Private => self.tailscale.keep_running(),
+            Reach::Internet => {
+                self.tailscale.stop();
+                Ok(())
+            }
+        }
     }
 
     pub fn unpublish(&self, project_id: &str) -> Result<(), String> {
@@ -647,18 +797,40 @@ impl Publishing {
             .lock()
             .map_err(|_| "publishing is unavailable")?;
         let settings = self.read()?;
-        let Some(domain) = settings.domain.as_deref() else {
-            return Ok(());
+        let (config, socket_dir) = match settings.reach {
+            Reach::Internet => {
+                let Some(domain) = settings.domain.as_deref() else {
+                    return Ok(());
+                };
+                sign_in::sync(settings.sign_in.as_ref(), domain)?;
+                self.authentik.keep_running()?;
+                let config = caddy_config(
+                    &settings,
+                    &deployments.running_ports(),
+                    self.authentik.installed(),
+                );
+                (config, None)
+            }
+            Reach::Private => {
+                self.tailscale.keep_running()?;
+                let status = self.tailscale.status();
+                // Until it is signed in with certificates on, there is
+                // nothing to serve: the app shows the step that is missing.
+                let Some((name, address)) = status.serving() else {
+                    return Ok(());
+                };
+                let config =
+                    private_caddy_config(&settings, &deployments.running_ports(), name, address);
+                (config, Some(self.tailscale.socket_dir()))
+            }
         };
-        sign_in::sync(settings.sign_in.as_ref(), domain)?;
-        self.authentik.keep_running()?;
-        let config = caddy_config(
-            &settings,
-            &deployments.running_ports(),
-            self.authentik.installed(),
-        );
         let body = serde_json::to_string_pretty(&config).map_err(|e| e.to_string())?;
-        let running = caddy_running();
+        let mount = socket_dir
+            .as_deref()
+            .map(|dir| dir.display().to_string())
+            .unwrap_or_default();
+        // Caddy reaches Tailscale's socket only if it was started with it.
+        let running = caddy_running() && caddy_mount().as_deref() == Some(mount.as_str());
         if running && applied.as_deref() == Some(body.as_str()) {
             return Ok(());
         }
@@ -668,7 +840,7 @@ impl Publishing {
         if running {
             reload_caddy()?;
         } else {
-            start_caddy(&self.caddy_dir)?;
+            start_caddy(&self.caddy_dir, socket_dir.as_deref())?;
         }
         *applied = Some(body);
         Ok(())
@@ -724,9 +896,9 @@ fn catalog(
     settings: &Settings,
     running: &BTreeMap<String, u16>,
     groups: Option<&str>,
+    base: Base,
 ) -> Option<Vec<CatalogApp>> {
     let page = settings.apps_page.as_ref()?;
-    let domain = settings.domain.as_deref()?;
     let theirs: Vec<&str> = groups
         .unwrap_or_default()
         .split(',')
@@ -753,7 +925,7 @@ fn catalog(
         })
         .map(|(project_id, route)| CatalogApp {
             name: route.name.clone(),
-            url: address(&route.name, domain),
+            url: base.app_url(route),
             access: route.access,
             live: running.contains_key(project_id),
         })
@@ -764,8 +936,7 @@ fn catalog(
 
 /// The apps page's route: its own gate or password, as chosen, then the
 /// host's page.
-fn apps_page_route(settings: &Settings, apps_page: &AppsPage, domain: &str) -> Value {
-    let host = format!("{}.{domain}", apps_page.name);
+fn apps_page_route(settings: &Settings, apps_page: &AppsPage, host: &str, domain: &str) -> Value {
     let mut handle = vec![sign_in::strip_identity()];
     match (apps_page.access, &apps_page.password_hash) {
         (Access::Company, _) if settings.sign_in.is_none() => {
@@ -786,13 +957,13 @@ fn apps_page_route(settings: &Settings, apps_page: &AppsPage, domain: &str) -> V
 
 /// Lets only the apps page show a listed app in a frame. Anything the app
 /// says about framing itself still counts: browsers apply every policy.
-fn framed_by_apps_page(page: &str, domain: &str) -> Value {
+fn framed_by(page_origin: &str) -> Value {
     json!({
         "handler": "headers",
         "response": {
             "delete": ["X-Frame-Options"],
             "add": {"Content-Security-Policy": [
-                format!("frame-ancestors 'self' https://{page}.{domain}")
+                format!("frame-ancestors 'self' {page_origin}")
             ]},
             "deferred": true,
         },
@@ -887,46 +1058,72 @@ fn resolves_to(name: &str, here: IpAddr) -> bool {
 /// Caddy's whole configuration. A published app with a running deployment
 /// gets a route to it, behind its password when private; one without gets
 /// the "not running" page. Any other name gets "No app here".
+/// One app's route: who may open it, then the app, or the "not running" page.
+fn app_route(
+    settings: &Settings,
+    project_id: &str,
+    route: &AppRoute,
+    running: &BTreeMap<String, u16>,
+    host: &str,
+    gate_domain: &str,
+    page_origin: Option<&str>,
+) -> Value {
+    let mut handle = vec![sign_in::strip_identity()];
+    if route.access == Access::Company {
+        // No provider would be no gate: then no way in.
+        if settings.sign_in.is_none() {
+            let page = page(503, NO_SIGN_IN);
+            return json!({"match": [{"host": [host]}], "handle": [page], "terminal": true});
+        }
+        handle.push(sign_in::caddy_gate(
+            gate_domain,
+            &route.groups,
+            page(403, NOT_YOURS),
+        ));
+    }
+    if let (Access::Private, Some(hash)) = (route.access, &route.password_hash) {
+        handle.push(basic_auth(&route.name, hash));
+    }
+    if let (true, Some(origin)) = (route.listed, page_origin) {
+        handle.insert(1, framed_by(origin));
+    }
+    match running.get(project_id) {
+        Some(port) => handle.push(json!({
+            "handler": "reverse_proxy",
+            "upstreams": [{"dial": format!("127.0.0.1:{port}")}],
+            // Development servers answer only their own name.
+            "headers": {"request": {"set": {"Host": ["localhost"]}}},
+        })),
+        None => handle.push(page(503, NOT_RUNNING)),
+    }
+    json!({"match": [{"host": [host]}], "handle": handle, "terminal": true})
+}
+
 fn caddy_config(settings: &Settings, running: &BTreeMap<String, u16>, authentik: bool) -> Value {
     let domain = settings.domain.as_deref().unwrap_or_default();
+    let page_origin = settings
+        .apps_page
+        .as_ref()
+        .map(|page| address(&page.name, domain));
     let mut routes: Vec<Value> = settings
         .apps
         .iter()
         .map(|(project_id, route)| {
             let host = format!("{}.{domain}", route.name);
-            let mut handle = vec![sign_in::strip_identity()];
-            if route.access == Access::Company {
-                // No provider would be no gate: then no way in.
-                if settings.sign_in.is_none() {
-                    let page = page(503, NO_SIGN_IN);
-                    return json!({"match": [{"host": [host]}], "handle": [page], "terminal": true});
-                }
-                handle.push(sign_in::caddy_gate(
-                    domain,
-                    &route.groups,
-                    page(403, NOT_YOURS),
-                ));
-            }
-            if let (Access::Private, Some(hash)) = (route.access, &route.password_hash) {
-                handle.push(basic_auth(&route.name, hash));
-            }
-            if let (true, Some(page)) = (route.listed, &settings.apps_page) {
-                handle.insert(1, framed_by_apps_page(&page.name, domain));
-            }
-            match running.get(project_id) {
-                Some(port) => handle.push(json!({
-                    "handler": "reverse_proxy",
-                    "upstreams": [{"dial": format!("127.0.0.1:{port}")}],
-                    // Development servers answer only their own name.
-                    "headers": {"request": {"set": {"Host": ["localhost"]}}},
-                })),
-                None => handle.push(page(503, NOT_RUNNING)),
-            }
-            json!({"match": [{"host": [host]}], "handle": handle, "terminal": true})
+            app_route(
+                settings,
+                project_id,
+                route,
+                running,
+                &host,
+                domain,
+                page_origin.as_deref(),
+            )
         })
         .collect();
     if let Some(page) = &settings.apps_page {
-        routes.insert(0, apps_page_route(settings, page, domain));
+        let host = format!("{}.{domain}", page.name);
+        routes.insert(0, apps_page_route(settings, page, &host, domain));
     }
     if settings.sign_in.is_some() {
         routes.insert(0, sign_in::caddy_route(domain));
@@ -962,6 +1159,49 @@ fn caddy_config(settings: &Settings, running: &BTreeMap<String, u16>, authentik:
     })
 }
 
+/// Caddy's whole configuration on the private network: the apps page on the
+/// Tailscale name, and each app on its own port of it, all listening on the
+/// Tailscale address alone. Caddy gets the name's certificate from
+/// Tailscale, through its socket.
+fn private_caddy_config(
+    settings: &Settings,
+    running: &BTreeMap<String, u16>,
+    name: &str,
+    tailnet_address: &str,
+) -> Value {
+    let server = |port: u16, routes: Vec<Value>| {
+        json!({
+            "listen": [format!("{tailnet_address}:{port}")],
+            "routes": routes,
+            // Nothing on port 80: the private network needs no redirects
+            // or certificate challenges.
+            "automatic_https": {"disable_redirects": true},
+            "errors": {"routes": [{
+                "match": [{"expression": "{http.error.status_code} >= 502"}],
+                "handle": [page(503, NOT_RUNNING)],
+            }]},
+        })
+    };
+    let origin = format!("https://{name}");
+    let page_origin = settings.apps_page.as_ref().map(|_| origin.as_str());
+    let mut home = Vec::new();
+    if let Some(page) = &settings.apps_page {
+        home.push(apps_page_route(settings, page, name, ""));
+    }
+    home.push(json!({"handle": [page(404, NO_APP)]}));
+    let mut servers = serde_json::Map::new();
+    servers.insert("apps".into(), server(443, home));
+    for (project_id, route) in &settings.apps {
+        let Some(port) = route.port else { continue };
+        let route = app_route(settings, project_id, route, running, name, "", page_origin);
+        servers.insert(format!("app-{port}"), server(port, vec![route]));
+    }
+    json!({
+        "admin": {"listen": CADDY_ADMIN},
+        "apps": {"http": {"servers": servers}},
+    })
+}
+
 fn page(status: u16, text: &str) -> Value {
     json!({
         "handler": "static_response",
@@ -980,6 +1220,8 @@ const NO_APP: &str = "No app here.";
 const NOT_YOURS: &str = "You are signed in, but this app is for other groups at your company.";
 const NO_SIGN_IN: &str = "This app opens with company sign-in, which is not set up.";
 const NO_PROVIDER: &str = "connect your company's sign-in in Settings first";
+const PRIVATE_NO_COMPANY: &str =
+    "company sign-in needs your own domain on the internet: on a private network, choose a password or anyone";
 
 fn caddy_running() -> bool {
     docker::docker_command()
@@ -988,34 +1230,60 @@ fn caddy_running() -> bool {
         .is_ok_and(|output| output.status.success() && output.stdout.starts_with(b"true"))
 }
 
-fn start_caddy(dir: &Path) -> Result<(), String> {
+/// Which Tailscale socket directory Caddy was started with; empty for none.
+const CADDY_MOUNT_LABEL: &str = "commitarium.tailscale-socket";
+
+fn caddy_mount() -> Option<String> {
+    let output = docker::docker_command()
+        .args([
+            "inspect",
+            "-f",
+            &format!("{{{{index .Config.Labels \"{CADDY_MOUNT_LABEL}\"}}}}"),
+            CADDY_CONTAINER,
+        ])
+        .output()
+        .ok()?;
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+fn start_caddy(dir: &Path, tailscale_socket: Option<&Path>) -> Result<(), String> {
     let _ = docker::docker_command()
         .args(["rm", "-f", CADDY_CONTAINER])
         .output();
     let mount = format!("{}:/etc/commitarium:ro", dir.display());
-    let output = docker::docker_command()
-        .args([
-            "run",
-            "-d",
-            "--name",
-            CADDY_CONTAINER,
-            "--restart",
-            "unless-stopped",
-            "--network",
-            "host",
-            "--log-opt",
-            "max-size=10m",
-            "--log-opt",
-            "max-file=3",
-            "-v",
-            &format!("{CADDY_DATA}:/data"),
-            "-v",
-            &mount,
-            CADDY_IMAGE,
-            "caddy",
-            "run",
-            "--config",
-        ])
+    let socket = tailscale_socket
+        .map(|dir| dir.display().to_string())
+        .unwrap_or_default();
+    let mut command = docker::docker_command();
+    command.args([
+        "run",
+        "-d",
+        "--name",
+        CADDY_CONTAINER,
+        "--restart",
+        "unless-stopped",
+        "--network",
+        "host",
+        "--log-opt",
+        "max-size=10m",
+        "--log-opt",
+        "max-file=3",
+        "-v",
+        &format!("{CADDY_DATA}:/data"),
+        "-v",
+        &mount,
+        "--label",
+        &format!("{CADDY_MOUNT_LABEL}={socket}"),
+    ]);
+    if !socket.is_empty() {
+        // Where Caddy asks Tailscale for the name's certificate.
+        command.args(["-v", &format!("{socket}:/var/run/tailscale")]);
+    }
+    let output = command
+        .args([CADDY_IMAGE, "caddy", "run", "--config"])
         .arg(format!("/etc/commitarium/{CADDY_CONFIG}"))
         .output()
         .map_err(|e| format!("start Caddy: {e}"))?;
@@ -1080,6 +1348,7 @@ mod tests {
             apps: BTreeMap::new(),
             sign_in: None,
             apps_page: None,
+            reach: Reach::Internet,
         };
         settings.apps.insert(
             "prj_todo".into(),
@@ -1090,6 +1359,7 @@ mod tests {
                 password: Some("tasks".into()),
                 groups: Vec::new(),
                 listed: true,
+                port: None,
             },
         );
         settings.apps.insert(
@@ -1101,6 +1371,7 @@ mod tests {
                 password: None,
                 groups: Vec::new(),
                 listed: true,
+                port: None,
             },
         );
         settings
@@ -1300,6 +1571,7 @@ mod tests {
                     password: None,
                     groups,
                     listed: true,
+                    port: None,
                 },
             );
         }
@@ -1314,7 +1586,7 @@ mod tests {
     #[test]
     fn the_apps_page_lists_only_listed_apps_and_is_off_until_turned_on() {
         let (mut settings, running) = company_settings();
-        assert!(catalog(&settings, &running, None).is_none());
+        assert!(catalog(&settings, &running, None, Base::Domain("example.com")).is_none());
         settings.apps_page = Some(AppsPage {
             name: "apps".into(),
             access: Access::Public,
@@ -1322,7 +1594,7 @@ mod tests {
             password: None,
         });
         settings.apps.get_mut("prj_crm").unwrap().listed = false;
-        let apps = catalog(&settings, &running, None).unwrap();
+        let apps = catalog(&settings, &running, None, Base::Domain("example.com")).unwrap();
         // Open to anyone: every listed app, locks and all.
         assert_eq!(names(&apps), ["blog", "todo", "wiki"]);
         assert_eq!(apps[1].url, "https://todo.example.com");
@@ -1339,11 +1611,18 @@ mod tests {
             password: None,
         });
         // No password apps: the page cannot know who has the password.
-        let outsider = catalog(&settings, &running, Some("it")).unwrap();
+        let outsider =
+            catalog(&settings, &running, Some("it"), Base::Domain("example.com")).unwrap();
         assert_eq!(names(&outsider), ["blog", "wiki"]);
-        let seller = catalog(&settings, &running, Some("it, sales")).unwrap();
+        let seller = catalog(
+            &settings,
+            &running,
+            Some("it, sales"),
+            Base::Domain("example.com"),
+        )
+        .unwrap();
         assert_eq!(names(&seller), ["blog", "crm", "wiki"]);
-        let nobody = catalog(&settings, &running, None).unwrap();
+        let nobody = catalog(&settings, &running, None, Base::Domain("example.com")).unwrap();
         assert_eq!(names(&nobody), ["blog", "wiki"]);
     }
 
@@ -1497,6 +1776,103 @@ mod tests {
         assert!(!saved.contains("listed"));
     }
 
+    #[test]
+    fn on_the_private_network_apps_get_ports_on_the_tailscale_name() {
+        let mut settings = settings();
+        settings.reach = Reach::Private;
+        settings.domain = None;
+        assign_ports(&mut settings);
+        // Each app its own port, kept: a new app takes the next free one.
+        assert_eq!(settings.apps["prj_blog"].port, Some(8001));
+        assert_eq!(settings.apps["prj_todo"].port, Some(8002));
+        settings.apps.remove("prj_blog");
+        let mut new = settings.apps["prj_todo"].clone();
+        new.name = "notes".into();
+        new.port = None;
+        settings.apps.insert("prj_notes".into(), new);
+        assign_ports(&mut settings);
+        assert_eq!(settings.apps["prj_todo"].port, Some(8002));
+        assert_eq!(settings.apps["prj_notes"].port, Some(8001));
+
+        let status = crate::tailscale::parse_status(
+            &serde_json::json!({
+                "BackendState": "Running",
+                "Self": {"DNSName": "homelab.tail1234.ts.net.", "TailscaleIPs": ["100.64.0.7"]},
+                "CertDomains": ["homelab.tail1234.ts.net"],
+            }),
+            true,
+        );
+        assert_eq!(
+            settings
+                .base(Some(&status))
+                .unwrap()
+                .app_url(&settings.apps["prj_todo"]),
+            "https://homelab.tail1234.ts.net:8002"
+        );
+        // Not ready yet: nowhere to serve.
+        assert!(settings.base(None).is_none());
+
+        settings.apps_page = Some(AppsPage {
+            name: "apps".into(),
+            access: Access::Private,
+            password_hash: Some("$2b$12$hash".into()),
+            password: Some("pw".into()),
+        });
+        let running = BTreeMap::from([("prj_todo".to_string(), 3000)]);
+        let config =
+            private_caddy_config(&settings, &running, "homelab.tail1234.ts.net", "100.64.0.7");
+        let servers = &config["apps"]["http"]["servers"];
+        // Only on the Tailscale address: nothing on the home network.
+        assert_eq!(servers["apps"]["listen"][0], "100.64.0.7:443");
+        assert_eq!(
+            servers["apps"]["automatic_https"]["disable_redirects"],
+            true
+        );
+        let page = &servers["apps"]["routes"][0];
+        assert_eq!(page["match"][0]["host"][0], "homelab.tail1234.ts.net");
+        assert_eq!(page["handle"][1]["handler"], "authentication");
+        let todo = &servers["app-8002"];
+        assert_eq!(todo["listen"][0], "100.64.0.7:8002");
+        let route = &todo["routes"][0];
+        assert_eq!(
+            route["handle"][1]["response"]["add"]["Content-Security-Policy"][0],
+            "frame-ancestors 'self' https://homelab.tail1234.ts.net"
+        );
+        assert_eq!(route["handle"][2]["handler"], "authentication");
+        assert_eq!(route["handle"][3]["upstreams"][0]["dial"], "127.0.0.1:3000");
+        // The catalog links each app at its port.
+        let base = settings.base(Some(&status)).unwrap();
+        let apps = catalog(&settings, &running, None, base).unwrap();
+        assert_eq!(apps[0].url, "https://homelab.tail1234.ts.net:8001");
+    }
+
+    #[test]
+    fn going_private_needs_company_sign_in_gone_and_refuses_it_after() {
+        let data = tempfile::tempdir().unwrap();
+        let publishing = Publishing::new(data.path());
+        let mut settings = settings();
+        settings.sign_in = Some(provider());
+        settings.reach = Reach::Private;
+        publishing.write(&settings).unwrap();
+        // Written straight to the file: set_reach would start Tailscale.
+        let saved = publishing.read().unwrap();
+        assert_eq!(saved.reach, Reach::Private);
+        assert!(publishing
+            .set_apps_page(Some(Access::Company), None, None)
+            .unwrap_err()
+            .contains("private network"));
+        settings.reach = Reach::Internet;
+        publishing.write(&settings).unwrap();
+        assert!(publishing
+            .set_reach(Reach::Private)
+            .unwrap_err()
+            .contains("disconnect company sign-in"));
+        // A file from before homelab mode reads as the internet.
+        let old: Settings = serde_json::from_str(r#"{"domain":"example.com"}"#).unwrap();
+        assert_eq!(old.reach, Reach::Internet);
+        assert!(!serde_json::to_string(&old).unwrap().contains("reach"));
+    }
+
     /// Writes a company app's Caddy config and gate arguments for a live
     /// run against a test provider: `SIGN_IN_TEST_DIR=… cargo test -- --ignored`.
     #[test]
@@ -1534,6 +1910,7 @@ mod tests {
             apps: BTreeMap::new(),
             sign_in: Some(provider.clone()),
             apps_page: None,
+            reach: Reach::Internet,
         };
         settings.apps.insert(
             "prj_todo".into(),
@@ -1544,6 +1921,7 @@ mod tests {
                 password: None,
                 groups,
                 listed: true,
+                port: None,
             },
         );
         let running = BTreeMap::from([("prj_todo".to_string(), 3000)]);

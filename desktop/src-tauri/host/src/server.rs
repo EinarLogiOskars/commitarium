@@ -404,6 +404,11 @@ struct AppsPageName {
 }
 
 #[derive(Deserialize)]
+struct SetReach {
+    reach: crate::publishing::Reach,
+}
+
+#[derive(Deserialize)]
 struct SetListed {
     project_id: String,
     listed: bool,
@@ -623,6 +628,10 @@ fn respond_to_post(path: &str, body: &[u8], shared: &Shared) -> Reply {
                 .on_a_server()
                 .and_then(|()| shared.publishing.apps_page_password()),
         ),
+        "/v1/publishing/reach" => with_body(body, |set: SetReach| {
+            shared.on_a_server()?;
+            shared.publishing.set_reach(set.reach)
+        }),
         "/v1/publishing/listed" => with_body(body, |set: SetListed| {
             shared.on_a_server()?;
             shared.publishing.set_listed(&set.project_id, set.listed)
