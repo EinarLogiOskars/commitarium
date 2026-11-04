@@ -19,12 +19,33 @@ the user to confirm in review. Builds on
   Home Assistant and the like): an app someone wants is imported, or
   Commitarium builds it. The marketplace stays apps built or imported and
   checked by Mayka.
-- **One setting decides it.** Settings → Server, **Who reaches your apps**:
-  - **Anyone on the internet, at your domain:** server mode as today. A
-    domain, certificates from Let's Encrypt, and apps open, behind a
-    password, or behind company sign-in.
-  - **Only my devices, on a private network:** homelab mode. It offers
-    **Sign in to Tailscale**, and turns on everything homelab mode needs.
+- **One setting decides it.** Settings → Server → **Homelab**, "Use this
+  server as my homelab". Off (the default) is server mode as today: a
+  domain, certificates from Let's Encrypt, and apps open, behind a password,
+  or behind company sign-in. On is homelab mode: it offers **Sign in to
+  Tailscale**, and turns on everything homelab mode needs. (First drafted
+  as "Who reaches your apps", renamed: that read like each app's access.)
+- **Asked once: where is this server?** The first time a server's settings
+  open (no answer kept, no domain, homelab off), they ask: on a computer on
+  my network, on a server in the cloud or a VPS, or somewhere else / not
+  sure. Home recommends Homelab mode with a button to turn it on; cloud
+  recommends the domain and points to it; not sure opens a chat with Mayka.
+  The answer is kept on the server, so no other device asks again.
+- **DNS, either way.** The Domain section explains both: one wildcard record
+  `*.<domain>` (recommended: every app and the apps page work with no more
+  DNS changes; names with their own records keep them), or a record for
+  each address, for a company that keeps no wildcard. With a wildcard, the
+  domain is checked before it is kept; with records per address, each
+  address is checked as it is used (an app's, the apps page's, and
+  `sign-in` / `auth` for company sign-in), and a missing one says exactly
+  which record to add. A name pointing elsewhere is "used elsewhere"; one
+  with no record yet is "add this record", no longer the same message.
+- **Mayka helps with DNS.** Ask Mayka beside the DNS choice, and beside a
+  missing-record error on the Deployment card, opens a chat focused on
+  serving apps (allowed outside a project, as company sign-in now is too).
+  She asks which DNS provider, gives its steps, and names the traps
+  (Cloudflare's proxy must be DNS only, a stray AAAA record, waiting a few
+  minutes). She never asks for the provider's login or a token.
 - **No company sign-in in homelab mode.** Apps are open or behind a
   password. Everyone on the private network was invited to it.
 - **Tailscale is the private network.** The host installs it and shows its
@@ -46,8 +67,9 @@ the user to confirm in review. Builds on
 1. Install on the home machine with the one-line install, and pair the
    desktop app over the home network: on the same Wi-Fi, the pairing link's
    local address works.
-2. Settings → Server → Who reaches your apps → **Only my devices**, then
-   **Sign in to Tailscale**.
+2. Settings → Server answers "Where is this server?" with **On a computer
+   on my network**, then **Turn on Homelab mode** and **Sign in to
+   Tailscale**.
 3. The desktop app moves its own connection to the Tailscale address, so it
    keeps working away from home.
 4. Tailscale on the phone, then the apps page: home.
@@ -87,9 +109,9 @@ the user to confirm in review. Builds on
 
 | Step | What | Done when |
 |---|---|---|
-| H1 | The setting and Tailscale | Settings → Server chooses who reaches the apps; private starts Tailscale and shows its state, sign-in link and address |
+| H1 | The setting and Tailscale | Settings → Server → Homelab turns it on; private starts Tailscale and shows its state, sign-in link and address |
 | H2 | Serving on the Tailscale name | The apps page and published apps answer on the Tailscale name with Tailscale's certificates, apps on their own ports, nothing else exposed |
-| H3 | In the app | The Deployment page and the apps page settings work without a domain; the first deploy asks who reaches the apps |
+| H3 | In the app | The Deployment page and the apps page settings work without a domain; the server asks where it is, once, and recommends; DNS explained both ways, with Mayka's help |
 | H4 | The desktop app follows; Mayka | Connect through Tailscale; Mayka explains the choice and the Tailscale steps |
 
 ## Settled while detailing
@@ -98,8 +120,9 @@ the user to confirm in review. Builds on
   the app says so and asks first. Company sign-in must be disconnected
   before going private. Going back to the internet keeps Tailscale's state,
   so coming back needs no new sign-in.
-- **The first deploy** on a server with no domain asks who reaches the
-  apps, before the apps page offer.
+- **The first question** is asked in Settings → Server, not at the first
+  deploy: a deploy on a server with neither a domain nor homelab mode says
+  where to set them.
 - **Backups** do not carry Tailscale's state for now: a restored server
   signs in to Tailscale again, through the same link the app shows. Apps'
   ports are in `publishing.json`, which backups carry, so addresses stay.
