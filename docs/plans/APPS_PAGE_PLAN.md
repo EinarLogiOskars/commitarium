@@ -13,6 +13,11 @@ of the Commitarium app, for the people who use the apps.
 
 - **At `apps.<domain>`, not the bare domain.** A company's own website
   usually lives at the bare domain. `apps` is already a name no app can take.
+- **Its name can change** (the user's, 2026-11-04). A company may already
+  use `apps.` for something, so the page's address name is a setting,
+  `apps` by default, checked like an app's: it must point at this server
+  and be no app's name, and once taken no app can take it. The first-deploy
+  offer checks `apps` first and asks for another name when it is taken.
 - **Opt-in, offered once.** It does not exist until the user turns it on.
   When someone gives their first app an address on a server, Commitarium
   offers to turn it on with that app's access.
