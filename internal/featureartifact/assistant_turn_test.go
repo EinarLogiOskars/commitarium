@@ -30,6 +30,28 @@ func TestADeployNeedsOnlyAReason(t *testing.T) {
 	}
 }
 
+// An apps page card names what it does; anything else is refused.
+func TestAppsPageCardsNameWhatTheyDo(t *testing.T) {
+	for _, action := range []AssistantAction{
+		{Type: AssistantSetAppsPage, Reason: "Asked", How: "company"},
+		{Type: AssistantSetAppsPage, Reason: "Asked", How: "off"},
+		{Type: AssistantListOnAppsPage, Reason: "Asked", How: "hide"},
+	} {
+		if _, err := (AssistantTurn{Actions: []AssistantAction{action}}).Normalize(); err != nil {
+			t.Fatalf("%+v: %v", action, err)
+		}
+	}
+	for _, action := range []AssistantAction{
+		{Type: AssistantSetAppsPage, Reason: "Asked"},
+		{Type: AssistantSetAppsPage, Reason: "Asked", How: "list"},
+		{Type: AssistantListOnAppsPage, Reason: "Asked", How: "off"},
+	} {
+		if _, err := (AssistantTurn{Actions: []AssistantAction{action}}).Normalize(); !errors.Is(err, ErrInvalidArtifact) {
+			t.Fatalf("%+v accepted: %v", action, err)
+		}
+	}
+}
+
 // A new app carries the brief the assistant gathered and what it assumed,
 // trimmed and bounded.
 func TestANewAppCarriesItsBrief(t *testing.T) {

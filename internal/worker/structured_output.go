@@ -807,7 +807,7 @@ func ResolveStructuredOutput(
 // which Commitarium applies at once (ONE_CONVERSATION_PLAN.md phase 2).
 func assistantTurnSchema(planning bool) map[string]any {
 	text := map[string]any{"type": "string"}
-	types := []string{"create_work_order", "start_work_order", "change_models", "add_vision_item", "start_autopilot", "continue_work_order", "recover_work_order", "close_work_order", "create_app", "plan_project", "set_up_preview", "write_vision", "set_up_stack", "answer_helper", "write_brief", "design_stack", "research", "build_plan", "deploy_app"}
+	types := []string{"create_work_order", "start_work_order", "change_models", "add_vision_item", "start_autopilot", "continue_work_order", "recover_work_order", "close_work_order", "create_app", "plan_project", "set_up_preview", "set_apps_page", "list_on_apps_page", "write_vision", "set_up_stack", "answer_helper", "write_brief", "design_stack", "research", "build_plan", "deploy_app"}
 	if !planning {
 		// Plan mode is suggested only in a chat that is not planning.
 		types = append(types, "start_planning")
@@ -832,7 +832,7 @@ func assistantTurnSchema(planning bool) map[string]any {
 			"reviewer_effort":      map[string]any{"type": "string", "description": "The reviewer's reasoning effort for code review; empty is the model's default."},
 			"work_order_id":        text,
 			"when":                 map[string]any{"type": "string", "enum": []string{"", "now", "next_turn"}},
-			"how":                  map[string]any{"type": "string", "enum": []string{"", "recheck", "continue", "message", "fresh_conversation", "back_to_ready"}, "description": "For recover_work_order: how to recover the blocked work order. Otherwise empty."},
+			"how":                  map[string]any{"type": "string", "enum": []string{"", "recheck", "continue", "message", "fresh_conversation", "back_to_ready", "public", "private", "company", "off", "list", "hide"}, "description": "For recover_work_order: how to recover the blocked work order. For set_apps_page: public, private, company, or off. For list_on_apps_page: list or hide. Otherwise empty."},
 			"guidance":             map[string]any{"type": "string", "description": "For continue_work_order: what to tell the work order's agents; empty retries as is. For answer_helper: your answer to the helper's question."},
 			"priority":             map[string]any{"type": "integer", "description": "For add_vision_item: the priority level, 0 for P0 through 9 for P9; any level the vision has or a new one. For start_autopilot: the priority to finish. Otherwise 0."},
 			"after":                map[string]any{"type": "string", "description": "For create_work_order and start_work_order: the work order ID, or the exact title of another of your actions, that this one must wait for because it needs that one's code or result, or both rewrite the same thing wholesale; it starts once that one merges. Touching the same files is no reason. Otherwise empty."},

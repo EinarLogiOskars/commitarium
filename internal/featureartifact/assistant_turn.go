@@ -79,6 +79,15 @@ const (
 	// the user's app runs the deploy once they approve it, so it is always a
 	// card, never autopilot's.
 	AssistantDeployApp AssistantActionType = "deploy_app"
+	// AssistantSetAppsPage turns the server's apps page on with who may open
+	// it (How: public, private or company) or off (How: off), as the user
+	// asked (APPS_PAGE_PLAN.md, A4). The user's app makes the change once they
+	// approve it, so it is always a card. A password is never chosen here:
+	// private keeps the page's password, or sends the user to Settings.
+	AssistantSetAppsPage AssistantActionType = "set_apps_page"
+	// AssistantListOnAppsPage lists this app on the apps page (How: list) or
+	// hides it there (How: hide). Always a card.
+	AssistantListOnAppsPage AssistantActionType = "list_on_apps_page"
 	// AssistantWriteVision has Commitarium write the project's vision on the
 	// assistant's agent from Description: what the project is for, in the
 	// user's words (ADR-020), where the assistant builds everything.
@@ -442,6 +451,16 @@ func (action AssistantAction) validate() error {
 			return fmt.Errorf("how must be recheck, continue, message, fresh_conversation, or back_to_ready")
 		}
 	case AssistantDeployApp:
+	case AssistantSetAppsPage:
+		switch action.How {
+		case "public", "private", "company", "off":
+		default:
+			return fmt.Errorf("how must be public, private, company, or off")
+		}
+	case AssistantListOnAppsPage:
+		if action.How != "list" && action.How != "hide" {
+			return fmt.Errorf("how must be list or hide")
+		}
 	case AssistantSetUpPreview:
 		if len(action.Guidance) > MaxGoalBytes {
 			return fmt.Errorf("the preview's guidance is too long")
