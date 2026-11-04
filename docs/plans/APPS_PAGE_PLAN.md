@@ -110,8 +110,8 @@ of the Commitarium app, for the people who use the apps.
   when the page is on.
 - The first time an app gets an address on a server without an apps page,
   a card offers to turn it on with that app's access: **Turn on** or
-  **Not now**, asked once. Once homelab mode exists, the first deploy asks
-  "Who reaches your apps" before this.
+  **Not now**, asked once. Where the server is (homelab or domain) is asked
+  in Settings → Server instead, the first time it opens.
 
 ## A4: Mayka
 
