@@ -14,6 +14,10 @@ import {
   places as readPlaces,
   publishing as readPublishing,
   setDomain,
+  revealAppsPagePassword,
+  setAppsPage,
+  setListed,
+  type Access,
   type PublishingOverview,
   type ConnectSignIn,
   forgetServer,
@@ -344,6 +348,186 @@ function SignInSection({ onLeave }: { onLeave?: () => void }) {
   );
 }
 
+const ACCESS_CHOICES: { value: Access; label: string }[] = [
+  { value: "public", label: "Anyone, no password" },
+  { value: "private", label: "Only with a password" },
+  { value: "company", label: "Company sign-in" },
+];
+
+// The apps page (APPS_PAGE_PLAN.md): apps.<domain> lists this server's apps
+// and opens them, for the people who use them. Off until turned on.
+function AppsPageSection() {
+  const [overview, setOverview] = useState<PublishingOverview | null>(null);
+  const [access, setAccess] = useState<Access>("private");
+  const [password, setPassword] = useState("");
+  const [askPassword, setAskPassword] = useState(false);
+  const [shownPassword, setShownPassword] = useState<string | null | undefined>(undefined);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const refresh = useCallback(() => {
+    void readPublishing()
+      .then((found) => {
+        setOverview(found);
+        setAccess(found.apps_page?.access ?? (found.sign_in ? "company" : "private"));
+      })
+      .catch((e) => setError(String(e)));
+  }, []);
+  useEffect(refresh, [refresh]);
+
+  const run = async (work: () => Promise<unknown>) => {
+    setBusy(true);
+    setError(null);
+    try {
+      await work();
+      setPassword("");
+      setAskPassword(false);
+      refresh();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!overview?.domain) return null;
+  const page = overview.apps_page;
+  const choices = ACCESS_CHOICES.filter(
+    (choice) => choice.value !== "company" || overview.sign_in || page?.access === "company",
+  );
+  // A password page needs one the first time; after that it keeps its own.
+  const choose = (next: Access) => {
+    setAccess(next);
+    if (!page) return;
+    if (next === "private") {
+      // It keeps the password it had; without one, ask for it.
+      void setAppsPage("private")
+        .then(refresh)
+        .catch(() => setAskPassword(true));
+      return;
+    }
+    void run(() => setAppsPage(next));
+  };
+  const passwordField = (
+    <div className="set__row">
+      <input
+        aria-label="Apps page password"
+        placeholder="A password to share"
+        autoCapitalize="off"
+        autoCorrect="off"
+        spellCheck={false}
+        value={password}
+        onChange={(e) => setPassword(e.target.value)}
+      />
+      {page && (
+        <button
+          disabled={busy || !password}
+          onClick={() => void run(() => setAppsPage("private", password))}
+        >
+          Save
+        </button>
+      )}
+    </div>
+  );
+
+  return (
+    <section className="set__section">
+      <h3 className="set__heading">Apps page</h3>
+      <p className="muted set__note">
+        One address that lists this server&apos;s apps and opens them, in any browser and on a
+        phone: apps.{overview.domain}. People use the apps there; nothing of Commitarium is shown.
+      </p>
+      {page && (
+        <p className="set__note">
+          On at{" "}
+          <button className="shell-card__link" onClick={() => void openExternal(page.url)}>
+            {page.url.replace("https://", "")} ↗
+          </button>
+        </p>
+      )}
+      <label className="muted deploy-access">
+        Who can open it
+        <select value={access} disabled={busy} onChange={(e) => choose(e.target.value as Access)}>
+          {choices.map((choice) => (
+            <option key={choice.value} value={choice.value}>
+              {choice.label}
+            </option>
+          ))}
+        </select>
+      </label>
+      {access === "company" && (
+        <p className="muted set__note">
+          Anyone at the company can open it, and each person sees only the apps they can open. Apps
+          behind a password are not listed there.
+        </p>
+      )}
+      {access === "private" && (
+        <p className="muted set__note">
+          People sign in with the username <strong>apps</strong> and the password you choose.
+        </p>
+      )}
+      {access === "private" && (!page || askPassword) && passwordField}
+      {page?.access === "private" && !askPassword && (
+        <div className="set__row">
+          <button
+            className="ghost"
+            disabled={busy}
+            onClick={() =>
+              shownPassword === undefined
+                ? void revealAppsPagePassword().then(setShownPassword)
+                : setShownPassword(undefined)
+            }
+          >
+            {shownPassword === undefined ? "Show password" : "Hide password"}
+          </button>
+          <button className="ghost" disabled={busy} onClick={() => setAskPassword(true)}>
+            Change password
+          </button>
+          {shownPassword !== undefined && <code>{shownPassword ?? "not kept"}</code>}
+        </div>
+      )}
+      {page && overview.apps.length > 0 && (
+        <>
+          <h4 className="set__heading">Listed there</h4>
+          {overview.apps.map((app) => (
+            <label key={app.project_id} className="set__row">
+              <input
+                type="checkbox"
+                checked={app.listed}
+                disabled={busy}
+                onChange={(e) => void run(() => setListed(app.project_id, e.target.checked))}
+              />
+              <span>
+                {app.name}
+                {!app.live && <span className="muted"> · not running</span>}
+              </span>
+            </label>
+          ))}
+        </>
+      )}
+      <div className="set__row">
+        {page ? (
+          <button
+            className="ghost"
+            disabled={busy}
+            onClick={() => void run(() => setAppsPage(null))}
+          >
+            Turn off
+          </button>
+        ) : (
+          <button
+            disabled={busy || (access === "private" && !password)}
+            onClick={() => void run(() => setAppsPage(access, password))}
+          >
+            Turn on
+          </button>
+        )}
+      </div>
+      {error && <p className="set__note">{error}</p>}
+    </section>
+  );
+}
+
 // Every paired server: show it, name it, or forget it on this device.
 function Servers() {
   const [known, setKnown] = useState<Places | null>(null);
@@ -499,6 +683,7 @@ function ConnectedServer({
 
       <DomainSection />
       <SignInSection onLeave={onLeave} />
+      <AppsPageSection />
 
       <section className="set__section">
         <h3 className="set__heading">Devices</h3>

@@ -112,6 +112,14 @@ export interface PublishedApp {
   live: boolean;
   /** For company sign-in: the groups that may open it; none means anyone at the company. */
   groups: string[];
+  /** Whether the apps page lists it. */
+  listed: boolean;
+}
+
+/** The apps page at apps.<domain> (APPS_PAGE_PLAN.md), when it is on. */
+export interface AppsPage {
+  access: Access;
+  url: string;
 }
 
 /** The company's sign-in provider, as a server shows it: never its secret. */
@@ -138,6 +146,7 @@ export interface PublishingOverview {
   apps: PublishedApp[];
   sign_in: SignInProvider | null;
   authentik: AuthentikStatus;
+  apps_page: AppsPage | null;
 }
 
 /** authentik on the server, for a company without a sign-in provider. */
@@ -196,6 +205,14 @@ export const authentikPassword = (): Promise<string> =>
 export const disconnectSignIn = (): Promise<void> => hostPost("/v1/publishing/sign-in/disconnect");
 export const setAppGroups = (projectId: string, groups: string[]): Promise<void> =>
   hostPost("/v1/publishing/groups", { project_id: projectId, groups });
+/** Turns the apps page on with who may open it, or off with null. A password
+ * page needs a password the first time. */
+export const setAppsPage = (access: Access | null, password?: string): Promise<void> =>
+  hostPost("/v1/publishing/apps-page", { access, password: password || null });
+export const revealAppsPagePassword = (): Promise<string | null> =>
+  hostPost("/v1/publishing/apps-page/reveal");
+export const setListed = (projectId: string, listed: boolean): Promise<void> =>
+  hostPost("/v1/publishing/listed", { project_id: projectId, listed });
 
 // --- Remote mode (ADR-040) ---
 
