@@ -5,8 +5,8 @@ import { useEffect, useRef } from "react";
 // out a wave as water does: it bursts out fast and slows as it spreads, and it
 // is a short train, not one ring: a crest, a dip, a smaller crest, so it
 // bounces as it goes, and it widens and weakens with distance. The spheres
-// stay where they are: one swells and brightens on a crest, and shrinks and
-// dims a little in a dip. A drop lands at a steady beat.
+// stay where they are, unseen at rest: one fades in on a crest, swelling a
+// little at its peak, and out again in the dip. A drop lands at a steady beat.
 // Behind the words beside it (its siblings) the field stays quiet, so the
 // text reads; the waves show again just outside them.
 // The colour comes from CSS (color on .ripple-field), so it follows the theme.
@@ -82,7 +82,7 @@ export function RippleField() {
       context.setTransform(scale, 0, 0, scale, 0, 0);
       context.clearRect(0, 0, width, height);
       const color = getComputedStyle(el).color;
-      const tint = (alpha: number) =>
+      const tintOf = (alpha: number) =>
         color.replace(/^rgb\((.+)\)$/, `rgba($1, ${Math.max(0, Math.min(1, alpha))})`);
       const cx = width / 2;
       const cy = height / 2;
@@ -115,36 +115,31 @@ export function RippleField() {
             open = s * s * (3 - 2 * s);
           }
           rise = Math.max(-1, Math.min(1.3, rise)) * open;
-          const up = Math.max(0, rise);
-          const down = Math.max(0, -rise);
-          const r = Math.max(0.6, 1.5 + 7.5 * up - 0.8 * down);
-          const rest = 0.05 + 0.08 * open;
+          // The grid is there all along, unseen: a sphere fades in on a
+          // crest and out again, swelling a little at its peak.
+          const up = Math.min(1, Math.max(0, rise));
+          if (up < 0.03) continue;
+          const r = 4 + 1.5 * up;
+          const tint = (alpha: number) => tintOf(alpha * up);
 
-          if (r < 2.6) {
-            context.fillStyle = tint(rest * (1 - 0.7 * down) + 0.7 * up);
-            context.beginPath();
-            context.arc(x, y, r, 0, Math.PI * 2);
-            context.fill();
-            continue;
-          }
           // A holographic sphere: a glassy body, a clear outline, a meridian
           // and an equator so it reads as a globe, and a highlight.
-          context.fillStyle = tint(0.04 + 0.1 * up);
+          context.fillStyle = tint(0.14);
           context.beginPath();
           context.arc(x, y, r, 0, Math.PI * 2);
           context.fill();
           context.lineWidth = 0.9;
-          context.strokeStyle = tint(0.3 + 0.65 * up);
+          context.strokeStyle = tint(0.95);
           context.stroke();
           context.lineWidth = 0.6;
-          context.strokeStyle = tint(0.18 + 0.45 * up);
+          context.strokeStyle = tint(0.6);
           context.beginPath();
           context.ellipse(x, y, r * 0.42, r, 0, 0, Math.PI * 2);
           context.stroke();
           context.beginPath();
           context.ellipse(x, y, r, r * 0.32, 0, 0, Math.PI * 2);
           context.stroke();
-          context.fillStyle = tint(0.35 + 0.5 * up);
+          context.fillStyle = tint(0.85);
           context.beginPath();
           context.arc(x - r * 0.38, y - r * 0.42, r * 0.17, 0, Math.PI * 2);
           context.fill();
