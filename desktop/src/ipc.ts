@@ -142,6 +142,24 @@ export interface ConnectSignIn {
   groups_claim?: string;
 }
 
+/** Who reaches the apps (HOMELAB_PLAN.md): anyone on the internet at the
+ * server's domain, or only the owner's devices, on their Tailscale network. */
+export type Reach = "internet" | "private";
+
+/** Tailscale on the server, in the steps the owner goes through. */
+export interface TailscaleStatus {
+  state: "starting" | "needs_login" | "needs_https" | "ready" | "system_signed_out";
+  login_url: string | null;
+  /** Its name on the tailnet, such as homelab.tail1234.ts.net. */
+  name: string | null;
+  /** Its Tailscale address, such as 100.101.102.103. */
+  address: string | null;
+  /** Whether Commitarium runs it, or the server does. */
+  own: boolean;
+  /** Where the owner turns on HTTPS certificates. */
+  https_settings: string;
+}
+
 export interface PublishingOverview {
   domain: string | null;
   server_address: string | null;
@@ -149,6 +167,8 @@ export interface PublishingOverview {
   sign_in: SignInProvider | null;
   authentik: AuthentikStatus;
   apps_page: AppsPage | null;
+  reach: Reach;
+  tailscale: TailscaleStatus | null;
 }
 
 /** authentik on the server, for a company without a sign-in provider. */
@@ -215,6 +235,9 @@ export const setAppsPage = (
   name?: string,
 ): Promise<void> =>
   hostPost("/v1/publishing/apps-page", { access, password: password || null, name: name || null });
+/** Every app's address changes: the app asks first. */
+export const setReach = (reach: Reach): Promise<void> =>
+  hostPost("/v1/publishing/reach", { reach });
 /** Rejects with why the apps page could not live at this name. */
 export const checkAppsPageName = (name: string): Promise<void> =>
   hostPost("/v1/publishing/apps-page/check", { name });
@@ -259,6 +282,10 @@ export const renameServer = (fingerprint: string, name: string): Promise<void> =
   invoke("rename_server", { fingerprint, name });
 export const forgetServer = (fingerprint: string): Promise<void> =>
   invoke("forget_server", { fingerprint });
+/** Reaches a paired server at another address from now on, once it answers
+ * there, such as its Tailscale address. */
+export const moveServer = (fingerprint: string, address: string): Promise<void> =>
+  invoke("move_server", { fingerprint, address });
 
 export const bridgeConnection = (): Promise<{ coordinator_url: string | null; token: string }> =>
   invoke("host_connection");

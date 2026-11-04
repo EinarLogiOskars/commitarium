@@ -139,6 +139,7 @@ pub fn run() {
             remote::places,
             remote::rename_server,
             remote::forget_server,
+            remote::move_server,
             preview::start_preview,
             preview::stop_preview,
             preview::reset_preview_data,

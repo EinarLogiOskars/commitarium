@@ -14,10 +14,13 @@ import {
   places as readPlaces,
   publishing as readPublishing,
   setDomain,
+  setReach,
+  moveServer,
   revealAppsPagePassword,
   setAppsPage,
   setListed,
   type Access,
+  type Reach,
   type PublishingOverview,
   type ConnectSignIn,
   forgetServer,
@@ -92,6 +95,8 @@ function DomainSection() {
   };
 
   const shown = domain.trim().replace(/^\*\./, "") || "example.com";
+  // On a private network there is no domain: the Tailscale name stands in.
+  if (overview?.reach === "private") return null;
   return (
     <section className="set__section">
       <h3 className="set__heading">Domain</h3>
@@ -152,7 +157,7 @@ function SignInSection({ onLeave }: { onLeave?: () => void }) {
     }
   };
 
-  if (!overview?.domain) return null;
+  if (!overview?.domain || overview.reach === "private") return null;
   const provider = overview.sign_in;
   const authentik = overview.authentik;
   const memory = authentik.memory_total_bytes;
@@ -348,6 +353,194 @@ function SignInSection({ onLeave }: { onLeave?: () => void }) {
   );
 }
 
+// Who reaches the apps (HOMELAB_PLAN.md): anyone on the internet at the
+// server's domain, or only the owner's devices, on their Tailscale network,
+// with the steps Tailscale takes.
+function ReachSection() {
+  const [overview, setOverview] = useState<PublishingOverview | null>(null);
+  const [asked, setAsked] = useState<Reach | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [moved, setMoved] = useState(false);
+
+  const refresh = useCallback(() => {
+    void readPublishing()
+      .then(setOverview)
+      .catch((e) => setError(String(e)));
+  }, []);
+  useEffect(refresh, [refresh]);
+  const waiting = overview?.reach === "private" && overview.tailscale?.state !== "ready";
+  // Signing in and turning on HTTPS happen elsewhere: look again while waiting.
+  useEffect(() => {
+    if (!waiting) return;
+    const timer = setInterval(refresh, 4000);
+    return () => clearInterval(timer);
+  }, [waiting, refresh]);
+
+  if (!overview) return null;
+  const reach = overview.reach;
+  const tailscale = overview.tailscale;
+  const switching = asked !== null && asked !== reach;
+  const change = async () => {
+    if (!asked) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await setReach(asked);
+      setAsked(null);
+      refresh();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const server = connectedServer();
+  const onTailscale = tailscale?.address && server?.startsWith(tailscale.address + ":");
+  const moveHere = async () => {
+    if (!tailscale?.address) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const found = await readPlaces();
+      if (!found.active) throw new Error("This computer is not showing a server.");
+      await moveServer(found.active, `${tailscale.address}:7443`);
+      setMoved(true);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className="set__section">
+      <h3 className="set__heading">Who reaches your apps</h3>
+      <label className="muted deploy-access">
+        <select
+          value={asked ?? reach}
+          disabled={busy}
+          onChange={(e) => setAsked(e.target.value as Reach)}
+        >
+          <option value="internet">Anyone on the internet, at your own domain</option>
+          <option value="private">Only my devices, on a private network</option>
+        </select>
+      </label>
+      {switching && (
+        <>
+          <p className="set__note">
+            {asked === "private"
+              ? "Your apps move to a private network that only your devices reach, through Tailscale: no domain, nothing open on your router. Every app gets a new address, and company sign-in is not offered there."
+              : "Your apps move to addresses under your own domain, for anyone on the internet. Every app gets a new address."}
+            {overview.apps.length > 0 && " Anyone with an old link needs the new one."}
+          </p>
+          <div className="set__row">
+            <button disabled={busy} onClick={() => void change()}>
+              {busy ? "Switching…" : "Switch"}
+            </button>
+            <button className="ghost" disabled={busy} onClick={() => setAsked(null)}>
+              Cancel
+            </button>
+          </div>
+        </>
+      )}
+      {!switching && reach === "private" && (
+        <TailscaleSteps
+          tailscale={tailscale}
+          busy={busy}
+          onTailscale={Boolean(onTailscale) || moved}
+          onMove={() => void moveHere()}
+        />
+      )}
+      {error && <p className="set__note">{error}</p>}
+    </section>
+  );
+}
+
+function TailscaleSteps({
+  tailscale,
+  busy,
+  onTailscale,
+  onMove,
+}: {
+  tailscale: PublishingOverview["tailscale"];
+  busy: boolean;
+  onTailscale: boolean;
+  onMove: () => void;
+}) {
+  switch (tailscale?.state) {
+    case "needs_login":
+      return (
+        <>
+          <p className="set__note">
+            Sign in to Tailscale to put this server on your private network. A free personal account
+            is enough; use the same account on your phone and computers.
+          </p>
+          {tailscale.login_url ? (
+            <button onClick={() => void openExternal(tailscale.login_url!)}>
+              Sign in to Tailscale ↗
+            </button>
+          ) : (
+            <p className="muted set__note">Getting the sign-in link…</p>
+          )}
+        </>
+      );
+    case "needs_https":
+      return (
+        <>
+          <p className="set__note">
+            Signed in{tailscale.name ? ` as ${tailscale.name}` : ""}. One more step, once: in
+            Tailscale&apos;s DNS settings, turn on <strong>MagicDNS</strong> and{" "}
+            <strong>HTTPS Certificates</strong>, so your browsers trust your apps&apos; addresses.
+          </p>
+          <button onClick={() => void openExternal(tailscale.https_settings)}>
+            Open Tailscale&apos;s DNS settings ↗
+          </button>
+        </>
+      );
+    case "system_signed_out":
+      return (
+        <p className="set__note">
+          This server runs Tailscale itself, and it is signed out. On the server, run{" "}
+          <code>sudo tailscale up</code> and sign in.
+        </p>
+      );
+    case "ready":
+      return (
+        <>
+          <p className="set__note">
+            Your apps are on your private network at{" "}
+            <button
+              className="shell-card__link"
+              onClick={() => void openExternal(`https://${tailscale.name}`)}
+            >
+              {tailscale.name} ↗
+            </button>
+            . To open them, install Tailscale on your phone and computers and sign in with the same
+            account.
+          </p>
+          {onTailscale ? (
+            <p className="muted set__note">
+              This computer reaches the server through Tailscale, so it works away from home too.
+            </p>
+          ) : (
+            <>
+              <p className="muted set__note">
+                This computer reaches the server at its home network address, which works only at
+                home. With Tailscale on this computer, it can reach it anywhere.
+              </p>
+              <button disabled={busy} onClick={onMove}>
+                Connect through Tailscale
+              </button>
+            </>
+          )}
+        </>
+      );
+    default:
+      return <p className="muted set__note">Starting Tailscale on the server…</p>;
+  }
+}
+
 const ACCESS_CHOICES: { value: Access; label: string }[] = [
   { value: "public", label: "Anyone, no password" },
   { value: "private", label: "Only with a password" },
@@ -392,12 +585,17 @@ function AppsPageSection() {
     }
   };
 
-  if (!overview?.domain) return null;
+  const onTailnet = overview?.reach === "private";
+  if (!overview?.domain && !onTailnet) return null;
+  if (!overview) return null;
   const page = overview.apps_page;
   const shownName = name.trim().toLowerCase() || "apps";
-  const renamed = page !== null && shownName !== page.name;
+  // On the private network the page has the Tailscale name to itself.
+  const renamed = !onTailnet && page !== null && shownName !== page.name;
   const choices = ACCESS_CHOICES.filter(
-    (choice) => choice.value !== "company" || overview.sign_in || page?.access === "company",
+    (choice) =>
+      choice.value !== "company" ||
+      (!onTailnet && (overview.sign_in || page?.access === "company")),
   );
   // A password page needs one the first time; after that it keeps its own.
   const choose = (next: Access) => {
@@ -441,7 +639,7 @@ function AppsPageSection() {
         One address that lists this server&apos;s apps and opens them, in any browser and on a
         phone. People use the apps there; nothing of Commitarium is shown.
       </p>
-      <label className="muted">
+      <label className="muted" hidden={onTailnet}>
         Address
         <span className="deploy-address__name">
           <input
@@ -719,6 +917,7 @@ function ConnectedServer({
         <button onClick={() => void showPlace(null)}>Show this computer</button>
       </section>
 
+      <ReachSection />
       <DomainSection />
       <SignInSection onLeave={onLeave} />
       <AppsPageSection />

@@ -36,7 +36,10 @@ interface Version {
 function useDeployment(projectId: string) {
   const [deployment, setDeployment] = useState<Deployment | null>(null);
   const [published, setPublished] = useState<PublishedApp | null>(null);
+  // Where addresses go: the domain, or on the private network the
+  // Tailscale name once it is ready (HOMELAB_PLAN.md).
   const [domain, setDomain] = useState<string | null>(null);
+  const [privateNet, setPrivateNet] = useState(false);
   const [companySignIn, setCompanySignIn] = useState(false);
   const [appsPage, setAppsPageShown] = useState<AppsPage | null>(null);
   const [versions, setVersions] = useState<Version[]>([]);
@@ -52,7 +55,15 @@ function useDeployment(projectId: string) {
       const [all, overview] = await Promise.all([readDeployments(), readPublishing()]);
       setDeployment(all.find((d) => d.project_id === projectId) ?? null);
       setPublished(overview.apps.find((app) => app.project_id === projectId) ?? null);
-      setDomain(overview.domain);
+      const onTailnet = overview.reach === "private";
+      setPrivateNet(onTailnet);
+      setDomain(
+        onTailnet
+          ? overview.tailscale?.state === "ready"
+            ? overview.tailscale.name
+            : null
+          : overview.domain,
+      );
       setCompanySignIn(overview.sign_in !== null);
       setAppsPageShown(overview.apps_page);
       setReadError(null);
@@ -125,6 +136,7 @@ function useDeployment(projectId: string) {
     deployment,
     published,
     domain,
+    privateNet,
     companySignIn,
     appsPage,
     versions,
@@ -217,6 +229,7 @@ export function DeploymentPage({ projectId, name }: { projectId: string; name: s
     deployment,
     published,
     domain,
+    privateNet,
     companySignIn,
     appsPage,
     versions,
@@ -306,6 +319,7 @@ export function DeploymentPage({ projectId, name }: { projectId: string; name: s
           projectId={projectId}
           name={name}
           domain={domain}
+          privateNet={privateNet}
           companySignIn={companySignIn}
           appsPage={appsPage}
           published={published}
@@ -337,6 +351,7 @@ function Address({
   projectId,
   name,
   domain,
+  privateNet,
   companySignIn,
   appsPage,
   published,
@@ -347,6 +362,9 @@ function Address({
   projectId: string;
   name: string;
   domain: string | null;
+  /** Only the owner's devices reach the apps, on their Tailscale network:
+   * apps get ports of the Tailscale name, not names under a domain. */
+  privateNet: boolean;
   /** Whether the server has a company sign-in provider connected. */
   companySignIn: boolean;
   appsPage: AppsPage | null;
@@ -368,7 +386,8 @@ function Address({
   const empty = password === "";
   // Company sign-in chosen before a provider is connected: say where to.
   const [needsSignIn, setNeedsSignIn] = useState(false);
-  const companyOption = (
+  // Company sign-in needs a domain on the internet: not on a private network.
+  const companyOption = privateNet ? null : (
     <option value="company">
       {companySignIn ? "Company sign-in" : "Company sign-in (set up first)"}
     </option>
@@ -400,11 +419,16 @@ function Address({
       Stop deployment
     </button>
   );
+  // On the private network an app's address is a port of the server's
+  // Tailscale name; its name is only how it is called and signed in to.
+  const suffix = privateNet ? null : <span className="muted">.{domain}</span>;
   if (!domain) {
     return (
       <>
         <p className="muted shell-card__text">
-          It has no address yet: set this server&apos;s domain in Settings → Server.
+          {privateNet
+            ? "It gets an address once Tailscale is set up, in Settings → Server."
+            : "It has no address yet. In Settings → Server, choose who reaches your apps: anyone on the internet, at your own domain, or only your devices, through Tailscale."}
         </p>
         <div className="row deploy-links">{stop}</div>
       </>
@@ -499,7 +523,13 @@ function Address({
             </span>
           </label>
         ) : (
-          <AppsPageOffer domain={domain} access={published.access} busy={busy} act={act} />
+          <AppsPageOffer
+            domain={domain}
+            privateNet={privateNet}
+            access={published.access}
+            busy={busy}
+            act={act}
+          />
         )}
         {published.access === "private" && (
           <p className="muted shell-card__text">
@@ -533,7 +563,7 @@ function Address({
                   spellCheck={false}
                   onChange={(e) => setNewName(e.target.value)}
                 />
-                <span className="muted">.{domain}</span>
+                {suffix}
               </span>
             </label>
             {newName.trim() && newName.trim().toLowerCase() !== published.name && (
@@ -649,9 +679,13 @@ function Address({
   }
   return (
     <div className="deploy-address">
-      <p className="muted shell-card__text">Give it an address so people can open it:</p>
+      <p className="muted shell-card__text">
+        {privateNet
+          ? "Put it online on your private network: it gets its own address there, for your devices with Tailscale."
+          : "Give it an address so people can open it:"}
+      </p>
       <label className="muted">
-        Address
+        {privateNet ? "Name" : "Address"}
         <span className="deploy-address__name">
           <input
             value={address}
@@ -660,7 +694,7 @@ function Address({
             spellCheck={false}
             onChange={(e) => setAddress(e.target.value)}
           />
-          <span className="muted">.{domain}</span>
+          {suffix}
         </span>
       </label>
       <label className="muted deploy-access">
@@ -728,11 +762,13 @@ function asked(domain: string): boolean {
 // with this app's access; asked once (APPS_PAGE_PLAN.md, A3).
 function AppsPageOffer({
   domain,
+  privateNet,
   access,
   busy,
   act,
 }: {
   domain: string;
+  privateNet: boolean;
   access: Access;
   busy: boolean;
   act: (work: () => Promise<unknown>) => Promise<void>;
@@ -774,7 +810,7 @@ function AppsPageOffer({
         change it or turn it off any time in Settings → Server → Apps page.
       </p>
       {taken && <p className="muted shell-card__text">{taken}</p>}
-      <label className="muted">
+      <label className="muted" hidden={privateNet}>
         Address
         <span className="deploy-address__name">
           <input

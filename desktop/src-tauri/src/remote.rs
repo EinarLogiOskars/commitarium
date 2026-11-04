@@ -270,6 +270,52 @@ pub fn rename_server(app: AppHandle, fingerprint: String, name: String) -> Resul
     save(&app, &saved)
 }
 
+/// Reaches a paired server at another address from now on, such as its
+/// Tailscale address in homelab mode (HOMELAB_PLAN.md, H4). It is checked
+/// first: the same server answers there, known by its certificate, so
+/// nothing is paired again. A shown server is shown from there at once.
+#[tauri::command]
+pub async fn move_server(
+    app: AppHandle,
+    fingerprint: String,
+    address: String,
+) -> Result<(), String> {
+    let mut saved = load(&app)?.unwrap_or_default();
+    saved
+        .host(&fingerprint)
+        .ok_or("this server is not paired")?;
+    let address = address.trim().to_string();
+    let client = host_client(&device_identity()?, &fingerprint)?;
+    let reached = client
+        .get(format!("https://{address}/v1/version"))
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await
+        .is_ok_and(|response| response.status().is_success());
+    if !reached {
+        return Err(format!(
+            "Commitarium could not reach your server at {address}. Make sure Tailscale is on \
+             and signed in on this computer, with the same account as the server, then try again."
+        ));
+    }
+    let moved = PairedHost {
+        address,
+        fingerprint: fingerprint.clone(),
+    };
+    let shown = saved.mode == Mode::Remote && saved.active.as_deref() == Some(fingerprint.as_str());
+    let mode = saved.mode;
+    let active = saved.active.clone();
+    saved.remember(moved.clone());
+    // Remembering makes it the shown server; moving one should not.
+    saved.mode = mode;
+    saved.active = active;
+    save(&app, &saved)?;
+    if shown {
+        crate::host::show_server(&app, &moved).await;
+    }
+    Ok(())
+}
+
 /// Forgets a server on this device. The server still lists this device until
 /// it is revoked there.
 #[tauri::command]
