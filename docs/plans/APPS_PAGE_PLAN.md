@@ -35,6 +35,12 @@ of the Commitarium app, for the people who use the apps.
 - **One sign-in for everything.** The sign-in cookie already covers
   `.<domain>`, so signing in on the apps page opens every company app in it
   without asking again.
+- **The home screen of a homelab too.** In [homelab mode](HOMELAB_PLAN.md)
+  the same page lives at the server's Tailscale name instead, open or behind
+  a password (no company sign-in there). Nothing in this plan assumes a
+  domain beyond the address it is served at.
+- **Built first.** The apps page comes before homelab mode, and works the
+  same on a VPS today.
 
 ## How it works
 
@@ -99,7 +105,8 @@ of the Commitarium app, for the people who use the apps.
   when the page is on.
 - The first time an app gets an address on a server without an apps page,
   a card offers to turn it on with that app's access: **Turn on** or
-  **Not now**, asked once.
+  **Not now**, asked once. Once homelab mode exists, the first deploy asks
+  "Who reaches your apps" before this.
 
 ## A4: Mayka
 
