@@ -514,12 +514,15 @@ function WhereSection({
   onLeave,
   modal,
   onClose,
+  onNotNow,
   onOpenSettings,
 }: {
   onLeave?: () => void;
   /** Shown as the modal on opening the server, rather than in Settings. */
   modal?: boolean;
   onClose?: () => void;
+  /** Puts the question off on this computer. */
+  onNotNow?: () => void;
   onOpenSettings?: () => void;
 }) {
   const [overview, setOverview] = useState<PublishingOverview | null>(null);
@@ -599,7 +602,7 @@ function WhereSection({
           </div>
           {modal && (
             <div className="set__actions">
-              <button className="ghost" onClick={onClose}>
+              <button className="ghost" onClick={onNotNow}>
                 Not now
               </button>
             </div>
@@ -687,7 +690,7 @@ function WhereSection({
   );
 }
 
-const WHERE_DISMISSED = "commitarium:where-dismissed:";
+const WHERE_DISMISSED = "commitarium:where-not-now:";
 
 /**
  * The first time a server opens on this computer: Mayka's AI account, if
@@ -709,11 +712,15 @@ export function ServerQuestion({ onOpenSettings }: { onOpenSettings: () => void 
   const [maykaDone, setMaykaDone] = useState(false);
   const [agentsOpen, setAgentsOpen] = useState(false);
   if (!server || closed || !known) return null;
-  const close = () => {
-    try {
-      localStorage.setItem(WHERE_DISMISSED + server, "1");
-    } catch {
-      // Without storage it may ask again next time: harmless.
+  // Only Not now puts it off on this computer; an answer is kept on the
+  // server, and asking Mayka carries on in her chat.
+  const close = (notNow: boolean) => {
+    if (notNow) {
+      try {
+        localStorage.setItem(WHERE_DISMISSED + server, "1");
+      } catch {
+        // Without storage it may ask again next time: harmless.
+      }
     }
     setClosed(true);
   };
@@ -752,7 +759,14 @@ export function ServerQuestion({ onOpenSettings }: { onOpenSettings: () => void 
       </div>
     );
   }
-  return <WhereSection modal onClose={close} onOpenSettings={onOpenSettings} />;
+  return (
+    <WhereSection
+      modal
+      onClose={() => close(false)}
+      onNotNow={() => close(true)}
+      onOpenSettings={onOpenSettings}
+    />
+  );
 }
 
 // Homelab mode (HOMELAB_PLAN.md): off, apps are served at the server's own
