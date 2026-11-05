@@ -4679,6 +4679,37 @@ button.danger:not(.ghost) {
   font-variant-numeric: tabular-nums;
   opacity: 0.7;
 }
+/* A live line: a soft highlight sweeps through the text at a slight angle. */
+.assistant__activity .live-text {
+  background: linear-gradient(
+    100deg,
+    var(--muted) 0%,
+    var(--muted) 40%,
+    var(--text) 50%,
+    var(--muted) 60%,
+    var(--muted) 100%
+  );
+  background-size: 250% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: live-text 2.4s linear infinite;
+}
+@keyframes live-text {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: 0 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .assistant__activity .live-text {
+    animation: none;
+    color: var(--muted);
+    background: none;
+  }
+}
 .assistant__step {
   font-size: var(--text-sm);
   margin: 0 0 6px;

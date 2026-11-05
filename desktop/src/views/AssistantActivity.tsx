@@ -38,7 +38,7 @@ export function AssistantActivityLine({
   const step = stepLabel(activity, developer);
   return (
     <div className="assistant__activity" aria-live="polite">
-      <p className="muted status-line">
+      <p className="muted status-line live-text">
         Mayka is thinking…
         {elapsed && <span className="assistant__elapsed"> {elapsed}</span>}
       </p>
@@ -82,6 +82,34 @@ export function TurnFailureControls({
         </button>
       )}
       {open && developer && detail && <pre className="assistant__failure-detail">{detail}</pre>}
+    </div>
+  );
+}
+
+/** What goes on in the chat's project while Mayka is not answering: the new
+ * app's launch, its work orders running, or autopilot between them. Empty
+ * when nothing does. Running titles are the work orders under way. */
+export function liveLabel(conversation: Conversation, runningTitles: string[]): string {
+  const stage = conversation.launch?.stage;
+  if (stage === "vision") return "Writing the app's vision…";
+  if (stage === "setup") return "Setting the app up…";
+  const goal = conversation.goal?.status === "active" ? conversation.goal : null;
+  const progress = goal
+    ? ` · autopilot ${goal.items.filter((item) => item.done).length} of ${goal.items.length} done`
+    : "";
+  if (runningTitles.length === 1) return `Waiting on “${runningTitles[0]}”${progress}`;
+  if (runningTitles.length > 1)
+    return `Waiting on work orders · ${runningTitles.length} active${progress}`;
+  if (goal) return `Autopilot is picking the next work order${progress}`;
+  return "";
+}
+
+// The chat's live line while Mayka is not answering, in the same look as
+// her thinking line.
+export function ChatLiveLine({ text }: { text: string }) {
+  return (
+    <div className="assistant__activity" aria-live="polite">
+      <p className="muted status-line live-text">{text}</p>
     </div>
   );
 }

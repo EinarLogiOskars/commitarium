@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { elapsedLabel, stepLabel } from "./AssistantActivity";
+import type { Conversation } from "../api/assistant";
+import { elapsedLabel, liveLabel, stepLabel } from "./AssistantActivity";
 
 describe("the assistant's activity line", () => {
   const reading = { label: "Reading a file", detail: "Looking at src/server/auth.ts" };
@@ -25,5 +26,33 @@ describe("the assistant's activity line", () => {
     expect(elapsedLabel("2026-10-28T12:00:00Z", now)).toBe("3:05");
     expect(elapsedLabel(undefined, now)).toBe("");
     expect(elapsedLabel("2026-10-28T12:04:00Z", now)).toBe("0 s");
+  });
+});
+
+describe("the chat's live line", () => {
+  const chat = (fields: Partial<Conversation>) => fields as Conversation;
+  const goal = {
+    title: "Notes",
+    level: 1,
+    status: "active" as const,
+    started_at: "",
+    items: [
+      { id: "1", label: "", title: "a", done: true },
+      { id: "2", label: "", title: "b", done: false },
+    ],
+  };
+
+  it("says what the launch, the work orders or autopilot are doing", () => {
+    expect(liveLabel(chat({ launch: { stage: "vision", started_at: "" } }), [])).toBe(
+      "Writing the app's vision…",
+    );
+    expect(liveLabel(chat({}), ["Editor"])).toBe("Waiting on “Editor”");
+    expect(liveLabel(chat({ goal }), ["Editor", "Search", "Tags"])).toBe(
+      "Waiting on work orders · 3 active · autopilot 1 of 2 done",
+    );
+    expect(liveLabel(chat({ goal }), [])).toBe(
+      "Autopilot is picking the next work order · autopilot 1 of 2 done",
+    );
+    expect(liveLabel(chat({}), [])).toBe("");
   });
 });

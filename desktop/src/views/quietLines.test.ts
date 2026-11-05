@@ -200,20 +200,6 @@ describe("folding", () => {
     expect(run.lines.map((line) => line.node)).toEqual(["a", "b", "c", "started"]);
   });
 
-  it("keeps the chat's newest line in view under the run before it", () => {
-    const segments = foldQuiet([
-      block("Mayka"),
-      quiet(accepted("A"), "a"),
-      quiet(started, "started"),
-      quiet(eventLine("Building the app: writing its vision first."), "now"),
-    ]);
-    expect(
-      segments.map((segment) =>
-        segment.kind === "run" ? `run(${segment.lines.length})` : segment.node,
-      ),
-    ).toEqual(["Mayka", "run(2)", "now"]);
-  });
-
   it("leaves a run of one as its line", () => {
     const segments = foldQuiet([block("Mayka"), quiet(accepted("A"), "a"), block("You")]);
     expect(segments[1]).toMatchObject({ kind: "line", node: "a" });

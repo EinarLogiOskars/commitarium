@@ -358,8 +358,8 @@ export function runSummary(lines: QuietLine[]): string {
 }
 
 /** The chat's rows with each run of routine lines between two other rows
- * folded into one summary; a run of one stays a line, a line that stays in
- * view splits the run it is in, and the chat's newest line stays out. */
+ * folded into one summary; a run of one stays a line, and a line that stays
+ * in view splits the run it is in. */
 export function foldQuiet<T>(entries: QuietEntry<T>[]): QuietSegment<T>[] {
   const segments: QuietSegment<T>[] = [];
   let run: { line: QuietLine; node: T }[] = [];
@@ -388,18 +388,14 @@ export function foldQuiet<T>(entries: QuietEntry<T>[]): QuietSegment<T>[] {
       run.push({ line: entry.quiet, node: entry.node });
     }
   }
-  // The newest line, at the end of the chat, is what is going on now: it
-  // stays in view under the folded run before it.
-  const latest = run.length > 1 ? run.pop() : undefined;
   flush();
-  if (latest) segments.push({ kind: "line", ...latest });
   return segments;
 }
 
 /** The glyph a line leads with. */
 export const QUIET_GLYPH: Record<QuietTone, string> = {
   done: "✓",
-  info: "•",
+  info: "–",
   busy: "•",
   needs: "!",
   failed: "✕",
