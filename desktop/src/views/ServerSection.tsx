@@ -206,8 +206,18 @@ function DomainSection({ onLeave }: { onLeave?: () => void }) {
     <section className="set__section">
       <h3 className="set__heading">Domain</h3>
       <p className="muted set__note">
-        Deployed apps get an address under your domain, such as app.{shown}, and your DNS provider
-        points those addresses at this server. Choose how:
+        Apps you deploy get addresses under your domain, such as app.{shown}.
+      </p>
+      <div className="set__row">
+        <input
+          aria-label="Domain"
+          placeholder="example.com"
+          value={domain}
+          onChange={(e) => setDomainText(e.target.value)}
+        />
+      </div>
+      <p className="muted set__note">
+        At your DNS provider, point them at this server ({address}) with:
       </p>
       <label className="set__row">
         <input
@@ -216,15 +226,14 @@ function DomainSection({ onLeave }: { onLeave?: () => void }) {
           checked={records === "wildcard"}
           onChange={() => setRecords("wildcard")}
         />
-        <span>One record for every app (recommended)</span>
+        <span>
+          One wildcard record (recommended)
+          <br />
+          <span className="muted">
+            Add <code>*.{shown}</code> → <code>{address}</code> once and every app works.
+          </span>
+        </span>
       </label>
-      {records === "wildcard" && (
-        <p className="muted set__note">
-          Add an A record for <code>*.{shown}</code> with the value <code>{address}</code>, once.
-          Every app and the apps page then work without more DNS changes. Addresses that already
-          have their own records, such as www.{shown}, keep them.
-        </p>
-      )}
       <label className="set__row">
         <input
           type="radio"
@@ -232,24 +241,18 @@ function DomainSection({ onLeave }: { onLeave?: () => void }) {
           checked={records === "each_name"}
           onChange={() => setRecords("each_name")}
         />
-        <span>A record for each address</span>
+        <span>
+          A record per app
+          <br />
+          <span className="muted">
+            Add one, such as <code>app.{shown}</code> → <code>{address}</code>, for each app.
+            Commitarium tells you which when you deploy.
+          </span>
+        </span>
       </label>
-      {records === "each_name" && (
-        <p className="muted set__note">
-          For when you would rather not add a wildcard. Each address you use needs an A record with
-          the value <code>{address}</code>, such as <code>apps.{shown}</code>. Commitarium tells you
-          which record to add when you give an app its address.
-        </p>
-      )}
       <div className="set__row">
-        <input
-          aria-label="Domain"
-          placeholder="example.com"
-          value={domain}
-          onChange={(e) => setDomainText(e.target.value)}
-        />
         <button disabled={busy || !domain.trim() || !changed} onClick={() => void save()}>
-          {busy ? "Checking…" : overview?.domain ? "Change" : "Use this domain"}
+          {busy ? "Checking…" : overview?.domain ? "Save" : "Use this domain"}
         </button>
       </div>
       {error && <p className="set__note">{error}</p>}
@@ -260,7 +263,7 @@ function DomainSection({ onLeave }: { onLeave?: () => void }) {
           onLeave={onLeave}
           message={
             `Help me point ${domain.trim() ? `my domain ${shown}` : "my domain"} at this server ` +
-            `(${address}), with ${records === "wildcard" ? "one wildcard record" : "a record for each address"}.`
+            `(${address}), with ${records === "wildcard" ? "one wildcard record" : "a record per app"}.`
           }
         />{" "}
         to walk you through it.
