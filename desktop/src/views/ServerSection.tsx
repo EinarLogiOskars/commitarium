@@ -14,6 +14,7 @@ import {
   places as readPlaces,
   publishing as readPublishing,
   setDomain,
+  removeDomain,
   setPlacement,
   setReach,
   PUBLISHING_CHANGED,
@@ -166,107 +167,178 @@ export function ServerSection({ running, onLeave }: { running: boolean; onLeave?
 // (PUBLISHING_PLAN.md), and how its DNS points here: one wildcard record,
 // checked before the domain is kept, or a record for each address, each
 // checked as it is used.
+/** A ? that explains on hover, focus or click. */
+function Hint({ label, children }: { label: string; children: React.ReactNode }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <span className="hint" data-open={open || undefined}>
+      <button
+        type="button"
+        className="hint__mark"
+        aria-label={label}
+        aria-expanded={open}
+        onClick={() => setOpen(!open)}
+        onBlur={() => setOpen(false)}
+      >
+        ?
+      </button>
+      <span role="tooltip" className="hint__tip">
+        {children}
+      </span>
+    </span>
+  );
+}
+
+const RECORDS_LABEL: Record<Records, string> = {
+  wildcard: "Wildcard record",
+  each_name: "A record per app",
+};
+
+// The domains apps are served on. A server holds one for now; the list,
+// adding and removing are already shaped for several (MULTI_DOMAIN, 0.12.1).
 function DomainSection({ onLeave }: { onLeave?: () => void }) {
   const [overview, setOverview] = useState<PublishingOverview | null>(null);
-  const [domain, setDomainText] = useState("");
-  const [records, setRecords] = useState<Records>("wildcard");
+  // The domain being added or edited, if the form is open.
+  const [form, setForm] = useState<{ domain: string; records: Records; editing: boolean } | null>(
+    null,
+  );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(() => {
     void readPublishing()
-      .then((found) => {
-        setOverview(found);
-        setDomainText(found.domain ?? "");
-        setRecords(found.records);
-      })
+      .then(setOverview)
       .catch((e) => setError(String(e)));
   }, []);
   useFresh(refresh);
 
-  const save = async () => {
+  const run = async (work: () => Promise<unknown>) => {
     setBusy(true);
     setError(null);
     try {
-      await setDomain(domain, records);
+      await work();
       publishingChanged();
+      return true;
     } catch (e) {
       setError(String(e));
+      return false;
     } finally {
       setBusy(false);
     }
   };
 
-  const shown = domain.trim().replace(/^\*\./, "") || "example.com";
-  const address = overview?.server_address ?? "this server's address";
   // On a private network there is no domain: the Tailscale name stands in.
-  if (overview?.reach === "private") return null;
-  const changed = !overview?.domain || shown !== overview.domain || records !== overview.records;
+  if (!overview || overview.reach === "private") return null;
+  const domains = overview.domain ? [{ domain: overview.domain, records: overview.records }] : [];
+  const full = domains.length >= 1;
+  const address = overview.server_address ?? "this server's address";
+  const shown = form?.domain.trim().replace(/^\*\./, "") || "example.com";
+  const save = () =>
+    form && void run(() => setDomain(form.domain, form.records)).then((ok) => ok && setForm(null));
+
   return (
     <section className="set__section">
-      <h3 className="set__heading">Domain</h3>
-      <p className="set__note">Enter a domain you own to serve your apps on.</p>
-      <p className="muted set__note">
-        Each app you deploy gets its own address under it, such as app.{shown}. You need access to
-        the domain&apos;s DNS settings, at the company you bought it from or where you manage it.
-        No domain? Buy one from any registrar, or turn on Homelab above for a server at home.
-      </p>
-      <div className="set__row">
-        <input
-          aria-label="Your domain"
-          placeholder="example.com"
-          value={domain}
-          onChange={(e) => setDomainText(e.target.value)}
-        />
-      </div>
-      <p className="muted set__note">
-        Then, in those DNS settings, point it at this server ({address}) in one of two ways:
-      </p>
-      <label className="set__row">
-        <input
-          type="radio"
-          name="records"
-          checked={records === "wildcard"}
-          onChange={() => setRecords("wildcard")}
-        />
-        <span>
-          One wildcard record (recommended)
-          <br />
-          <span className="muted">
-            Add <code>*.{shown}</code> → <code>{address}</code> once and every app works.
-          </span>
-        </span>
-      </label>
-      <label className="set__row">
-        <input
-          type="radio"
-          name="records"
-          checked={records === "each_name"}
-          onChange={() => setRecords("each_name")}
-        />
-        <span>
-          A record per app
-          <br />
-          <span className="muted">
-            Add one, such as <code>app.{shown}</code> → <code>{address}</code>, for each app.
-            Commitarium tells you which when you deploy.
-          </span>
-        </span>
-      </label>
-      <div className="set__row">
-        <button disabled={busy || !domain.trim() || !changed} onClick={() => void save()}>
-          {busy ? "Checking…" : overview?.domain ? "Save" : "Use this domain"}
-        </button>
-      </div>
+      <h3 className="set__heading set__heading--hint">
+        Domains
+        <Hint label="About domains">
+          A domain you own, such as example.com. Each app you deploy gets an address under it, like
+          app.example.com. You need access to its DNS settings. No domain? Buy one from any
+          registrar, or use Homelab for a server at home.
+        </Hint>
+      </h3>
+      {domains.length === 0 && !form && <p className="muted set__note">No domain yet.</p>}
+      {domains.map((item) => (
+        <div className="set__row domain-row" key={item.domain}>
+          <span className="domain-row__name">{item.domain}</span>
+          <span className="muted domain-row__records">{RECORDS_LABEL[item.records]}</span>
+          <button
+            className="ghost"
+            disabled={busy || form !== null}
+            onClick={() => setForm({ ...item, editing: true })}
+          >
+            Edit
+          </button>
+          <button
+            className="ghost"
+            disabled={busy || form !== null}
+            onClick={() => void run(removeDomain)}
+          >
+            Remove
+          </button>
+        </div>
+      ))}
+      {form ? (
+        <div className="domain-form">
+          <input
+            aria-label="Domain"
+            placeholder="example.com"
+            value={form.domain}
+            disabled={form.editing}
+            onChange={(e) => setForm({ ...form, domain: e.target.value })}
+          />
+          <label className="set__row">
+            <input
+              type="radio"
+              name="records"
+              checked={form.records === "wildcard"}
+              onChange={() => setForm({ ...form, records: "wildcard" })}
+            />
+            <span>Wildcard record (recommended)</span>
+            <Hint label="About a wildcard record">
+              At your DNS provider, add an A record for <code>*.{shown}</code> with the value{" "}
+              <code>{address}</code>, once. Every app then works with no more DNS changes.
+            </Hint>
+          </label>
+          <label className="set__row">
+            <input
+              type="radio"
+              name="records"
+              checked={form.records === "each_name"}
+              onChange={() => setForm({ ...form, records: "each_name" })}
+            />
+            <span>A record per app</span>
+            <Hint label="About a record per app">
+              Add an A record for each app, such as <code>app.{shown}</code> with the value{" "}
+              <code>{address}</code>. Commitarium tells you which one when you deploy.
+            </Hint>
+          </label>
+          <div className="set__row">
+            <button disabled={busy || !form.domain.trim()} onClick={save}>
+              {busy ? "Checking…" : form.editing ? "Save" : "Add"}
+            </button>
+            <button
+              className="ghost"
+              disabled={busy}
+              onClick={() => {
+                setForm(null);
+                setError(null);
+              }}
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="set__row">
+          <button
+            disabled={busy || full}
+            title={full ? "One domain per server for now" : undefined}
+            onClick={() => setForm({ domain: "", records: "wildcard", editing: false })}
+          >
+            Add domain
+          </button>
+        </div>
+      )}
       {error && <p className="set__note">{error}</p>}
       <p className="muted set__note">
-        Not sure how to do this at your DNS provider?{" "}
+        Not sure how to set this up at your DNS provider?{" "}
         <AskMayka
           link
           onLeave={onLeave}
           message={
-            `Help me point ${domain.trim() ? `my domain ${shown}` : "my domain"} at this server ` +
-            `(${address}), with ${records === "wildcard" ? "one wildcard record" : "a record per app"}.`
+            `Help me point ${form?.domain.trim() ? `my domain ${shown}` : (overview.domain ?? "my domain")} ` +
+            `at this server (${address}), with ` +
+            `${(form?.records ?? overview.records) === "wildcard" ? "one wildcard record" : "a record per app"}.`
           }
         />{" "}
         to walk you through it.

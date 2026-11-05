@@ -215,6 +215,8 @@ export const publishing = async (): Promise<PublishingOverview> => {
 };
 export const setDomain = (domain: string, records: Records = "wildcard"): Promise<void> =>
   hostPost("/v1/publishing/domain", { domain, records });
+/** Lets go of the server's domain; refused while apps or sign-in use it. */
+export const removeDomain = (): Promise<void> => hostPost("/v1/publishing/remove-domain");
 export const setPlacement = (placement: Placement): Promise<void> =>
   hostPost("/v1/publishing/placement", { placement });
 /** Tells the Server settings that publishing changed, so each part reads it again. */

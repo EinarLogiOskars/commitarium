@@ -3513,6 +3513,69 @@ button.danger:not(.ghost) {
 .set__row input:disabled + span {
   color: var(--muted);
 }
+.set__heading--hint {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.hint {
+  position: relative;
+  display: inline-flex;
+  text-transform: none;
+  letter-spacing: normal;
+  font-weight: 400;
+}
+.hint__mark {
+  width: 16px;
+  height: 16px;
+  min-height: 0;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1;
+  cursor: help;
+}
+.hint__tip {
+  position: absolute;
+  z-index: 20;
+  left: -8px;
+  top: calc(100% + 6px);
+  width: max-content;
+  max-width: 300px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-1);
+  color: var(--text);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  white-space: normal;
+  box-shadow: 0 4px 16px rgb(0 0 0 / 0.25);
+  visibility: hidden;
+  opacity: 0;
+  transition: opacity 0.1s;
+}
+.hint:hover .hint__tip,
+.hint:focus-within .hint__tip,
+.hint[data-open] .hint__tip {
+  visibility: visible;
+  opacity: 1;
+}
+.domain-row__name {
+  font-weight: 500;
+}
+.domain-row__records {
+  flex: 1;
+  font-size: var(--text-sm);
+}
+.domain-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
 .set__fact {
   display: flex;
   align-items: baseline;

@@ -572,6 +572,11 @@ fn respond_to_post(path: &str, body: &[u8], shared: &Shared) -> Reply {
             shared.on_a_server()?;
             shared.publishing.set_domain(&set.domain, set.records)
         }),
+        "/v1/publishing/remove-domain" => respond_with(
+            shared
+                .on_a_server()
+                .and_then(|()| shared.publishing.remove_domain()),
+        ),
         "/v1/publishing/placement" => with_body(body, |set: SetPlacement| {
             shared.on_a_server()?;
             shared.publishing.set_placement(set.placement)

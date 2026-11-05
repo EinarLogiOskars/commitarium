@@ -394,6 +394,39 @@ impl Publishing {
         self.write(&settings)
     }
 
+    /// Lets go of the domain, once nothing is served on it any more.
+    pub fn remove_domain(&self) -> Result<(), String> {
+        let _held = self
+            .applied
+            .lock()
+            .map_err(|_| "publishing is unavailable")?;
+        let mut settings = self.read()?;
+        let Some(domain) = settings.domain.clone() else {
+            return Ok(());
+        };
+        if settings.reach == Reach::Internet {
+            let mut used = Vec::new();
+            if !settings.apps.is_empty() {
+                used.push("its apps (give each a new address or take it down first)");
+            }
+            if settings.apps_page.is_some() {
+                used.push("the apps page (turn it off first)");
+            }
+            if settings.sign_in.is_some() {
+                used.push("company sign-in (disconnect it first)");
+            }
+            if !used.is_empty() {
+                return Err(format!(
+                    "{domain} is still in use by {}.",
+                    used.join(", and ")
+                ));
+            }
+        }
+        settings.domain = None;
+        settings.records = Records::default();
+        self.write(&settings)
+    }
+
     /// Keeps where the owner said the server is.
     pub fn set_placement(&self, placement: Placement) -> Result<(), String> {
         let _held = self
@@ -1834,6 +1867,25 @@ mod tests {
             .contains("missing-x.test"));
         settings.records = Records::Wildcard;
         assert!(sign_in_names_point_here(&settings, &names).is_ok());
+    }
+
+    #[test]
+    fn a_domain_in_use_is_kept_until_nothing_is_served_on_it() {
+        let data = tempfile::tempdir().unwrap();
+        let publishing = Publishing::new(data.path());
+        let mut settings = settings();
+        publishing.write(&settings).unwrap();
+        assert!(publishing
+            .remove_domain()
+            .unwrap_err()
+            .contains("example.com is still in use by its apps"));
+        settings.apps.clear();
+        settings.records = Records::EachName;
+        publishing.write(&settings).unwrap();
+        publishing.remove_domain().unwrap();
+        let settings = publishing.read().unwrap();
+        assert_eq!(settings.domain, None);
+        assert_eq!(settings.records, Records::Wildcard);
     }
 
     #[test]
