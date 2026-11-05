@@ -23,9 +23,11 @@ export function QuietRow({
   return (
     <div className={`quiet quiet--${tone}`} title={title || undefined}>
       <p className="quiet__line">
-        <span className="quiet__glyph" aria-hidden>
-          {pulse ? <span className="assistant__pulse" /> : QUIET_GLYPH[tone]}
-        </span>
+        {(pulse || QUIET_GLYPH[tone]) && (
+          <span className="quiet__glyph" aria-hidden>
+            {pulse ? <span className="assistant__pulse" /> : QUIET_GLYPH[tone]}
+          </span>
+        )}
         <span className="quiet__text">{children}</span>
       </p>
       {below}
@@ -57,9 +59,11 @@ export function QuietRun({
         aria-expanded={open}
         onClick={() => setOpen(!open)}
       >
-        <span className="quiet__glyph" aria-hidden>
-          {QUIET_GLYPH[tone]}
-        </span>
+        {QUIET_GLYPH[tone] && (
+          <span className="quiet__glyph" aria-hidden>
+            {QUIET_GLYPH[tone]}
+          </span>
+        )}
         <span className="quiet__text">
           {summary} {open ? "▾" : "▸"}
         </span>

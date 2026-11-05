@@ -392,10 +392,11 @@ export function foldQuiet<T>(entries: QuietEntry<T>[]): QuietSegment<T>[] {
   return segments;
 }
 
-/** The glyph a line leads with. */
+/** The glyph a line leads with: only what needs a look is marked. Past
+ * news has none, as what runs now has the chat's live line. */
 export const QUIET_GLYPH: Record<QuietTone, string> = {
-  done: "✓",
-  info: "–",
+  done: "",
+  info: "",
   busy: "•",
   needs: "!",
   failed: "✕",
