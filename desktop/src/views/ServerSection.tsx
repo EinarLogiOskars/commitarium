@@ -205,19 +205,22 @@ function DomainSection({ onLeave }: { onLeave?: () => void }) {
   return (
     <section className="set__section">
       <h3 className="set__heading">Domain</h3>
+      <p className="set__note">Enter a domain you own to serve your apps on.</p>
       <p className="muted set__note">
-        Apps you deploy get addresses under your domain, such as app.{shown}.
+        Each app you deploy gets its own address under it, such as app.{shown}. You need access to
+        the domain&apos;s DNS settings, at the company you bought it from or where you manage it.
+        No domain? Buy one from any registrar, or turn on Homelab above for a server at home.
       </p>
       <div className="set__row">
         <input
-          aria-label="Domain"
+          aria-label="Your domain"
           placeholder="example.com"
           value={domain}
           onChange={(e) => setDomainText(e.target.value)}
         />
       </div>
       <p className="muted set__note">
-        At your DNS provider, point them at this server ({address}) with:
+        Then, in those DNS settings, point it at this server ({address}) in one of two ways:
       </p>
       <label className="set__row">
         <input
