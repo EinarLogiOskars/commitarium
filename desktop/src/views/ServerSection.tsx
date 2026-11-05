@@ -36,6 +36,10 @@ import {
 import { showPlace } from "./PlaceSwitch";
 import { ConnectForm } from "./StartChoice";
 import { startChatOn } from "../attention/askAssistant";
+import { getAssistantSettings, type AssistantSettings } from "../api/assistant";
+import { Agents } from "./Agents";
+import { assistantGuidance, GUIDANCE, type AssistantGuidance } from "./setupGuidance";
+import { reloadAgents, useAgentList } from "./useAgents";
 
 /** This app's API version: raise it with `API_VERSION` in the host. */
 const API_VERSION = 1;
@@ -65,6 +69,78 @@ function useFresh(refresh: () => void) {
 function askMaykaAboutServing(message: string, onLeave?: () => void) {
   startChatOn({ kind: "serving" }, message);
   onLeave?.();
+}
+
+/**
+ * What Mayka still needs before she can answer on this server (ADR-027), and
+ * whether that is known yet. Reloads after the Agents page closes.
+ */
+function useMaykaGuidance(): {
+  guidance: AssistantGuidance;
+  known: boolean;
+  reload: () => void;
+} {
+  const agents = useAgentList();
+  const [settings, setSettings] = useState<AssistantSettings | null>(null);
+  const reload = useCallback(() => {
+    void reloadAgents().catch(() => undefined);
+    void getAssistantSettings()
+      .then(setSettings)
+      .catch(() => undefined);
+  }, []);
+  useEffect(reload, [reload]);
+  const known = agents !== null && (agents.length === 0 || settings !== null);
+  return { guidance: assistantGuidance(agents, settings), known, reload };
+}
+
+/**
+ * Ask Mayka, or, while she has no AI account to work with, the way to give
+ * her one: asking her then would only fail.
+ */
+function AskMayka({
+  message,
+  onLeave,
+  onAsked,
+  link,
+}: {
+  message: string;
+  onLeave?: () => void;
+  onAsked?: () => void;
+  /** Shown as a link inside a sentence rather than a button. */
+  link?: boolean;
+}) {
+  const { guidance, reload } = useMaykaGuidance();
+  const [setUp, setSetUp] = useState(false);
+  const className = link ? "shell-card__link" : undefined;
+  if (guidance) {
+    return (
+      <>
+        <button className={className} onClick={() => setSetUp(true)}>
+          {GUIDANCE[guidance].action} first
+        </button>
+        {setUp && (
+          <Agents
+            focus={guidance === "set_up_assistant" ? "assistant" : undefined}
+            onClose={() => {
+              setSetUp(false);
+              reload();
+            }}
+          />
+        )}
+      </>
+    );
+  }
+  return (
+    <button
+      className={className}
+      onClick={() => {
+        onAsked?.();
+        askMaykaAboutServing(message, onLeave);
+      }}
+    >
+      Ask Mayka
+    </button>
+  );
 }
 
 // The servers this device knows, and the shown one's state, in Settings.
@@ -179,18 +255,14 @@ function DomainSection({ onLeave }: { onLeave?: () => void }) {
       {error && <p className="set__note">{error}</p>}
       <p className="muted set__note">
         Not sure how to do this at your DNS provider?{" "}
-        <button
-          className="shell-card__link"
-          onClick={() =>
-            askMaykaAboutServing(
-              `Help me point ${domain.trim() ? `my domain ${shown}` : "my domain"} at this server ` +
-                `(${address}), with ${records === "wildcard" ? "one wildcard record" : "a record for each address"}.`,
-              onLeave,
-            )
+        <AskMayka
+          link
+          onLeave={onLeave}
+          message={
+            `Help me point ${domain.trim() ? `my domain ${shown}` : "my domain"} at this server ` +
+            `(${address}), with ${records === "wildcard" ? "one wildcard record" : "a record for each address"}.`
           }
-        >
-          Ask Mayka
-        </button>{" "}
+        />{" "}
         to walk you through it.
       </p>
     </section>
@@ -576,18 +648,11 @@ function WhereSection({
             Mayka can help you choose: tell her where it runs and who should open your apps.
           </p>
           <div className="set__actions">
-            <button
-              disabled={busy}
-              onClick={() => {
-                onClose?.();
-                askMaykaAboutServing(
-                  "Help me choose how to serve apps from my Commitarium server.",
-                  onLeave,
-                );
-              }}
-            >
-              Ask Mayka
-            </button>
+            <AskMayka
+              onLeave={onLeave}
+              onAsked={onClose}
+              message="Help me choose how to serve apps from my Commitarium server."
+            />
             {back}
           </div>
         </>
@@ -625,11 +690,14 @@ function WhereSection({
 const WHERE_DISMISSED = "commitarium:where-dismissed:";
 
 /**
- * Asks where the shown server is, as a modal, the first time it is opened
- * on this computer without an answer. Not now keeps it in Settings only.
+ * The first time a server opens on this computer: Mayka's AI account, if
+ * the server has none yet, since everything else leans on her; then where
+ * the server is. Each step can be put off; Not now on the question keeps it
+ * in Settings → Server only.
  */
 export function ServerQuestion({ onOpenSettings }: { onOpenSettings: () => void }) {
   const server = connectedServer();
+  const { guidance, known, reload } = useMaykaGuidance();
   const [closed, setClosed] = useState(() => {
     try {
       return server !== null && localStorage.getItem(WHERE_DISMISSED + server) !== null;
@@ -637,7 +705,10 @@ export function ServerQuestion({ onOpenSettings }: { onOpenSettings: () => void 
       return false;
     }
   });
-  if (!server || closed) return null;
+  // Mayka's step, shown once while this window is open.
+  const [maykaDone, setMaykaDone] = useState(false);
+  const [agentsOpen, setAgentsOpen] = useState(false);
+  if (!server || closed || !known) return null;
   const close = () => {
     try {
       localStorage.setItem(WHERE_DISMISSED + server, "1");
@@ -646,6 +717,41 @@ export function ServerQuestion({ onOpenSettings }: { onOpenSettings: () => void 
     }
     setClosed(true);
   };
+  if (agentsOpen) {
+    return (
+      <Agents
+        focus={guidance === "set_up_assistant" ? "assistant" : undefined}
+        onClose={() => {
+          setAgentsOpen(false);
+          setMaykaDone(true);
+          reload();
+        }}
+      />
+    );
+  }
+  if (guidance && !maykaDone) {
+    return (
+      <div className="modal">
+        <div className="modal__card set__section" role="dialog" aria-label="Set up Mayka">
+          <div className="panel__head">
+            <h2>{guidance === "add_agent" ? "Connect an AI account" : "Set up Mayka"}</h2>
+          </div>
+          <p className="set__note">{GUIDANCE[guidance].text}</p>
+          <div className="set__actions">
+            <button className="primary" onClick={() => setAgentsOpen(true)}>
+              {GUIDANCE[guidance].action}
+            </button>
+            <button className="ghost" onClick={() => setMaykaDone(true)}>
+              Not now
+            </button>
+          </div>
+          <p className="muted set__note">
+            Until then Mayka cannot answer, here or in a chat. You can do this any time from Agents.
+          </p>
+        </div>
+      </div>
+    );
+  }
   return <WhereSection modal onClose={close} onOpenSettings={onOpenSettings} />;
 }
 
@@ -772,18 +878,13 @@ function HomelabSection({ onLeave }: { onLeave?: () => void }) {
             Not sure what you need? Mayka can help you find the way that fits.
           </p>
           <div className="set__actions">
-            <button
-              disabled={busy}
-              onClick={() =>
-                askMaykaAboutServing(
-                  "I want to turn off Homelab mode on my server, but this computer reaches it only " +
-                    "through Tailscale, so it would lose the server. Help me work out what to do.",
-                  onLeave,
-                )
+            <AskMayka
+              onLeave={onLeave}
+              message={
+                "I want to turn off Homelab mode on my server, but this computer reaches it only " +
+                "through Tailscale, so it would lose the server. Help me work out what to do."
               }
-            >
-              Ask Mayka
-            </button>
+            />
             <button className="ghost" disabled={busy} onClick={() => void change(true)}>
               Turn off anyway
             </button>
