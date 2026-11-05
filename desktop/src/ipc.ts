@@ -196,7 +196,23 @@ export const deploy = (projectId: string, commitId?: string): Promise<PreviewSta
   hostPost("/v1/deployments/deploy", { project_id: projectId, commit_id: commitId ?? null });
 export const stopDeployment = (projectId: string): Promise<void> =>
   hostPost("/v1/deployments/stop", { project_id: projectId });
-export const publishing = (): Promise<PublishingOverview> => hostGet("/v1/publishing");
+/** A server older than this app leaves out what it does not have yet, so
+ * those parts read as off, not missing. */
+export const publishing = async (): Promise<PublishingOverview> => {
+  const found = await hostGet<Partial<PublishingOverview>>("/v1/publishing");
+  return {
+    ...found,
+    domain: found.domain ?? null,
+    server_address: found.server_address ?? null,
+    apps: (found.apps ?? []).map((app) => ({ ...app, listed: app.listed ?? true })),
+    sign_in: found.sign_in ?? null,
+    apps_page: found.apps_page ?? null,
+    reach: found.reach ?? "internet",
+    tailscale: found.tailscale ?? null,
+    records: found.records ?? "wildcard",
+    placement: found.placement ?? null,
+  } as PublishingOverview;
+};
 export const setDomain = (domain: string, records: Records = "wildcard"): Promise<void> =>
   hostPost("/v1/publishing/domain", { domain, records });
 export const setPlacement = (placement: Placement): Promise<void> =>
