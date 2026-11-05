@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { getProject } from "../api/projects";
+import { getAgentsAtWork, getProject } from "../api/projects";
 import { listFeatures, setUpPreview, tellAssistantPreviewFailed } from "../api/features";
 import { getPreviewStatus, onPreviewStatusChanged, startPreview, type PreviewStatus } from "../ipc";
 import { isStopped, primaryUrl } from "./usePreview";
@@ -8,7 +8,8 @@ import { RippleField } from "./RippleField";
 import { shownTheme } from "../settings/theme";
 import { agentName, useAgents } from "./useAgents";
 import { getConversation, type AutopilotGoal, type Conversation } from "../api/assistant";
-import type { Feature, Project } from "../api/types";
+import type { AgentAtWork, Feature, Project } from "../api/types";
+import { buildItemState } from "./projectCardData";
 import { ContainerEvidence } from "./ContainerEvidence";
 import { plainFailure } from "./previewEvidence";
 import { isPreviewWork } from "./usePreviewSetup";
@@ -79,10 +80,12 @@ export function AppWindow({ projectId }: { projectId: string }) {
   const stopped = isStopped(status, starting, error);
   const merged = useRef<Set<string> | null>(null);
   const [fixingWork, setFixingWork] = useState<Feature | null>(null);
+  const [orders, setOrders] = useState<Map<string, Feature>>(new Map());
   useEffect(() => {
     const look = async () => {
       try {
         const features = await listFeatures(projectId);
+        setOrders(new Map(features.map((f) => [f.id, f])));
         setFixingWork(
           features.find(
             (f) => isPreviewWork(f) && f.state !== "completed" && f.state !== "cancelled",
@@ -105,11 +108,16 @@ export function AppWindow({ projectId }: { projectId: string }) {
   // on the waiting screen until its P0 items are done, then in a corner over
   // the app.
   const [conversation, setConversation] = useState<Conversation | null>(null);
+  const [atWork, setAtWork] = useState<AgentAtWork[]>([]);
   useEffect(() => {
-    const look = () =>
-      getConversation(projectId)
+    const look = () => {
+      void getConversation(projectId)
         .then(setConversation)
         .catch(() => undefined);
+      void getAgentsAtWork(projectId)
+        .then((r) => setAtWork(r.agents ?? []))
+        .catch(() => undefined);
+    };
     void look();
     const timer = setInterval(() => void look(), 10_000);
     return () => clearInterval(timer);
@@ -192,7 +200,7 @@ export function AppWindow({ projectId }: { projectId: string }) {
                   base everything is built on. This takes a few minutes.
                 </p>
               )}
-              {goal && <BuildChecklist goal={goal} />}
+              {goal && <BuildChecklist goal={goal} orders={orders} agents={atWork} />}
               {conversation?.sign_in?.needs_user && (
                 <SignInNotice
                   agentId={conversation.sign_in.agent}
@@ -270,7 +278,7 @@ export function AppWindow({ projectId }: { projectId: string }) {
             Building · {goal.items.filter((i) => i.done).length} of {goal.items.length}
             {nextItem && <span className="muted"> · {nextItem.title}</span>}
           </button>
-          {showProgress && <BuildChecklist goal={goal} />}
+          {showProgress && <BuildChecklist goal={goal} orders={orders} agents={atWork} />}
         </div>
       )}
       <AssistantDrawer
@@ -300,19 +308,47 @@ function withTheme(url: string): string {
 /** The build's items: P0, what the app needs to be usable, then a line where
  * it opens, then the rest. The first is the foundation the plan builds the
  * features on (WidePlan), so it takes longest. */
-function BuildChecklist({ goal }: { goal: AutopilotGoal }) {
+function BuildChecklist({
+  goal,
+  orders,
+  agents,
+}: {
+  goal: AutopilotGoal;
+  orders: Map<string, Feature>;
+  agents: AgentAtWork[];
+}) {
   const core = goal.items.filter((item) => item.label.startsWith("P0."));
   const later = goal.items.filter((item) => !item.label.startsWith("P0."));
-  const row = (item: AutopilotGoal["items"][number], first: boolean) => (
-    <li key={item.id} className={item.done ? "app-window__item--done" : ""}>
-      {item.done ? "✓" : "·"} {item.title}
-      {first && !item.done && (
-        <span className="muted app-window__item-note">
-          The foundation the features build on, so it takes longest.
+  const row = (item: AutopilotGoal["items"][number], first: boolean) => {
+    const order = item.work_order_id ? orders.get(item.work_order_id) : undefined;
+    const state = item.done
+      ? { tone: "done" as const, label: "Done" }
+      : buildItemState(order, agents);
+    return (
+      <li key={item.id} className={`app-window__item app-window__item--${state.tone}`}>
+        <span className="app-window__item-mark" aria-hidden>
+          {state.tone === "done" ? (
+            "✓"
+          ) : state.tone === "working" ? (
+            <span className="assistant__pulse" />
+          ) : (
+            "·"
+          )}
         </span>
-      )}
-    </li>
-  );
+        <span>
+          {item.title}
+          {state.tone !== "done" && (
+            <span className="muted app-window__item-state"> · {state.label}</span>
+          )}
+          {first && state.tone !== "done" && (
+            <span className="muted app-window__item-note">
+              The foundation the features build on, so it takes longest.
+            </span>
+          )}
+        </span>
+      </li>
+    );
+  };
   return (
     <ul className="app-window__items">
       {core.map((item, index) => row(item, index === 0))}

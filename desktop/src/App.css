@@ -5565,12 +5565,27 @@ select:focus {
   text-align: left;
   color: var(--muted);
 }
-.app-window__item--done {
+.app-window__item {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+.app-window__item-mark {
+  flex: none;
+  width: 10px;
+  display: inline-flex;
+  justify-content: center;
+  align-self: center;
+}
+.app-window__item--done,
+.app-window__item--working {
   color: var(--text);
+}
+.app-window__item-state {
+  font-size: var(--text-sm);
 }
 .app-window__item-note {
   display: block;
-  margin-left: 1.1em;
   font-size: var(--text-xs);
 }
 /* Where the app opens: everything above it, P0, makes it usable. */
