@@ -452,6 +452,7 @@ function WhereSection({
 }) {
   const [overview, setOverview] = useState<PublishingOverview | null>(null);
   const [answered, setAnswered] = useState<Placement | null>(null);
+  const [asking, setAsking] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -480,10 +481,15 @@ function WhereSection({
       setAnswered(placement);
     });
 
-  if (!overview) return null;
-  // Asked once: a server already serving apps, or already answered, skips it.
-  const fresh = overview.placement === null && !overview.domain && overview.reach !== "private";
-  if (!fresh && answered === null) return null;
+  // Asked once: a server already serving apps, or already answered, skips
+  // it. Once shown it stays, so Back can change an answer just kept.
+  const fresh =
+    overview !== null &&
+    overview.placement === null &&
+    !overview.domain &&
+    overview.reach !== "private";
+  if (fresh && !asking) setAsking(true);
+  if (!overview || !(fresh || asking)) return null;
   // In the modal, the settings it recommends are a click away; in Settings,
   // they are the sections below.
   const where = (section: string) => (modal ? `in Settings → Server → ${section}` : "below");
