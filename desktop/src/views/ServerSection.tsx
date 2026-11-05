@@ -434,10 +434,22 @@ const PLACES: { value: Placement; label: string }[] = [
   { value: "other", label: "Somewhere else, or not sure" },
 ];
 
-// Asked once, the first time the server's settings open (HOMELAB_PLAN.md):
-// where the server is, so the app recommends how to serve its apps. The
-// answer is kept on the server; the settings it recommends stay below.
-function WhereSection({ onLeave }: { onLeave?: () => void }) {
+// Asked once per server (HOMELAB_PLAN.md): where it is, so the app
+// recommends how to serve its apps. It opens as a modal when a server that
+// has not answered is shown, and stays in Settings → Server until it is
+// answered. The answer is kept on the server.
+function WhereSection({
+  onLeave,
+  modal,
+  onClose,
+  onOpenSettings,
+}: {
+  onLeave?: () => void;
+  /** Shown as the modal on opening the server, rather than in Settings. */
+  modal?: boolean;
+  onClose?: () => void;
+  onOpenSettings?: () => void;
+}) {
   const [overview, setOverview] = useState<PublishingOverview | null>(null);
   const [answered, setAnswered] = useState<Placement | null>(null);
   const [busy, setBusy] = useState(false);
@@ -472,9 +484,28 @@ function WhereSection({ onLeave }: { onLeave?: () => void }) {
   // Asked once: a server already serving apps, or already answered, skips it.
   const fresh = overview.placement === null && !overview.domain && overview.reach !== "private";
   if (!fresh && answered === null) return null;
-  return (
-    <section className="set__section">
-      <h3 className="set__heading">Where is this server?</h3>
+  // In the modal, the settings it recommends are a click away; in Settings,
+  // they are the sections below.
+  const where = (section: string) => (modal ? `in Settings → Server → ${section}` : "below");
+  const toSettings = modal && onOpenSettings && (
+    <button
+      className="ghost"
+      disabled={busy}
+      onClick={() => {
+        onClose?.();
+        onOpenSettings();
+      }}
+    >
+      Open Settings
+    </button>
+  );
+  const back = (
+    <button className="ghost" disabled={busy} onClick={() => setAnswered(null)}>
+      Back
+    </button>
+  );
+  const content = (
+    <>
       {answered === null ? (
         <>
           <p className="muted set__note">
@@ -488,6 +519,16 @@ function WhereSection({ onLeave }: { onLeave?: () => void }) {
               </button>
             ))}
           </div>
+          {modal && (
+            <div className="set__actions">
+              <button className="ghost" onClick={onClose}>
+                Not now
+              </button>
+            </div>
+          )}
+          {modal && (
+            <p className="muted set__note">You can answer this any time in Settings → Server.</p>
+          )}
         </>
       ) : answered === "home" ? (
         <>
@@ -498,29 +539,29 @@ function WhereSection({ onLeave }: { onLeave?: () => void }) {
           </p>
           <div className="set__actions">
             {overview.reach === "private" ? (
-              <p className="muted set__note">Homelab mode is on: its steps are below.</p>
+              <p className="muted set__note">
+                Homelab mode is on: its steps are {where("Homelab")}.
+              </p>
             ) : (
               <button disabled={busy} onClick={() => void run(() => setReach("private"))}>
                 Turn on Homelab mode
               </button>
             )}
-            <button className="ghost" disabled={busy} onClick={() => setAnswered(null)}>
-              Back
-            </button>
+            {toSettings}
+            {back}
           </div>
-          <p className="muted set__note">You can change this later under Homelab, below.</p>
+          <p className="muted set__note">You can change this later {where("Homelab")}.</p>
         </>
       ) : answered === "cloud" ? (
         <>
           <p className="set__note">
             Recommended: <strong>your own domain</strong>. Your apps get addresses such as
             app.yourcompany.com, for anyone on the internet, each open, behind a password, or behind
-            company sign-in. Set it under Domain, below: it explains the DNS record to add.
+            company sign-in. Set it {where("Domain")}: it explains the DNS record to add.
           </p>
           <div className="set__actions">
-            <button className="ghost" disabled={busy} onClick={() => setAnswered(null)}>
-              Back
-            </button>
+            {toSettings}
+            {back}
           </div>
         </>
       ) : (
@@ -531,24 +572,75 @@ function WhereSection({ onLeave }: { onLeave?: () => void }) {
           <div className="set__actions">
             <button
               disabled={busy}
-              onClick={() =>
+              onClick={() => {
+                onClose?.();
                 askMaykaAboutServing(
                   "Help me choose how to serve apps from my Commitarium server.",
                   onLeave,
-                )
-              }
+                );
+              }}
             >
               Ask Mayka
             </button>
-            <button className="ghost" disabled={busy} onClick={() => setAnswered(null)}>
-              Back
-            </button>
+            {back}
           </div>
         </>
       )}
+      {modal && answered !== null && (
+        <div className="set__actions">
+          <button className="ghost" onClick={onClose}>
+            Done
+          </button>
+        </div>
+      )}
       {error && <p className="set__note">{error}</p>}
+    </>
+  );
+  if (modal) {
+    return (
+      <div className="modal">
+        <div className="modal__card set__section" role="dialog" aria-label="Where is this server?">
+          <div className="panel__head">
+            <h2>Where is this server?</h2>
+          </div>
+          {content}
+        </div>
+      </div>
+    );
+  }
+  return (
+    <section className="set__section">
+      <h3 className="set__heading">Where is this server?</h3>
+      {content}
     </section>
   );
+}
+
+const WHERE_DISMISSED = "commitarium:where-dismissed:";
+
+/**
+ * Asks where the shown server is, as a modal, the first time it is opened
+ * on this computer without an answer. Not now keeps it in Settings only.
+ */
+export function ServerQuestion({ onOpenSettings }: { onOpenSettings: () => void }) {
+  const server = connectedServer();
+  const [closed, setClosed] = useState(() => {
+    try {
+      return server !== null && localStorage.getItem(WHERE_DISMISSED + server) !== null;
+    } catch {
+      return false;
+    }
+  });
+  if (!server || closed) return null;
+  const close = () => {
+    try {
+      localStorage.setItem(WHERE_DISMISSED + server, "1");
+    } catch {
+      // Without storage it may ask again next time: harmless.
+    }
+    setClosed(true);
+  };
+  return <WhereSection modal onClose={close} onOpenSettings={onOpenSettings} />;
 }
 
 // Homelab mode (HOMELAB_PLAN.md): off, apps are served at the server's own
