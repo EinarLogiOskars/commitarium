@@ -120,6 +120,14 @@ the user to confirm in review. Builds on
   the app says so and asks first. Company sign-in must be disconnected
   before going private. Going back to the internet keeps Tailscale's state,
   so coming back needs no new sign-in.
+- **Turning Homelab off** stops Tailscale on the server. A computer that
+  connected through Tailscale first moves back to the address it had
+  before, which it remembers. If that fails (away from home, say), Settings
+  explains it would lose the server and what connecting again takes
+  (`sudo commitarium-host pair` on the server, on its network), with **Ask
+  Mayka**, **Turn off anyway** and **Cancel**. Mayka first finds out what
+  the user is after: giving the homelab up, moving to a domain (do it from
+  home), or something Homelab off doesn't do.
 - **The first question** is asked in Settings → Server, not at the first
   deploy: a deploy on a server with neither a domain nor homelab mode says
   where to set them.
