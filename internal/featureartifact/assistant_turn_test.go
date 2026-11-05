@@ -137,6 +137,13 @@ func TestATurnsQuestionsAreKeptWithinTheirLimits(t *testing.T) {
 		turn.Questions[2].Text != "Who uses it?" || turn.Questions[2].Suggested != 1 {
 		t.Fatalf("questions = %+v", turn.Questions)
 	}
+	// A question about the user may suggest nothing.
+	asked, err := AssistantTurn{Questions: []AssistantQuestion{
+		{Text: "How many people?", Options: []string{"Just me", "A handful"}, Suggested: -1},
+	}}.Normalize()
+	if err != nil || asked.Questions[0].Suggested != -1 {
+		t.Fatalf("asked = %+v, %v", asked.Questions, err)
+	}
 	if none, err := (AssistantTurn{Questions: []AssistantQuestion{{Text: "Hm?"}}}).Normalize(); err != nil || none.Questions != nil {
 		t.Fatalf("none = %+v, %v", none.Questions, err)
 	}

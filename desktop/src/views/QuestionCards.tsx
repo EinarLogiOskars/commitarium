@@ -170,7 +170,7 @@ function OpenCard({
       // On a row, Enter clicks it.
       e.preventDefault();
       if (selected === other) setWriting(true);
-      else confirm({ option: selected });
+      else if (selected >= 0) confirm({ option: selected });
     }
   };
 

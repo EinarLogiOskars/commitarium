@@ -866,7 +866,7 @@ func assistantTurnSchema(planning bool) map[string]any {
 				"text": text,
 				"options": map[string]any{"type": "array", "items": text,
 					"description": "Two to four short answers."},
-				"suggested": map[string]any{"type": "integer", "description": "The index in options of the answer you would pick."},
+				"suggested": map[string]any{"type": "integer", "description": "The index in options of the answer you would pick, or -1 when the question asks a fact only the user knows (how many people, what they already have) rather than a choice you can recommend."},
 			},
 			[]string{"text", "options", "suggested"},
 		),

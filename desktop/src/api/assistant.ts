@@ -33,6 +33,7 @@ export interface AssistantQuestion {
   text: string;
   options: string[];
   /** The option the assistant would pick. */
+  /** The answer the assistant would pick, or -1 for a fact about the user. */
   suggested: number;
   /** Set once answered; option is absent when the user wrote their own. */
   answer?: { option?: number; text: string; answered_at: string };
