@@ -279,6 +279,8 @@ export interface PairedServer {
   address: string;
   /** The user's name for it, else its address. */
   name: string;
+  /** Where it was reached before it moved, if it did: the way back. */
+  previous_address: string | null;
 }
 
 /** This computer and the paired servers; `active` is null for this computer. */

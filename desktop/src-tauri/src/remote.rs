@@ -35,6 +35,11 @@ pub struct Saved {
     /// Names the user gave servers, by fingerprint.
     #[serde(default)]
     pub names: BTreeMap<String, String>,
+    /// Where each moved server was reached before, by fingerprint: the way
+    /// back when its new address goes, as Tailscale's does when homelab
+    /// mode is turned off.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub previous: BTreeMap<String, String>,
 }
 
 impl Saved {
@@ -52,10 +57,29 @@ impl Saved {
     fn forget(&mut self, fingerprint: &str) {
         self.hosts.retain(|host| host.fingerprint != fingerprint);
         self.names.remove(fingerprint);
+        self.previous.remove(fingerprint);
         if self.active.as_deref() == Some(fingerprint) {
             self.active = None;
             self.mode = Mode::Local;
         }
+    }
+
+    /// Reaches a paired server at another address, keeping the one it had
+    /// as the way back. Moving does not change which side is shown.
+    fn moved(&mut self, fingerprint: &str, address: &str) -> Option<PairedHost> {
+        let old = self.host(fingerprint)?.address.clone();
+        if old != address {
+            self.previous.insert(fingerprint.to_string(), old);
+        }
+        let moved = PairedHost {
+            address: address.to_string(),
+            fingerprint: fingerprint.to_string(),
+        };
+        let (mode, active) = (self.mode, self.active.clone());
+        self.remember(moved.clone());
+        self.mode = mode;
+        self.active = active;
+        Some(moved)
     }
 
     fn remember(&mut self, host: PairedHost) {
@@ -220,6 +244,8 @@ pub struct Server {
     address: String,
     /// The user's name for it, else its address.
     name: String,
+    /// Where it was reached before it moved, if it did.
+    previous_address: Option<String>,
 }
 
 /// The sides the window can show: this computer and every paired server.
@@ -249,6 +275,7 @@ fn places_of(saved: &Saved) -> Places {
                     .get(&host.fingerprint)
                     .cloned()
                     .unwrap_or_else(|| host.address.clone()),
+                previous_address: saved.previous.get(&host.fingerprint).cloned(),
             })
             .collect(),
         active: (saved.mode == Mode::Remote)
@@ -293,22 +320,29 @@ pub async fn move_server(
         .await
         .is_ok_and(|response| response.status().is_success());
     if !reached {
-        return Err(format!(
-            "Commitarium could not reach your server at {address}. Make sure Tailscale is on \
-             and signed in on this computer, with the same account as the server, then try again."
-        ));
+        // Tailscale's addresses are 100.64.0.0/10.
+        let tailscale = address
+            .split('.')
+            .take(2)
+            .map(str::parse::<u8>)
+            .collect::<Result<Vec<_>, _>>()
+            .is_ok_and(|parts| {
+                parts.len() == 2 && parts[0] == 100 && (64..128).contains(&parts[1])
+            });
+        return Err(if tailscale {
+            format!(
+                "Commitarium could not reach your server at {address}. Make sure Tailscale is \
+                 on and signed in on this computer, with the same account as the server, then \
+                 try again."
+            )
+        } else {
+            format!("Commitarium could not reach your server at {address} from this computer.")
+        });
     }
-    let moved = PairedHost {
-        address,
-        fingerprint: fingerprint.clone(),
-    };
     let shown = saved.mode == Mode::Remote && saved.active.as_deref() == Some(fingerprint.as_str());
-    let mode = saved.mode;
-    let active = saved.active.clone();
-    saved.remember(moved.clone());
-    // Remembering makes it the shown server; moving one should not.
-    saved.mode = mode;
-    saved.active = active;
+    let moved = saved
+        .moved(&fingerprint, &address)
+        .ok_or("this server is not paired")?;
     save(&app, &saved)?;
     if shown {
         crate::host::show_server(&app, &moved).await;
@@ -361,6 +395,25 @@ mod tests {
 
         saved.mode = Mode::Local;
         assert_eq!(places_of(&saved).active, None);
+    }
+
+    #[test]
+    fn a_moved_server_keeps_its_way_back() {
+        let mut saved = Saved::default();
+        saved.remember(host("192.168.1.20:7443", "one"));
+        saved.mode = Mode::Local;
+        saved.moved("one", "100.101.102.103:7443").unwrap();
+        // Moving shows nothing new.
+        assert_eq!(saved.mode, Mode::Local);
+        assert_eq!(saved.hosts[0].address, "100.101.102.103:7443");
+        let places = places_of(&saved);
+        assert_eq!(
+            places.servers[0].previous_address.as_deref(),
+            Some("192.168.1.20:7443")
+        );
+        assert!(saved.moved("two", "1.2.3.4:7443").is_none());
+        saved.forget("one");
+        assert!(saved.previous.is_empty());
     }
 
     #[test]

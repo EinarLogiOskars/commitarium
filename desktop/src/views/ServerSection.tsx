@@ -554,9 +554,11 @@ function WhereSection({ onLeave }: { onLeave?: () => void }) {
 // Homelab mode (HOMELAB_PLAN.md): off, apps are served at the server's own
 // domain, for anyone on the internet; on, only the owner's devices reach
 // them, on their Tailscale network, with the steps Tailscale takes.
-function HomelabSection() {
+function HomelabSection({ onLeave }: { onLeave?: () => void }) {
   const [overview, setOverview] = useState<PublishingOverview | null>(null);
   const [asked, setAsked] = useState<boolean | null>(null);
+  // Turning off would cut this computer off: why, and the way back it tried.
+  const [stranded, setStranded] = useState<{ tried: string | null } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [moved, setMoved] = useState(false);
@@ -579,13 +581,37 @@ function HomelabSection() {
   const on = overview.reach === "private";
   const tailscale = overview.tailscale;
   const switching = asked !== null && asked !== on;
-  const change = async () => {
+  const server = connectedServer();
+  const onTailscale =
+    Boolean(tailscale?.address && server?.startsWith(tailscale.address + ":")) || moved;
+  const change = async (anyway = false) => {
     if (asked === null) return;
     setBusy(true);
     setError(null);
     try {
+      // Off stops the server's Tailscale: a computer that reaches the server
+      // through it goes back to the address it had first, or is told what
+      // losing the server means before it does.
+      if (!asked && onTailscale && !anyway) {
+        const found = await readPlaces();
+        const shown = found.servers.find((s) => s.fingerprint === found.active);
+        const back = shown?.previous_address ?? null;
+        const movedBack =
+          back !== null &&
+          found.active !== null &&
+          (await moveServer(found.active, back).then(
+            () => true,
+            () => false,
+          ));
+        if (!movedBack) {
+          setStranded({ tried: back });
+          return;
+        }
+        setMoved(false);
+      }
       await setReach(asked ? "private" : "internet");
       setAsked(null);
+      setStranded(null);
       publishingChanged();
     } catch (e) {
       setError(String(e));
@@ -593,8 +619,6 @@ function HomelabSection() {
       setBusy(false);
     }
   };
-  const server = connectedServer();
-  const onTailscale = tailscale?.address && server?.startsWith(tailscale.address + ":");
   const moveHere = async () => {
     if (!tailscale?.address) return;
     setBusy(true);
@@ -619,7 +643,10 @@ function HomelabSection() {
           type="checkbox"
           checked={asked ?? on}
           disabled={busy}
-          onChange={(e) => setAsked(e.target.checked)}
+          onChange={(e) => {
+            setAsked(e.target.checked);
+            setStranded(null);
+          }}
         />
         <span>Use this server as my homelab</span>
       </label>
@@ -630,13 +657,61 @@ function HomelabSection() {
           served at your own domain, for anyone on the internet.
         </p>
       )}
-      {switching && (
+      {switching && stranded && (
+        <>
+          <p className="set__note">
+            This computer reaches the server only through Tailscale
+            {stranded.tried
+              ? `, and it could not reach it at its home network address (${stranded.tried}) just now`
+              : ""}
+            . Turning Homelab off stops Tailscale on the server, so this computer loses the server.
+            To connect again you would need to be on the same network as the server, run{" "}
+            <code>sudo commitarium-host pair</code> on it, and paste the line it prints into
+            Commitarium.
+            {stranded.tried && " If you are away from home, turning it off from home avoids this."}
+          </p>
+          <p className="muted set__note">
+            Not sure what you need? Mayka can help you find the way that fits.
+          </p>
+          <div className="set__actions">
+            <button
+              disabled={busy}
+              onClick={() =>
+                askMaykaAboutServing(
+                  "I want to turn off Homelab mode on my server, but this computer reaches it only " +
+                    "through Tailscale, so it would lose the server. Help me work out what to do.",
+                  onLeave,
+                )
+              }
+            >
+              Ask Mayka
+            </button>
+            <button className="ghost" disabled={busy} onClick={() => void change(true)}>
+              Turn off anyway
+            </button>
+            <button
+              className="ghost"
+              disabled={busy}
+              onClick={() => {
+                setStranded(null);
+                setAsked(null);
+              }}
+            >
+              Cancel
+            </button>
+          </div>
+        </>
+      )}
+      {switching && !stranded && (
         <>
           <p className="set__note">
             {asked
               ? "Your apps move to a private network that only your devices reach, through Tailscale: no domain, nothing open on your router. Every app gets a new address, and company sign-in is not offered there."
               : "Your apps move to addresses under your own domain, for anyone on the internet. Every app gets a new address."}
             {overview.apps.length > 0 && " Anyone with an old link needs the new one."}
+            {!asked &&
+              onTailscale &&
+              " This computer first goes back to reaching the server at its home network address."}
           </p>
           <div className="set__row">
             <button disabled={busy} onClick={() => void change()}>
@@ -652,7 +727,7 @@ function HomelabSection() {
         <TailscaleSteps
           tailscale={tailscale}
           busy={busy}
-          onTailscale={Boolean(onTailscale) || moved}
+          onTailscale={onTailscale}
           onMove={() => void moveHere()}
         />
       )}
@@ -1122,7 +1197,7 @@ function ConnectedServer({
       </section>
 
       <WhereSection onLeave={onLeave} />
-      <HomelabSection />
+      <HomelabSection onLeave={onLeave} />
       <DomainSection onLeave={onLeave} />
       <SignInSection onLeave={onLeave} />
       <AppsPageSection />

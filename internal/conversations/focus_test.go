@@ -110,6 +110,7 @@ func TestAChatOutsideProjectsMayFocusOnTheServer(t *testing.T) {
 		"One wildcard record (recommended)",
 		`"DNS only" (grey cloud)`,
 		"Settings → Server → Homelab",
+		"sudo commitarium-host pair",
 	} {
 		if !strings.Contains(instructions, want) {
 			t.Fatalf("instructions miss %q", want)
