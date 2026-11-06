@@ -29,7 +29,15 @@ import {
   type Conversation,
 } from "../api/assistant";
 import { ApiError } from "../api/client";
-import { deploy, openAppWindow, webviewSnapshot, webviewSnapshotSupported } from "../ipc";
+import {
+  deploy,
+  openAppWindow,
+  setAppsPage,
+  setListed,
+  webviewSnapshot,
+  webviewSnapshotSupported,
+  type Access,
+} from "../ipc";
 import { connectedServer } from "../connection";
 import { getVision } from "../api/vision";
 import { developerModeOn } from "../devMode";
@@ -1212,6 +1220,23 @@ function ActionCard({
               setError(String(e)),
             );
           else setError("Deploying needs a server: connect one in Settings → Server.");
+        } else if (applied?.type === "set_apps_page" || applied?.type === "list_on_apps_page") {
+          // The server's host changes it: Commitarium only recorded the approval.
+          if (!connectedServer()) {
+            setError("The apps page needs a server: connect one in Settings → Server.");
+          } else if (applied.type === "list_on_apps_page") {
+            const project = typeof scope === "string" ? scope : scope.scope;
+            void setListed(project, applied.how !== "hide").catch((e) => setError(String(e)));
+          } else {
+            const access = applied.how === "off" ? null : (applied.how as Access);
+            void setAppsPage(access).catch((e) =>
+              setError(
+                access === "private"
+                  ? "The apps page needs a password first: choose one in Settings → Server → Apps page."
+                  : String(e),
+              ),
+            );
+          }
         } else if (applied?.type === "create_app" && applied.project_id) {
           void openAppWindow(applied.project_id, applied.title);
         } else if (applied?.type === "plan_project" && applied.project_id) {
@@ -1283,11 +1308,17 @@ function ActionCard({
                                           ? "Build it"
                                           : action.type === "deploy_app"
                                             ? "Deploy the latest version"
-                                            : action.type === "start_planning"
-                                              ? "Plan it first"
-                                              : action.type === "update_plan"
-                                                ? "Update the plan"
-                                                : "Switch models";
+                                            : action.type === "set_apps_page"
+                                              ? appsPageQuestion(action.how).replace("?", "")
+                                              : action.type === "list_on_apps_page"
+                                                ? action.how === "hide"
+                                                  ? "Hide this app on the apps page"
+                                                  : "List this app on the apps page"
+                                                : action.type === "start_planning"
+                                                  ? "Plan it first"
+                                                  : action.type === "update_plan"
+                                                    ? "Update the plan"
+                                                    : "Switch models";
   const models = [
     action.lead_model &&
       `Lead ${action.lead_agent ? agentName(agents, action.lead_agent) + " · " : ""}${modelName(action.lead_model)}`,
@@ -1312,7 +1343,16 @@ function ActionCard({
               ? [`The plan is ready: ${appliedWhat(action.title) || "build it"}`, "Build it"]
               : action.type === "deploy_app"
                 ? ["Deploy the latest version, so visitors see it?", "Deploy"]
-                : [`${APPLY_LABEL[action.type]} ${what}?`, APPLY_LABEL[action.type]];
+                : action.type === "set_apps_page"
+                  ? [appsPageQuestion(action.how), action.how === "off" ? "Turn off" : "Turn on"]
+                  : action.type === "list_on_apps_page"
+                    ? [
+                        action.how === "hide"
+                          ? "Hide this app on the apps page?"
+                          : "List this app on the apps page?",
+                        action.how === "hide" ? "Hide it" : "List it",
+                      ]
+                    : [`${APPLY_LABEL[action.type]} ${what}?`, APPLY_LABEL[action.type]];
     return (
       <div
         className={`assistant-action assistant-action--proposed ${held ? "assistant-action--held" : ""}`}
@@ -1633,8 +1673,24 @@ const APPLY_LABEL: Record<AssistantAction["type"], string> = {
   update_plan: "Update",
   build_plan: "Build it",
   deploy_app: "Deploy",
+  set_apps_page: "Change",
+  list_on_apps_page: "Change",
   start_planning: "Start plan mode",
 };
+
+/** The question on an apps page card, by who may open it. */
+function appsPageQuestion(how: string | undefined): string {
+  switch (how) {
+    case "off":
+      return "Turn the apps page off?";
+    case "public":
+      return "Turn on the apps page, open to anyone?";
+    case "company":
+      return "Turn on the apps page, behind company sign-in?";
+    default:
+      return "Turn on the apps page, behind its password?";
+  }
+}
 
 const STATUS_LABEL: Record<AssistantAction["status"], string> = {
   proposed: "Proposed",

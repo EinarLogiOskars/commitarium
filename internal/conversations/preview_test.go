@@ -122,6 +122,12 @@ func TestADeployAlwaysWaitsForTheUser(t *testing.T) {
 	}
 	stored.Actions = append(stored.Actions, Action{ID: "act_deploy", Status: ActionProposed,
 		AssistantAction: featureartifact.AssistantAction{Type: featureartifact.AssistantDeployApp, Reason: "Asked to ship it"}})
+	// Nor does the apps page change on its own: it is in front of visitors too.
+	stored.Actions = append(stored.Actions,
+		Action{ID: "act_page", Status: ActionProposed, AssistantAction: featureartifact.AssistantAction{
+			Type: featureartifact.AssistantSetAppsPage, Reason: "Asked", How: "public"}},
+		Action{ID: "act_list", Status: ActionProposed, AssistantAction: featureartifact.AssistantAction{
+			Type: featureartifact.AssistantListOnAppsPage, Reason: "Asked", How: "hide"}})
 	if err := service.write(stored); err != nil {
 		t.Fatal(err)
 	}

@@ -8,12 +8,16 @@ import {
   setAppAccess,
   setAppGroups,
   setAppPassword,
+  setAppsPage,
+  setListed,
+  checkAppsPageName,
   openExternal,
   publishApp,
   publishing as readPublishing,
   stopDeployment,
   unpublishApp,
   type Access,
+  type AppsPage,
   type Deploy,
   type Deployment,
   type PublishedApp,
@@ -34,6 +38,7 @@ function useDeployment(projectId: string) {
   const [published, setPublished] = useState<PublishedApp | null>(null);
   const [domain, setDomain] = useState<string | null>(null);
   const [companySignIn, setCompanySignIn] = useState(false);
+  const [appsPage, setAppsPageShown] = useState<AppsPage | null>(null);
   const [versions, setVersions] = useState<Version[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -49,6 +54,7 @@ function useDeployment(projectId: string) {
       setPublished(overview.apps.find((app) => app.project_id === projectId) ?? null);
       setDomain(overview.domain);
       setCompanySignIn(overview.sign_in !== null);
+      setAppsPageShown(overview.apps_page);
       setReadError(null);
     } catch (e) {
       setReadError(String(e));
@@ -120,6 +126,7 @@ function useDeployment(projectId: string) {
     published,
     domain,
     companySignIn,
+    appsPage,
     versions,
     busy,
     error: error ?? readError,
@@ -211,6 +218,7 @@ export function DeploymentPage({ projectId, name }: { projectId: string; name: s
     published,
     domain,
     companySignIn,
+    appsPage,
     versions,
     busy,
     error,
@@ -299,6 +307,7 @@ export function DeploymentPage({ projectId, name }: { projectId: string; name: s
           name={name}
           domain={domain}
           companySignIn={companySignIn}
+          appsPage={appsPage}
           published={published}
           busy={busy}
           act={act}
@@ -329,6 +338,7 @@ function Address({
   name,
   domain,
   companySignIn,
+  appsPage,
   published,
   busy,
   act,
@@ -339,6 +349,7 @@ function Address({
   domain: string | null;
   /** Whether the server has a company sign-in provider connected. */
   companySignIn: boolean;
+  appsPage: AppsPage | null;
   published: PublishedApp | null;
   busy: boolean;
   act: (work: () => Promise<unknown>) => Promise<void>;
@@ -471,6 +482,24 @@ function Address({
               Cancel
             </button>
           </div>
+        )}
+        {appsPage ? (
+          <label className="set__row deploy-listed">
+            <input
+              type="checkbox"
+              checked={published.listed}
+              disabled={busy}
+              onChange={(e) => void act(() => setListed(projectId, e.target.checked))}
+            />
+            <span>
+              Listed on the{" "}
+              <button className="shell-card__link" onClick={() => void openExternal(appsPage.url)}>
+                apps page
+              </button>
+            </span>
+          </label>
+        ) : (
+          <AppsPageOffer domain={domain} access={published.access} busy={busy} act={act} />
         )}
         {published.access === "private" && (
           <p className="muted shell-card__text">
@@ -680,6 +709,116 @@ function Address({
         Put online
       </button>
       <div className="row deploy-links">{stop}</div>
+    </div>
+  );
+}
+
+/** Whether this device was asked about the apps page for this server. */
+const offerKey = (domain: string) => `commitarium:apps-page-offer:${domain}`;
+
+function asked(domain: string): boolean {
+  try {
+    return localStorage.getItem(offerKey(domain)) !== null;
+  } catch {
+    return false;
+  }
+}
+
+// Once an app has an address on a server without an apps page, offer one,
+// with this app's access; asked once (APPS_PAGE_PLAN.md, A3).
+function AppsPageOffer({
+  domain,
+  access,
+  busy,
+  act,
+}: {
+  domain: string;
+  access: Access;
+  busy: boolean;
+  act: (work: () => Promise<unknown>) => Promise<void>;
+}) {
+  const [hidden, setHidden] = useState(() => asked(domain));
+  const [password, setPassword] = useState("");
+  const [name, setName] = useState("apps");
+  // Whether apps.<domain> is free: a company may use it already. Asked once,
+  // so the offer says so before Turn on rather than after.
+  const [taken, setTaken] = useState<string | null>(null);
+  useEffect(() => {
+    if (hidden) return;
+    let live = true;
+    checkAppsPageName("apps").catch((e) => live && setTaken(String(e)));
+    return () => {
+      live = false;
+    };
+  }, [hidden]);
+  if (hidden) return null;
+  const dismiss = () => {
+    try {
+      localStorage.setItem(offerKey(domain), "asked");
+    } catch {
+      // Not kept: it is asked again next time, nothing worse.
+    }
+    setHidden(true);
+  };
+  const how =
+    access === "company"
+      ? "behind company sign-in, where each person sees the apps they can open"
+      : access === "private"
+        ? "behind a password of its own"
+        : "open to anyone";
+  return (
+    <div className="deploy-offer">
+      <p className="shell-card__text">
+        <strong>Turn on an apps page?</strong> One address lists your apps in one place, to open in
+        any browser or on a phone. It would be {how}, like this app. Either way, you can turn it on,
+        change it or turn it off any time in Settings → Server → Apps page.
+      </p>
+      {taken && <p className="muted shell-card__text">{taken}</p>}
+      <label className="muted">
+        Address
+        <span className="deploy-address__name">
+          <input
+            aria-label="Apps page address"
+            value={name}
+            autoCapitalize="off"
+            autoCorrect="off"
+            spellCheck={false}
+            onChange={(e) => {
+              setName(e.target.value);
+              setTaken(null);
+            }}
+          />
+          <span className="muted">.{domain}</span>
+        </span>
+      </label>
+      {access === "private" && (
+        <input
+          aria-label="Apps page password"
+          placeholder="A password for the apps page"
+          autoCapitalize="off"
+          autoCorrect="off"
+          spellCheck={false}
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+        />
+      )}
+      <div className="row deploy-actions">
+        <button
+          className="primary"
+          disabled={busy || !name.trim() || (access === "private" && !password)}
+          onClick={() =>
+            void act(async () => {
+              await setAppsPage(access, access === "private" ? password : undefined, name);
+              dismiss();
+            })
+          }
+        >
+          Turn on
+        </button>
+        <button className="ghost" disabled={busy} onClick={dismiss}>
+          Not now
+        </button>
+      </div>
     </div>
   );
 }

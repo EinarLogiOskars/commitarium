@@ -508,6 +508,15 @@ func (api *API) approveConversationActionHandler(w http.ResponseWriter, r *http.
 	case featureartifact.AssistantDeployApp:
 		// The server's host deploys; the app that approved this asks it to.
 		result, ok = "Deploying the latest version for visitors.", true
+	case featureartifact.AssistantSetAppsPage:
+		// The server's host changes it; the app that approved this asks it to.
+		result, ok = appsPageResult(action.How), true
+	case featureartifact.AssistantListOnAppsPage:
+		if action.How == "hide" {
+			result, ok = "Hiding this app on the apps page.", true
+		} else {
+			result, ok = "Listing this app on the apps page.", true
+		}
 	case featureartifact.AssistantWriteVision:
 		result, helper, ok = api.applyWriteVision(w, r, scope, action)
 	case featureartifact.AssistantAnswerHelper:
@@ -1010,4 +1019,18 @@ func (api *API) applyAddVisionItem(
 		return "", false
 	}
 	return fmt.Sprintf("Added \u201c%s\u201d to the vision as P%d.", action.Title, action.Priority), true
+}
+
+// appsPageResult says what an approved apps page card changes.
+func appsPageResult(how string) string {
+	switch how {
+	case "off":
+		return "Turning the apps page off."
+	case "public":
+		return "Turning the apps page on, open to anyone."
+	case "company":
+		return "Turning the apps page on, behind company sign-in."
+	default:
+		return "Turning the apps page on, behind its password."
+	}
 }

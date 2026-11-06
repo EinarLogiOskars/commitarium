@@ -61,6 +61,8 @@ export type AssistantActionType =
   | "update_plan"
   | "build_plan"
   | "deploy_app"
+  | "set_apps_page"
+  | "list_on_apps_page"
   | "start_planning";
 
 export interface AssistantAction {
@@ -84,7 +86,19 @@ export interface AssistantAction {
    * the assistant's answer. */
   guidance?: string;
   /** For recover_work_order: how it recovers the blocked run. */
-  how?: "" | "recheck" | "continue" | "message" | "fresh_conversation" | "back_to_ready";
+  how?:
+    | ""
+    | "recheck"
+    | "continue"
+    | "message"
+    | "fresh_conversation"
+    | "back_to_ready"
+    | "public"
+    | "private"
+    | "company"
+    | "off"
+    | "list"
+    | "hide";
   /** For answer_helper: the helper it answers; for a card from a helper's
    * result, the helper that proposed it (ADR-035). */
   helper?: string;

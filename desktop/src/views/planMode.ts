@@ -229,6 +229,7 @@ const ONE_AT_A_TIME = new Set<AssistantActionType>([
   "start_planning",
   "build_plan",
   "deploy_app",
+  "set_apps_page",
   "start_autopilot",
 ]);
 
