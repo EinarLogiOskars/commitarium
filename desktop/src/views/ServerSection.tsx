@@ -893,6 +893,8 @@ export function HomelabSettings({ onLeave }: { onLeave?: () => void }) {
   const [confirming, setConfirming] = useState(false);
   // Turning off would cut this computer off: why, and the way back it tried.
   const [stranded, setStranded] = useState<{ tried: string | null } | null>(null);
+  // Turned off anyway: this computer can no longer reach the server.
+  const [lost, setLost] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -978,6 +980,16 @@ export function HomelabSettings({ onLeave }: { onLeave?: () => void }) {
         }
       }
       connectWhenReady = false;
+      if (onTailscale && anyway) {
+        // The answer would come back through Tailscale, which this stops: it
+        // may never arrive, so the server is taken as switched either way.
+        await Promise.race([
+          setReach("internet").catch(() => undefined),
+          new Promise((done) => setTimeout(done, 8000)),
+        ]);
+        setLost(true);
+        return;
+      }
       await setReach("internet");
       // The window shows the server from its new address, as on a switch.
       if (onTailscale) {
@@ -999,6 +1011,25 @@ export function HomelabSettings({ onLeave }: { onLeave?: () => void }) {
     setStranded(null);
   };
   const oldLinks = overview.apps.length > 0 ? " Anyone with an old link needs the new one." : "";
+
+  if (lost) {
+    return (
+      <section className="set__section">
+        <h3 className="set__heading">Homelab</h3>
+        <div className="set__warning" role="alert">
+          <p className="set__note">
+            <strong>Homelab is off, and this computer can no longer reach the server.</strong> To
+            connect again, on the same network as the server, run{" "}
+            <code>sudo commitarium-host pair</code> on it and paste the line it prints into
+            Commitarium, under Connect a server.
+          </p>
+          <div className="set__row">
+            <button onClick={() => void showPlace(null)}>Show this computer</button>
+          </div>
+        </div>
+      </section>
+    );
+  }
 
   return (
     <section className="set__section">
