@@ -313,12 +313,22 @@ pub async fn move_server(
         .ok_or("this server is not paired")?;
     let address = address.trim().to_string();
     let client = host_client(&device_identity()?, &fingerprint)?;
-    let reached = client
-        .get(format!("https://{address}/v1/version"))
+    let answer = client
+        .get(format!("https://{address}/host/v1/version"))
         .timeout(std::time::Duration::from_secs(10))
         .send()
-        .await
-        .is_ok_and(|response| response.status().is_success());
+        .await;
+    let reached = match &answer {
+        Ok(response) if response.status().is_success() => true,
+        Ok(response) => {
+            eprintln!("[remote] {address} answered {}", response.status());
+            false
+        }
+        Err(error) => {
+            eprintln!("[remote] could not reach {address}: {error:?}");
+            false
+        }
+    };
     if !reached {
         // Tailscale's addresses are 100.64.0.0/10.
         let tailscale = address
