@@ -640,7 +640,7 @@ impl Publishing {
             issuer: connection.issuer,
             client_id: connection.client_id,
             client_secret: connection.client_secret,
-            scopes: None,
+            scopes: Some(authentik::SCOPES.into()),
             groups_claim: None,
             cookie_secret,
         };

@@ -23,6 +23,14 @@ const IMAGE: &str = "quay.io/oauth2-proxy/oauth2-proxy:v7.12.0";
 /// Which provider settings the running gate was started with.
 const SPEC_LABEL: &str = "commitarium.sign-in.spec";
 const DEFAULT_SCOPES: &str = "openid email profile";
+/// A person who opens no app for this long signs in again, so a device left
+/// signed in somewhere does not stay open for days. The provider's own
+/// session lasts as long (authentik's is set so), or it would sign them
+/// straight back in.
+pub const SIGN_IN_LASTS_HOURS: u32 = 8;
+/// How often the gate asks the provider whether a person may still sign in:
+/// someone removed there, or moved out of a group, loses access within it.
+const CHECK_EVERY: &str = "1h";
 /// Who signed in, as the gate answers it, and as the app receives it. Caddy
 /// removes the app's names from every request first, so none is forged.
 const IDENTITY: &[(&str, &str)] = &[
@@ -235,6 +243,9 @@ pub(crate) fn arguments(provider: &Provider, domain: &str) -> Vec<String> {
         format!("--http-address=127.0.0.1:{PORT}"),
         "--cookie-secure=true".into(),
         "--cookie-name=_commitarium_sign_in".into(),
+        // Each check renews the cookie, so only unused sign-ins run out.
+        format!("--cookie-expire={SIGN_IN_LASTS_HOURS}h"),
+        format!("--cookie-refresh={CHECK_EVERY}"),
         "--code-challenge-method=S256".into(),
         "--email-domain=*".into(),
         "--reverse-proxy=true".into(),
@@ -493,6 +504,8 @@ mod tests {
         assert!(arguments.contains("--cookie-domain=.example.com"));
         assert!(arguments.contains("--scope=openid email profile"));
         assert!(arguments.contains("--http-address=127.0.0.1:4180"));
+        assert!(arguments.contains("--cookie-expire=8h"));
+        assert!(arguments.contains("--cookie-refresh=1h"));
     }
 
     #[test]

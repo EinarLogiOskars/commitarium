@@ -229,6 +229,10 @@ pub fn issuer(domain: &str) -> String {
     format!("https://{NAME}.{domain}/application/o/{APPLICATION}/")
 }
 
+/// What the gate asks authentik for: offline_access brings refresh tokens,
+/// with which the gate checks each hour that a person may still sign in.
+pub const SCOPES: &str = "openid email profile offline_access";
+
 /// Where authentik ends a person's session, as its discovery names it.
 pub fn end_session(issuer: &str) -> String {
     format!("{}/end-session/", issuer.trim_end_matches('/'))
@@ -448,7 +452,8 @@ impl Api<'_> {
             .unwrap_or_default()
             .into_iter()
             .filter(|mapping| {
-                ["openid", "profile"].iter().any(|scope| {
+                // offline_access: refresh tokens, for the gate's hourly check.
+                ["openid", "profile", "offline_access"].iter().any(|scope| {
                     mapping["managed"] == format!("goauthentik.io/providers/oauth2/scope-{scope}")
                 })
             })
@@ -483,6 +488,20 @@ impl Api<'_> {
                 self.call(reqwest::Method::POST, "providers/oauth2/", Some(provider))?["pk"].clone()
             }
         };
+        // Its sign-in lasts as long as the gate's: a session kept for the
+        // browser's life would sign a person straight back in.
+        if let Some(login) = self.first("stages/user_login/?name=default-authentication-login")? {
+            self.call(
+                reqwest::Method::PATCH,
+                &format!(
+                    "stages/user_login/{}/",
+                    login["pk"].as_str().unwrap_or_default()
+                ),
+                Some(json!({
+                    "session_duration": format!("hours={}", crate::sign_in::SIGN_IN_LASTS_HOURS),
+                })),
+            )?;
+        }
         if self
             .first(&format!("core/applications/?slug={APPLICATION}"))?
             .is_none()
