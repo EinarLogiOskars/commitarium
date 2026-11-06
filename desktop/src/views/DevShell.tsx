@@ -748,7 +748,16 @@ export function DevShell({
                   className={`chat-side__item ${
                     selection.scope === p.id && !open ? "chat-side__item--on" : ""
                   }`}
-                  onClick={() => expand(p.id, !expanded.has(p.id))}
+                  onClick={() => {
+                    const opening = !expanded.has(p.id);
+                    expand(p.id, opening);
+                    // Opening a project opens its top chat, unless one of
+                    // its chats is already on screen.
+                    if (opening && selection.scope !== p.id) {
+                      const top = chats[p.id]?.[0];
+                      select(top ? { scope: p.id, chat: top.id } : { scope: p.id });
+                    }
+                  }}
                   aria-expanded={open}
                   title={p.name}
                 >
