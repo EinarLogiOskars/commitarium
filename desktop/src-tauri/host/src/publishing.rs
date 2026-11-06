@@ -1211,9 +1211,6 @@ fn sign_in_names_point_here(settings: &Settings, names: &[&str]) -> Result<(), S
     }
 }
 
-/// Caddy's whole configuration. A published app with a running deployment
-/// gets a route to it, behind its password when private; one without gets
-/// the "not running" page. Any other name gets "No app here".
 /// One app's route: who may open it, then the app, or the "not running" page.
 fn app_route(
     settings: &Settings,
@@ -1255,6 +1252,9 @@ fn app_route(
     json!({"match": [{"host": [host]}], "handle": handle, "terminal": true})
 }
 
+/// Caddy's whole configuration. A published app with a running deployment
+/// gets a route to it, behind its password when private; one without gets
+/// the "not running" page. Any other name gets "No app here".
 fn caddy_config(settings: &Settings, running: &BTreeMap<String, u16>, authentik: bool) -> Value {
     let domain = settings.domain.as_deref().unwrap_or_default();
     let page_origin = settings
@@ -1341,10 +1341,11 @@ fn private_caddy_config(
     let origin = format!("https://{name}");
     let page_origin = settings.apps_page.as_ref().map(|_| origin.as_str());
     let mut home = Vec::new();
-    if let Some(page) = &settings.apps_page {
-        home.push(apps_page_route(settings, page, name, ""));
+    match &settings.apps_page {
+        Some(page) => home.push(apps_page_route(settings, page, name, "")),
+        // The bare name is where people look for their apps.
+        None => home.push(json!({"handle": [page(404, APPS_PAGE_OFF)]})),
     }
-    home.push(json!({"handle": [page(404, NO_APP)]}));
     let mut servers = serde_json::Map::new();
     servers.insert("apps".into(), server(443, home));
     for (project_id, route) in &settings.apps {
@@ -1373,6 +1374,8 @@ fn page(status: u16, text: &str) -> Value {
 
 const NOT_RUNNING: &str = "This app is starting or has stopped. Try again in a moment.";
 const NO_APP: &str = "No app here.";
+const APPS_PAGE_OFF: &str =
+    "The apps page is off. Turn it on in Commitarium under Settings → Server → Apps page.";
 const NOT_YOURS: &str = "You are signed in, but this app is for other groups at your company.";
 const NO_SIGN_IN: &str = "This app opens with company sign-in, which is not set up.";
 const NO_PROVIDER: &str = "connect your company's sign-in in Settings first";
@@ -2037,6 +2040,19 @@ mod tests {
         );
         // Not ready yet: nowhere to serve.
         assert!(settings.base(None).is_none());
+
+        // Without the apps page, the bare name says how to turn it on.
+        let off = private_caddy_config(
+            &settings,
+            &BTreeMap::new(),
+            "homelab.tail1234.ts.net",
+            "100.64.0.7",
+        );
+        let body = off["apps"]["http"]["servers"]["apps"]["routes"][0]["handle"][0]["body"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert!(body.contains("The apps page is off"));
 
         settings.apps_page = Some(AppsPage {
             name: "apps".into(),
