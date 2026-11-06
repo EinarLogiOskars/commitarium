@@ -227,6 +227,9 @@ export function DeployCard({
         )
       )}
       {failure && <p className="sync-card__error">It did not start.</p>}
+      {current && published?.record_problem && published.record_problem !== error && (
+        <DeployError error={published.record_problem} />
+      )}
       {error && <DeployError error={error} />}
       <div className="row deploy-actions">
         <button
@@ -310,6 +313,9 @@ export function DeploymentPage({ projectId, name }: { projectId: string; name: s
         </dl>
       )}
       {failure && <p className="sync-card__error">It did not start: {failure}</p>}
+      {current && published?.record_problem && published.record_problem !== error && (
+        <DeployError error={published.record_problem} />
+      )}
       {error && <DeployError error={error} />}
       <div className="row deploy-actions">
         <button

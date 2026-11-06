@@ -235,6 +235,8 @@ function DomainSection({ onLeave }: { onLeave?: () => void }) {
   const full = domains.length >= 1;
   const address = overview.server_address ?? "this server's address";
   const shown = form?.domain.trim().replace(/^\*\./, "") || "example.com";
+  // With a record for each address: the apps whose address has none yet.
+  const missing = overview.apps.filter((app) => app.record_problem?.includes("does not point"));
   const save = () =>
     form && void run(() => setDomain(form.domain, form.records)).then((ok) => ok && setForm(null));
 
@@ -269,6 +271,18 @@ function DomainSection({ onLeave }: { onLeave?: () => void }) {
           </button>
         </div>
       ))}
+      {missing.length > 0 && !form && (
+        <div className="set__note">
+          <p>Add these A records at your DNS provider, so each app opens at its address:</p>
+          <ul className="domain-missing">
+            {missing.map((app) => (
+              <li key={app.project_id}>
+                <code>{app.url.replace(/^https:\/\//, "")}</code> → <code>{address}</code>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
       {form ? (
         <div className="domain-form">
           <input

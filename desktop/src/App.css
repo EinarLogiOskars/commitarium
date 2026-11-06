@@ -7372,3 +7372,10 @@ button.shell-agent:hover {
   align-items: center;
   gap: 10px;
 }
+
+.domain-missing {
+  margin: 4px 0 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 2px;
+}

@@ -114,6 +114,8 @@ export interface PublishedApp {
   groups: string[];
   /** Whether the apps page lists it. */
   listed: boolean;
+  /** With a record for each address: what is wrong with its record, when it does not point here. */
+  record_problem: string | null;
 }
 
 /** The apps page at apps.<domain> (APPS_PAGE_PLAN.md), when it is on. */

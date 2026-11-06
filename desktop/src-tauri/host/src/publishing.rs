@@ -250,6 +250,9 @@ pub struct PublishedApp {
     groups: Vec<String>,
     /// Whether the apps page lists it.
     listed: bool,
+    /// With a record for each name: what is wrong with its record, when its
+    /// address does not point here (such as after the domain changed).
+    record_problem: Option<String>,
 }
 
 /// The apps page as a client sees it.
@@ -335,6 +338,9 @@ impl Publishing {
         let running = deployments.running_ports();
         let tailnet = (settings.reach == Reach::Private).then(|| self.tailscale.status());
         let base = settings.base(tailnet.as_ref());
+        // Each name needs its own record; a wildcard covers them all.
+        let check_records =
+            settings.reach == Reach::Internet && settings.records == Records::EachName;
         Ok(Overview {
             server_address: server_address().map(|ip| ip.to_string()),
             apps: settings
@@ -348,6 +354,11 @@ impl Publishing {
                     live: running.contains_key(project_id),
                     groups: route.groups.clone(),
                     listed: route.listed,
+                    record_problem: settings
+                        .domain
+                        .as_deref()
+                        .filter(|_| check_records)
+                        .and_then(|domain| points_here(&route.name, domain).err()),
                 })
                 .collect(),
             apps_page: settings.apps_page.as_ref().and_then(|page| {
