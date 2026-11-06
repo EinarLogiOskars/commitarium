@@ -234,6 +234,9 @@ pub async fn connect_to_server(app: AppHandle, line: String) -> Result<(), Strin
     let mut saved = load(&app)?.unwrap_or_default();
     saved.remember(host.clone());
     save(&app, &saved)?;
+    // Paired again, perhaps at another address: an open bridge goes to the
+    // old one.
+    crate::host::drop_bridge(&app, &host.fingerprint);
     crate::host::show_server(&app, &host).await;
     Ok(())
 }
