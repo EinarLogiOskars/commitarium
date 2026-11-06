@@ -198,10 +198,12 @@ const RECORDS_LABEL: Record<Records, string> = {
 // adding and removing are already shaped for several (MULTI_DOMAIN, 0.12.1).
 function DomainSection({ onLeave }: { onLeave?: () => void }) {
   const [overview, setOverview] = useState<PublishingOverview | null>(null);
-  // The domain being added or edited, if the form is open.
-  const [form, setForm] = useState<{ domain: string; records: Records; editing: boolean } | null>(
-    null,
-  );
+  // The domain being added or edited (`editing`: the one it was), if the form is open.
+  const [form, setForm] = useState<{
+    domain: string;
+    records: Records;
+    editing: string | null;
+  } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -254,7 +256,7 @@ function DomainSection({ onLeave }: { onLeave?: () => void }) {
           <button
             className="ghost"
             disabled={busy || form !== null}
-            onClick={() => setForm({ ...item, editing: true })}
+            onClick={() => setForm({ ...item, editing: item.domain })}
           >
             Edit
           </button>
@@ -273,7 +275,6 @@ function DomainSection({ onLeave }: { onLeave?: () => void }) {
             aria-label="Domain"
             placeholder="example.com"
             value={form.domain}
-            disabled={form.editing}
             onChange={(e) => setForm({ ...form, domain: e.target.value })}
           />
           <label className="set__row">
@@ -302,9 +303,15 @@ function DomainSection({ onLeave }: { onLeave?: () => void }) {
               <code>{address}</code>. Commitarium tells you which one when you deploy.
             </Hint>
           </label>
+          {form.editing !== null && form.domain.trim() !== form.editing && (
+            <p className="muted set__note">
+              Apps here keep their names and move to the new domain; their old addresses stop
+              working.
+            </p>
+          )}
           <div className="set__row">
             <button disabled={busy || !form.domain.trim()} onClick={save}>
-              {busy ? "Checking…" : form.editing ? "Save" : "Add"}
+              {busy ? "Checking…" : form.editing !== null ? "Save" : "Add"}
             </button>
             <button
               className="ghost"
@@ -323,7 +330,7 @@ function DomainSection({ onLeave }: { onLeave?: () => void }) {
           <button
             disabled={busy || full}
             title={full ? "One domain per server for now" : undefined}
-            onClick={() => setForm({ domain: "", records: "wildcard", editing: false })}
+            onClick={() => setForm({ domain: "", records: "wildcard", editing: null })}
           >
             Add domain
           </button>
