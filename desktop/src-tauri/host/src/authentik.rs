@@ -229,6 +229,11 @@ pub fn issuer(domain: &str) -> String {
     format!("https://{NAME}.{domain}/application/o/{APPLICATION}/")
 }
 
+/// Where authentik ends a person's session, as its discovery names it.
+pub fn end_session(issuer: &str) -> String {
+    format!("{}/end-session/", issuer.trim_end_matches('/'))
+}
+
 fn admin_url(domain: &str) -> String {
     format!("https://{NAME}.{domain}/if/admin/")
 }

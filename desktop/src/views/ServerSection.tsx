@@ -392,6 +392,15 @@ function SignInSection({ onLeave }: { onLeave?: () => void }) {
     void run(installAuthentik).finally(() => setInstalling(false));
   };
   const redirect = provider?.redirect_url ?? `https://sign-in.${overview.domain}/oauth2/callback`;
+  const signOut = provider?.sign_out_url && (
+    <p className="muted set__note">
+      Sign out of every app: <code>{provider.sign_out_url}</code>
+      <Hint label="About signing out">
+        Ends the company sign-in session for every app on this server. The apps page links it; ask
+        Mayka to add a Sign out link to an app.
+      </Hint>
+    </p>
+  );
   const field = (key: keyof ConnectSignIn) => ({
     value: asked[key] ?? "",
     autoCapitalize: "off",
@@ -433,6 +442,7 @@ function SignInSection({ onLeave }: { onLeave?: () => void }) {
               )}
             </p>
           )}
+          {signOut}
           <div className="set__row">
             <button
               disabled={busy}
@@ -462,6 +472,7 @@ function SignInSection({ onLeave }: { onLeave?: () => void }) {
           <p className="muted set__note">
             Registered sign-in address: <code>{redirect}</code>
           </p>
+          {signOut}
           <div className="set__row">
             <button
               disabled={busy}

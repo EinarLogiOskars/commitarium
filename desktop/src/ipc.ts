@@ -132,6 +132,8 @@ export interface SignInProvider {
   groups_claim: string;
   /** The address to register with the provider; null until the domain is set. */
   redirect_url: string | null;
+  /** Signs a person out of every app on the server; null until the domain is set. */
+  sign_out_url: string | null;
 }
 
 export interface ConnectSignIn {

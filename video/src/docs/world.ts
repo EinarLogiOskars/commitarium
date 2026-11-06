@@ -180,6 +180,7 @@ const host: [RegExp, Answer][] = [
             scopes: "openid email profile",
             groups_claim: "groups",
             redirect_url: "https://sign-in.example.com/oauth2/callback",
+            sign_out_url: "https://sign-in.example.com/sign-out",
           }
         : null,
       authentik: {

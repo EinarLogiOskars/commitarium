@@ -636,6 +636,7 @@ impl Publishing {
             None => sign_in::new_cookie_secret()?,
         };
         let provider = Provider {
+            end_session: Some(authentik::end_session(&connection.issuer)),
             issuer: connection.issuer,
             client_id: connection.client_id,
             client_secret: connection.client_secret,
@@ -804,6 +805,20 @@ impl Publishing {
 
     /// The apps the apps page shows to someone with these groups, when the
     /// page is behind company sign-in. `None` when it is off.
+    /// Where a person signs out of every app, when the apps page is behind
+    /// company sign-in: the page offers it.
+    pub fn apps_page_sign_out(&self) -> Result<Option<String>, String> {
+        let settings = self.read()?;
+        let company = settings
+            .apps_page
+            .as_ref()
+            .is_some_and(|page| page.access == Access::Company);
+        Ok(match (&settings.sign_in, &settings.domain) {
+            (Some(_), Some(domain)) if company => Some(sign_in::sign_out_url(domain)),
+            _ => None,
+        })
+    }
+
     pub fn catalog(
         &self,
         deployments: &Deployments,
@@ -1255,8 +1270,8 @@ fn caddy_config(settings: &Settings, running: &BTreeMap<String, u16>, authentik:
         let host = format!("{}.{domain}", page.name);
         routes.insert(0, apps_page_route(settings, page, &host, domain));
     }
-    if settings.sign_in.is_some() {
-        routes.insert(0, sign_in::caddy_route(domain));
+    if let Some(provider) = &settings.sign_in {
+        routes.insert(0, sign_in::caddy_route(domain, provider));
     }
     if authentik {
         routes.insert(
@@ -1609,6 +1624,7 @@ mod tests {
             scopes: None,
             groups_claim: None,
             cookie_secret: "c".repeat(32),
+            end_session: None,
         });
         let running = BTreeMap::from([("prj_todo".to_string(), 32778)]);
         let config = caddy_config(&settings, &running, false);
@@ -1621,7 +1637,7 @@ mod tests {
         assert_eq!(todo["handle"][2]["upstreams"][0]["dial"], "127.0.0.1:32778");
         let sign_in = route(&config, "sign-in.example.com");
         assert_eq!(
-            sign_in["handle"][0]["upstreams"][0]["dial"],
+            sign_in["handle"][0]["routes"][1]["handle"][0]["upstreams"][0]["dial"],
             "127.0.0.1:4180"
         );
         // authentik on this server gets its own address.
@@ -1655,6 +1671,7 @@ mod tests {
             scopes: None,
             groups_claim: None,
             cookie_secret: "c".repeat(32),
+            end_session: None,
         });
         publishing.write(&settings).unwrap();
         publishing.set_access("prj_blog", Access::Company).unwrap();
@@ -1682,6 +1699,7 @@ mod tests {
             scopes: None,
             groups_claim: None,
             cookie_secret: "c".repeat(32),
+            end_session: None,
         }
     }
 
@@ -2091,6 +2109,7 @@ mod tests {
                 scopes: None,
                 groups_claim: None,
                 cookie_secret: "c".repeat(32),
+                end_session: None,
             }
         } else {
             Provider {
@@ -2100,6 +2119,7 @@ mod tests {
                 scopes: None,
                 groups_claim: None,
                 cookie_secret: "c".repeat(32),
+                end_session: None,
             }
         };
         let mut settings = Settings {

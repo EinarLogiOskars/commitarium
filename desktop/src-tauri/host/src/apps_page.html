@@ -27,6 +27,10 @@
   main { max-width: 960px; margin: 0 auto; padding: 48px 16px 64px; }
   h1 { font-size: 28px; font-weight: 600; letter-spacing: -0.02em; margin: 0 0 4px; }
   .where { color: var(--muted); margin: 0 0 32px; }
+  .head { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; }
+  .sign-out { color: var(--muted); font-size: 13px; text-decoration: none; }
+  .sign-out:hover { color: var(--text); }
+  .sign-out[hidden] { display: none; }
   .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
   .app {
     display: flex; align-items: center; gap: 12px; padding: 14px;
@@ -66,7 +70,10 @@
 </head>
 <body>
 <main id="list">
-  <h1>Apps</h1>
+  <div class="head">
+    <h1>Apps</h1>
+    <a class="sign-out" id="sign-out" hidden>Sign out</a>
+  </div>
   <p class="where" id="where"></p>
   <div class="grid" id="apps"></div>
 </main>
@@ -207,6 +214,12 @@
     .then((response) => (response.ok ? response.json() : Promise.reject(response.status)))
     .then((body) => {
       apps = body.apps;
+      // Behind company sign-in: signing out here signs out of every app.
+      if (body.sign_out) {
+        const signOut = document.getElementById("sign-out");
+        signOut.href = body.sign_out;
+        signOut.hidden = false;
+      }
       render();
       route();
     })
