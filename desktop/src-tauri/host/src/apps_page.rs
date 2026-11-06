@@ -50,7 +50,13 @@ fn answer(request: Request, publishing: &Publishing, deployments: &Deployments) 
         json(200, r#"{"signed_in":true}"#)
     } else if path == "/api/apps" {
         match publishing.catalog(deployments, groups.as_deref()) {
-            Ok(Some(apps)) => json(200, &serde_json::json!({ "apps": apps }).to_string()),
+            Ok(Some(apps)) => {
+                let sign_out = publishing.apps_page_sign_out().unwrap_or_default();
+                json(
+                    200,
+                    &serde_json::json!({ "apps": apps, "sign_out": sign_out }).to_string(),
+                )
+            }
             Ok(None) => json(404, r#"{"error":"the apps page is off"}"#),
             Err(error) => {
                 eprintln!("[apps page] {error}");

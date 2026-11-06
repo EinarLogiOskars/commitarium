@@ -34,6 +34,7 @@ const COMMANDS: &[&str] = &[
     "confirm_exit",
     "cancel_exit",
     "exit_prompt_shown",
+    "move_server",
     "notify_attention",
     "create_backup",
     "inspect_backup",

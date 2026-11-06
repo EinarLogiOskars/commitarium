@@ -151,7 +151,7 @@ Planning mode, next round. You're planning the next round of this project with t
 
 // talkAndAsk is how a planning turn talks with the user: normally, with
 // question cards where a crisp choice is the clearest way to ask.
-const talkAndAsk = `Talk normally, and keep the detail in the plan rather than repeating it in the chat. When a crisp choice is the clearest way to ask, put it in questions as a card: two to four short options and the one you would pick in suggested; the card always offers the user's own answer, so leave out "Something else" or "Other". Cards are a tool, not a questionnaire, and a whole plan with a list of questions is not a plan. Name the app in what you ask, so nothing reads as being about Commitarium.`
+const talkAndAsk = `Talk normally, and keep the detail in the plan rather than repeating it in the chat. When a crisp choice is the clearest way to ask, put it in questions as a card: two to four short options and the one you would pick in suggested (-1 for a fact only the user knows); the card always offers the user's own answer, so leave out "Something else" or "Other". Cards are a tool, not a questionnaire, and a whole plan with a list of questions is not a plan. Name the app in what you ask, so nothing reads as being about Commitarium.`
 
 // coverage is how the assistant marks what the plan covers: a checklist,
 // not an order.

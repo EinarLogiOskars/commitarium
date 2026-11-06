@@ -35,6 +35,11 @@ pub struct Saved {
     /// Names the user gave servers, by fingerprint.
     #[serde(default)]
     pub names: BTreeMap<String, String>,
+    /// Where each moved server was reached before, by fingerprint: the way
+    /// back when its new address goes, as Tailscale's does when homelab
+    /// mode is turned off.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub previous: BTreeMap<String, String>,
 }
 
 impl Saved {
@@ -52,10 +57,29 @@ impl Saved {
     fn forget(&mut self, fingerprint: &str) {
         self.hosts.retain(|host| host.fingerprint != fingerprint);
         self.names.remove(fingerprint);
+        self.previous.remove(fingerprint);
         if self.active.as_deref() == Some(fingerprint) {
             self.active = None;
             self.mode = Mode::Local;
         }
+    }
+
+    /// Reaches a paired server at another address, keeping the one it had
+    /// as the way back. Moving does not change which side is shown.
+    fn moved(&mut self, fingerprint: &str, address: &str) -> Option<PairedHost> {
+        let old = self.host(fingerprint)?.address.clone();
+        if old != address {
+            self.previous.insert(fingerprint.to_string(), old);
+        }
+        let moved = PairedHost {
+            address: address.to_string(),
+            fingerprint: fingerprint.to_string(),
+        };
+        let (mode, active) = (self.mode, self.active.clone());
+        self.remember(moved.clone());
+        self.mode = mode;
+        self.active = active;
+        Some(moved)
     }
 
     fn remember(&mut self, host: PairedHost) {
@@ -210,6 +234,9 @@ pub async fn connect_to_server(app: AppHandle, line: String) -> Result<(), Strin
     let mut saved = load(&app)?.unwrap_or_default();
     saved.remember(host.clone());
     save(&app, &saved)?;
+    // Paired again, perhaps at another address: an open bridge goes to the
+    // old one.
+    crate::host::drop_bridge(&app, &host.fingerprint);
     crate::host::show_server(&app, &host).await;
     Ok(())
 }
@@ -220,6 +247,8 @@ pub struct Server {
     address: String,
     /// The user's name for it, else its address.
     name: String,
+    /// Where it was reached before it moved, if it did.
+    previous_address: Option<String>,
 }
 
 /// The sides the window can show: this computer and every paired server.
@@ -249,6 +278,7 @@ fn places_of(saved: &Saved) -> Places {
                     .get(&host.fingerprint)
                     .cloned()
                     .unwrap_or_else(|| host.address.clone()),
+                previous_address: saved.previous.get(&host.fingerprint).cloned(),
             })
             .collect(),
         active: (saved.mode == Mode::Remote)
@@ -268,6 +298,71 @@ pub fn rename_server(app: AppHandle, fingerprint: String, name: String) -> Resul
         name => saved.names.insert(fingerprint, name.to_string()),
     };
     save(&app, &saved)
+}
+
+/// Reaches a paired server at another address from now on, such as its
+/// Tailscale address in homelab mode (HOMELAB_PLAN.md, H4). It is checked
+/// first: the same server answers there, known by its certificate, so
+/// nothing is paired again. A shown server is shown from there at once.
+#[tauri::command]
+pub async fn move_server(
+    app: AppHandle,
+    fingerprint: String,
+    address: String,
+) -> Result<(), String> {
+    let mut saved = load(&app)?.unwrap_or_default();
+    saved
+        .host(&fingerprint)
+        .ok_or("this server is not paired")?;
+    let address = address.trim().to_string();
+    let client = host_client(&device_identity()?, &fingerprint)?;
+    let answer = client
+        .get(format!("https://{address}/host/v1/version"))
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await;
+    let reached = match &answer {
+        Ok(response) if response.status().is_success() => true,
+        Ok(response) => {
+            eprintln!("[remote] {address} answered {}", response.status());
+            false
+        }
+        Err(error) => {
+            eprintln!("[remote] could not reach {address}: {error:?}");
+            false
+        }
+    };
+    if !reached {
+        // Tailscale's addresses are 100.64.0.0/10.
+        let tailscale = address
+            .split('.')
+            .take(2)
+            .map(str::parse::<u8>)
+            .collect::<Result<Vec<_>, _>>()
+            .is_ok_and(|parts| {
+                parts.len() == 2 && parts[0] == 100 && (64..128).contains(&parts[1])
+            });
+        return Err(if tailscale {
+            format!(
+                "Commitarium could not reach your server at {address}. Make sure Tailscale is \
+                 on and signed in on this computer, with the same account as the server, then \
+                 try again."
+            )
+        } else {
+            format!("Commitarium could not reach your server at {address} from this computer.")
+        });
+    }
+    let shown = saved.mode == Mode::Remote && saved.active.as_deref() == Some(fingerprint.as_str());
+    let moved = saved
+        .moved(&fingerprint, &address)
+        .ok_or("this server is not paired")?;
+    save(&app, &saved)?;
+    // The open bridge still goes to the old address.
+    crate::host::drop_bridge(&app, &fingerprint);
+    if shown {
+        crate::host::show_server(&app, &moved).await;
+    }
+    Ok(())
 }
 
 /// Forgets a server on this device. The server still lists this device until
@@ -315,6 +410,25 @@ mod tests {
 
         saved.mode = Mode::Local;
         assert_eq!(places_of(&saved).active, None);
+    }
+
+    #[test]
+    fn a_moved_server_keeps_its_way_back() {
+        let mut saved = Saved::default();
+        saved.remember(host("192.168.1.20:7443", "one"));
+        saved.mode = Mode::Local;
+        saved.moved("one", "100.101.102.103:7443").unwrap();
+        // Moving shows nothing new.
+        assert_eq!(saved.mode, Mode::Local);
+        assert_eq!(saved.hosts[0].address, "100.101.102.103:7443");
+        let places = places_of(&saved);
+        assert_eq!(
+            places.servers[0].previous_address.as_deref(),
+            Some("192.168.1.20:7443")
+        );
+        assert!(saved.moved("two", "1.2.3.4:7443").is_none());
+        saved.forget("one");
+        assert!(saved.previous.is_empty());
     }
 
     #[test]

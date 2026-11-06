@@ -245,3 +245,25 @@ describe("agents card", () => {
     expect(agentSubject(agent("a", { role: "vision_writer" }))).toBe("The project's vision");
   });
 });
+
+describe("work orders whose brief is being written", () => {
+  it("count as working, and a build's item says how it stands", async () => {
+    const { workBoard, buildItemState } = await import("./projectCardData");
+    const order = { id: "fea_a", title: "Search", state: "ready", kind: "feature" } as never;
+    const writer = {
+      id: "w",
+      agent: "claude",
+      role: "brief_writer",
+      work_order_id: "fea_a",
+      state: "working",
+      working: true,
+    } as never;
+    const board = workBoard([order], [], [], [writer]);
+    expect(board.running).toMatchObject([{ id: "fea_a", reason: "Writing its brief" }]);
+    expect(buildItemState(order, [writer])).toEqual({
+      tone: "working",
+      label: "Writing its brief",
+    });
+    expect(buildItemState(order, [])).toEqual({ tone: "queued", label: "Queued" });
+  });
+});

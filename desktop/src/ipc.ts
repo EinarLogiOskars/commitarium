@@ -3,7 +3,7 @@
 // mirrors the commands registered in src-tauri/src/lib.rs and the routes in
 // src-tauri/host/src/server.rs.
 
-import { connectedServer } from "./connection";
+import { connectedServer, TAILSCALE_HINT, throughTailscale } from "./connection";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { fetch } from "@tauri-apps/plugin-http";
@@ -63,6 +63,11 @@ const hostGet = async <T>(path: string): Promise<T> => {
  * middle of an update, may answer with something else for a moment: that is
  * said in words, not as a parsing error. */
 const hostAnswer = async <T>(response: Response): Promise<T> => {
+  // The bridge answers an empty 502 when the server itself does not.
+  if (response.status === 502 && connectedServer()) {
+    const hint = throughTailscale() ? ` ${TAILSCALE_HINT}` : "";
+    throw new Error(`Commitarium can't reach the server right now.${hint}`);
+  }
   const text = await response.text();
   let body: { error?: string } | null;
   try {
@@ -114,6 +119,8 @@ export interface PublishedApp {
   groups: string[];
   /** Whether the apps page lists it. */
   listed: boolean;
+  /** With a record for each address: what is wrong with its record, when it does not point here. */
+  record_problem: string | null;
 }
 
 /** The apps page at apps.<domain> (APPS_PAGE_PLAN.md), when it is on. */
@@ -132,6 +139,8 @@ export interface SignInProvider {
   groups_claim: string;
   /** The address to register with the provider; null until the domain is set. */
   redirect_url: string | null;
+  /** Signs a person out of every app on the server; null until the domain is set. */
+  sign_out_url: string | null;
 }
 
 export interface ConnectSignIn {
@@ -142,6 +151,29 @@ export interface ConnectSignIn {
   groups_claim?: string;
 }
 
+/** Who reaches the apps (HOMELAB_PLAN.md): anyone on the internet at the
+ * server's domain, or only the owner's devices, on their Tailscale network. */
+export type Reach = "internet" | "private";
+/** How the domain's DNS points at the server: one wildcard record, or a
+ * record for each address in use. */
+export type Records = "wildcard" | "each_name";
+/** Where the owner said the server is, asked once. */
+export type Placement = "home" | "cloud" | "other";
+
+/** Tailscale on the server, in the steps the owner goes through. */
+export interface TailscaleStatus {
+  state: "starting" | "needs_login" | "needs_https" | "ready" | "system_signed_out";
+  login_url: string | null;
+  /** Its name on the tailnet, such as homelab.tail1234.ts.net. */
+  name: string | null;
+  /** Its Tailscale address, such as 100.101.102.103. */
+  address: string | null;
+  /** Whether Commitarium runs it, or the server does. */
+  own: boolean;
+  /** Where the owner turns on HTTPS certificates. */
+  https_settings: string;
+}
+
 export interface PublishingOverview {
   domain: string | null;
   server_address: string | null;
@@ -149,6 +181,10 @@ export interface PublishingOverview {
   sign_in: SignInProvider | null;
   authentik: AuthentikStatus;
   apps_page: AppsPage | null;
+  reach: Reach;
+  tailscale: TailscaleStatus | null;
+  records: Records;
+  placement: Placement | null;
 }
 
 /** authentik on the server, for a company without a sign-in provider. */
@@ -169,9 +205,31 @@ export const deploy = (projectId: string, commitId?: string): Promise<PreviewSta
   hostPost("/v1/deployments/deploy", { project_id: projectId, commit_id: commitId ?? null });
 export const stopDeployment = (projectId: string): Promise<void> =>
   hostPost("/v1/deployments/stop", { project_id: projectId });
-export const publishing = (): Promise<PublishingOverview> => hostGet("/v1/publishing");
-export const setDomain = (domain: string): Promise<void> =>
-  hostPost("/v1/publishing/domain", { domain });
+/** A server older than this app leaves out what it does not have yet, so
+ * those parts read as off, not missing. */
+export const publishing = async (): Promise<PublishingOverview> => {
+  const found = await hostGet<Partial<PublishingOverview>>("/v1/publishing");
+  return {
+    ...found,
+    domain: found.domain ?? null,
+    server_address: found.server_address ?? null,
+    apps: (found.apps ?? []).map((app) => ({ ...app, listed: app.listed ?? true })),
+    sign_in: found.sign_in ?? null,
+    apps_page: found.apps_page ?? null,
+    reach: found.reach ?? "internet",
+    tailscale: found.tailscale ?? null,
+    records: found.records ?? "wildcard",
+    placement: found.placement ?? null,
+  } as PublishingOverview;
+};
+export const setDomain = (domain: string, records: Records = "wildcard"): Promise<void> =>
+  hostPost("/v1/publishing/domain", { domain, records });
+/** Lets go of the server's domain; refused while apps or sign-in use it. */
+export const removeDomain = (): Promise<void> => hostPost("/v1/publishing/remove-domain");
+export const setPlacement = (placement: Placement): Promise<void> =>
+  hostPost("/v1/publishing/placement", { placement });
+/** Tells the Server settings that publishing changed, so each part reads it again. */
+export const PUBLISHING_CHANGED = "commitarium:publishing-changed";
 /** A private app needs a password the first time; the user chooses it. */
 export const publishApp = (
   projectId: string,
@@ -215,6 +273,9 @@ export const setAppsPage = (
   name?: string,
 ): Promise<void> =>
   hostPost("/v1/publishing/apps-page", { access, password: password || null, name: name || null });
+/** Every app's address changes: the app asks first. */
+export const setReach = (reach: Reach): Promise<void> =>
+  hostPost("/v1/publishing/reach", { reach });
 /** Rejects with why the apps page could not live at this name. */
 export const checkAppsPageName = (name: string): Promise<void> =>
   hostPost("/v1/publishing/apps-page/check", { name });
@@ -245,6 +306,8 @@ export interface PairedServer {
   address: string;
   /** The user's name for it, else its address. */
   name: string;
+  /** Where it was reached before it moved, if it did: the way back. */
+  previous_address: string | null;
 }
 
 /** This computer and the paired servers; `active` is null for this computer. */
@@ -259,6 +322,10 @@ export const renameServer = (fingerprint: string, name: string): Promise<void> =
   invoke("rename_server", { fingerprint, name });
 export const forgetServer = (fingerprint: string): Promise<void> =>
   invoke("forget_server", { fingerprint });
+/** Reaches a paired server at another address from now on, once it answers
+ * there, such as its Tailscale address. */
+export const moveServer = (fingerprint: string, address: string): Promise<void> =>
+  invoke("move_server", { fingerprint, address });
 
 export const bridgeConnection = (): Promise<{ coordinator_url: string | null; token: string }> =>
   invoke("host_connection");

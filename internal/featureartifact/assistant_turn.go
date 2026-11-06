@@ -26,7 +26,8 @@ type AssistantTurn struct {
 }
 
 // AssistantQuestion is a question to the user with the answers the
-// assistant suggests: Suggested indexes the one it would pick.
+// assistant suggests: Suggested indexes the one it would pick, or is -1 when
+// the question asks a fact about the user rather than a choice.
 type AssistantQuestion struct {
 	Text      string   `json:"text"`
 	Options   []string `json:"options"`
@@ -363,7 +364,12 @@ func NormalizeQuestions(questions []AssistantQuestion) []AssistantQuestion {
 		if len(options) < MinQuestionOptions {
 			continue
 		}
-		question.Options, question.Suggested = options, max(suggested, 0)
+		// A question about the user has no answer to suggest (-1); a choice
+		// keeps one, the first when the one asked for is gone.
+		if question.Suggested >= 0 {
+			suggested = max(suggested, 0)
+		}
+		question.Options, question.Suggested = options, suggested
 		kept = append(kept, question)
 	}
 	if len(kept) == 0 {

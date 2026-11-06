@@ -3513,6 +3513,69 @@ button.danger:not(.ghost) {
 .set__row input:disabled + span {
   color: var(--muted);
 }
+.set__heading--hint {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.hint {
+  position: relative;
+  display: inline-flex;
+  text-transform: none;
+  letter-spacing: normal;
+  font-weight: 400;
+}
+.hint__mark {
+  width: 16px;
+  height: 16px;
+  min-height: 0;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1;
+  cursor: help;
+}
+.hint__tip {
+  position: absolute;
+  z-index: 20;
+  left: -8px;
+  top: calc(100% + 6px);
+  width: max-content;
+  max-width: 300px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-1);
+  color: var(--text);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  white-space: normal;
+  box-shadow: 0 4px 16px rgb(0 0 0 / 0.25);
+  visibility: hidden;
+  opacity: 0;
+  transition: opacity 0.1s;
+}
+.hint:hover .hint__tip,
+.hint:focus-within .hint__tip,
+.hint[data-open] .hint__tip {
+  visibility: visible;
+  opacity: 1;
+}
+.domain-row__name {
+  font-weight: 500;
+}
+.domain-row__records {
+  flex: 1;
+  font-size: var(--text-sm);
+}
+.domain-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
 .set__fact {
   display: flex;
   align-items: baseline;
@@ -3523,6 +3586,16 @@ button.danger:not(.ghost) {
 .set__fact-value {
   text-align: right;
   overflow-wrap: anywhere;
+}
+/* A change that asks first, in place, as a warning. */
+.set__warning {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--warn) 55%, transparent);
+  background: color-mix(in srgb, var(--warn) 5%, transparent);
+  border-radius: var(--radius-s);
 }
 .set__actions {
   display: flex;
@@ -4616,6 +4689,37 @@ button.danger:not(.ghost) {
   font-variant-numeric: tabular-nums;
   opacity: 0.7;
 }
+/* A live line: a soft highlight sweeps through the text at a slight angle. */
+.assistant__activity .live-text {
+  background: linear-gradient(
+    100deg,
+    var(--muted) 0%,
+    var(--muted) 40%,
+    var(--text) 50%,
+    var(--muted) 60%,
+    var(--muted) 100%
+  );
+  background-size: 250% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: live-text 2.4s linear infinite;
+}
+@keyframes live-text {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: 0 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .assistant__activity .live-text {
+    animation: none;
+    color: var(--muted);
+    background: none;
+  }
+}
 .assistant__step {
   font-size: var(--text-sm);
   margin: 0 0 6px;
@@ -5471,12 +5575,27 @@ select:focus {
   text-align: left;
   color: var(--muted);
 }
-.app-window__item--done {
+.app-window__item {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+.app-window__item-mark {
+  flex: none;
+  width: 10px;
+  display: inline-flex;
+  justify-content: center;
+  align-self: center;
+}
+.app-window__item--done,
+.app-window__item--working {
   color: var(--text);
+}
+.app-window__item-state {
+  font-size: var(--text-sm);
 }
 .app-window__item-note {
   display: block;
-  margin-left: 1.1em;
   font-size: var(--text-xs);
 }
 /* Where the app opens: everything above it, P0, makes it usable. */
@@ -5894,6 +6013,11 @@ select:focus {
 .settings__tab:hover {
   background: var(--hover);
 }
+/* A tab that belongs to the one above it. */
+.settings__tab--sub {
+  margin-left: 14px;
+  font-size: var(--text-sm);
+}
 .settings__tab--on,
 .settings__tab--on:hover {
   background: var(--selected);
@@ -5946,6 +6070,9 @@ select:focus {
   }
   .settings__tab {
     white-space: nowrap;
+  }
+  .settings__tab--sub {
+    margin-left: 0;
   }
 }
 
@@ -7262,4 +7389,11 @@ button.shell-agent:hover {
   display: inline-flex;
   align-items: center;
   gap: 10px;
+}
+
+.domain-missing {
+  margin: 4px 0 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 2px;
 }

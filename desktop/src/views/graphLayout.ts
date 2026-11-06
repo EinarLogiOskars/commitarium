@@ -57,15 +57,19 @@ export function graphColumns(nodes: GraphInput[]): GraphColumn[] {
   columns.forEach((column, i) => column.forEach((n) => columnOf.set(n.id, i)));
   const waiting = nodes.filter((n) => n.start === undefined);
   const firstFree = columns.length;
-  // A queued chain unrolls in order, whichever way the list had it.
+  // A column with work still running is still open: what waits joins it.
+  const open = (at: number) => at < firstFree && columns[at].some((n) => n.end === undefined);
+  // A queued chain unrolls in order, whichever way the list had it. Work
+  // waiting on running work joins the column after it while that one is
+  // still open, so it stays beside its own phase rather than above the
+  // phases that started meanwhile.
   const place = (node: GraphInput, seen: Set<string>): number => {
     const known = columnOf.get(node.id);
     if (known !== undefined) return known;
     const follows = node.after ? nodes.find((n) => n.id === node.after) : undefined;
-    const at =
-      follows && !seen.has(follows.id)
-        ? Math.max(place(follows, new Set(seen).add(node.id)) + 1, firstFree)
-        : firstFree;
+    const next =
+      follows && !seen.has(follows.id) ? place(follows, new Set(seen).add(node.id)) + 1 : firstFree;
+    const at = open(next) ? next : Math.max(next, firstFree);
     columnOf.set(node.id, at);
     return at;
   };

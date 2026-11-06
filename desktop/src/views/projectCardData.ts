@@ -90,7 +90,9 @@ export function workBoard(
   features: Feature[],
   items: AttentionItem[],
   running: RunningWorkOrder[],
+  agents: AgentAtWork[] = [],
 ): WorkBoard {
+  const briefs = briefsBeingWritten(agents);
   const orders = features.filter(
     (f) => f.kind !== "session" && !f.background && f.state !== "cancelled",
   );
@@ -112,6 +114,11 @@ export function workBoard(
     const row = { id: order.id, title: order.title };
     if (runs.has(order.id)) {
       board.running.push({ ...row, tone: "running", reason: ORDER_STATE_LABEL[order.state] });
+      continue;
+    }
+    // Its brief is written ahead, while what it builds on is still built.
+    if (briefs.has(order.id)) {
+      board.running.push({ ...row, tone: "running", reason: "Writing its brief" });
       continue;
     }
     const item = items.find((i) => i.feature_id === order.id);
@@ -151,6 +158,37 @@ export function workBoard(
   }
   board.queue.sort((a, b) => a.place - b.place || a.title.localeCompare(b.title));
   return board;
+}
+
+/** The work orders whose brief an agent writes now. */
+export function briefsBeingWritten(agents: AgentAtWork[]): Set<string> {
+  return new Set(
+    agents
+      .filter((a) => a.working && a.role === "brief_writer" && a.work_order_id)
+      .map((a) => a.work_order_id!),
+  );
+}
+
+/** Where one of a build's work orders stands, for the app's waiting screen:
+ * done, worked on now (and how), or queued. */
+export function buildItemState(
+  order: Feature | undefined,
+  agents: AgentAtWork[],
+): { tone: "done" | "working" | "queued"; label: string } {
+  if (order?.state === "completed") return { tone: "done", label: "Done" };
+  const at = order ? agents.filter((a) => a.working && a.work_order_id === order.id) : [];
+  if (at.some((a) => a.role === "reviewer")) return { tone: "working", label: "In review" };
+  if (at.some((a) => a.role === "lead" || a.role === "session"))
+    return { tone: "working", label: order?.state === "planning" ? "Planning" : "Building" };
+  if (at.some((a) => a.role === "brief_writer"))
+    return { tone: "working", label: "Writing its brief" };
+  if (order?.state === "ready_to_merge") return { tone: "working", label: "Merging" };
+  if (
+    order &&
+    (order.state === "planning" || order.state === "implementing" || order.state === "reviewing")
+  )
+    return { tone: "queued", label: `${ORDER_STATE_LABEL[order.state]}, waiting for an agent` };
+  return { tone: "queued", label: "Queued" };
 }
 
 /** How many agents the Agents card shows before "All" opens the rest. */

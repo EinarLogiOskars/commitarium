@@ -65,7 +65,12 @@ import { Agents } from "./Agents";
 import { AgentLogin } from "./AgentLogin";
 import { assistantGuidance, GUIDANCE } from "./setupGuidance";
 import { appliedWhat, chooseAgent, choiceOverrides, type RoleChoice } from "./actionCard";
-import { AssistantActivityLine, TurnFailureControls } from "./AssistantActivity";
+import {
+  AssistantActivityLine,
+  ChatLiveLine,
+  liveLabel,
+  TurnFailureControls,
+} from "./AssistantActivity";
 import { AppliedGroup } from "./AppliedGroup";
 import { foldedEvent, groupTurn } from "./appliedSummary";
 import {
@@ -580,6 +585,12 @@ export function ChatView({
   const passedOver = passedOverQuestions(conversation?.messages ?? []);
   // Cards a newer one replaced, or that wait for Mayka's answer to a
   // message written after them, cannot be acted on.
+  // The project's work orders under way, for the live line while Mayka is
+  // not answering.
+  const runningTitles = work
+    ? [...orders.values()].filter((order) => work.running.has(order.id)).map((o) => o.title)
+    : [];
+  const liveNow = conversation ? liveLabel(conversation, runningTitles) : "";
   const held = heldCards(conversation?.messages ?? [], conversation?.actions ?? [], running);
 
   // A created app or project that did not start keeps its card, with Try
@@ -950,8 +961,10 @@ export function ChatView({
             </button>
           </div>
         )}
-        {running && (
+        {running ? (
           <AssistantActivityLine conversation={conversation} developer={developerModeOn()} />
+        ) : (
+          liveNow && <ChatLiveLine text={liveNow} />
         )}
         {!running && conversation.sign_in?.needs_user && (
           <SignInNotice

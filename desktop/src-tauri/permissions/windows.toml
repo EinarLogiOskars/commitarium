@@ -25,6 +25,7 @@ permissions = [
   "allow-use-server",
   "allow-places",
   "allow-rename-server",
+  "allow-move-server",
   "allow-forget-server",
   "allow-get-forgejo-viewer-status",
   "allow-configure-forgejo-viewer",

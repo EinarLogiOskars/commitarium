@@ -369,6 +369,13 @@ struct RestoreBackup {
 #[derive(Deserialize)]
 struct SetDomain {
     domain: String,
+    #[serde(default)]
+    records: crate::publishing::Records,
+}
+
+#[derive(Deserialize)]
+struct SetPlacement {
+    placement: crate::publishing::Placement,
 }
 
 #[derive(Deserialize)]
@@ -401,6 +408,11 @@ struct SetAppsPage {
 #[derive(Deserialize)]
 struct AppsPageName {
     name: String,
+}
+
+#[derive(Deserialize)]
+struct SetReach {
+    reach: crate::publishing::Reach,
 }
 
 #[derive(Deserialize)]
@@ -558,7 +570,16 @@ fn respond_to_post(path: &str, body: &[u8], shared: &Shared) -> Reply {
         }),
         "/v1/publishing/domain" => with_body(body, |set: SetDomain| {
             shared.on_a_server()?;
-            shared.publishing.set_domain(&set.domain)
+            shared.publishing.set_domain(&set.domain, set.records)
+        }),
+        "/v1/publishing/remove-domain" => respond_with(
+            shared
+                .on_a_server()
+                .and_then(|()| shared.publishing.remove_domain()),
+        ),
+        "/v1/publishing/placement" => with_body(body, |set: SetPlacement| {
+            shared.on_a_server()?;
+            shared.publishing.set_placement(set.placement)
         }),
         "/v1/publishing/publish" => with_body(body, |publish: Publish| {
             shared.on_a_server()?;
@@ -623,6 +644,10 @@ fn respond_to_post(path: &str, body: &[u8], shared: &Shared) -> Reply {
                 .on_a_server()
                 .and_then(|()| shared.publishing.apps_page_password()),
         ),
+        "/v1/publishing/reach" => with_body(body, |set: SetReach| {
+            shared.on_a_server()?;
+            shared.publishing.set_reach(set.reach)
+        }),
         "/v1/publishing/listed" => with_body(body, |set: SetListed| {
             shared.on_a_server()?;
             shared.publishing.set_listed(&set.project_id, set.listed)

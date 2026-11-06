@@ -23,9 +23,11 @@ export function AppliedGroup({
         aria-expanded={open}
         onClick={() => setOpen(!open)}
       >
-        <span className="quiet__glyph" aria-hidden>
-          {QUIET_GLYPH[tone]}
-        </span>
+        {QUIET_GLYPH[tone] && (
+          <span className="quiet__glyph" aria-hidden>
+            {QUIET_GLYPH[tone]}
+          </span>
+        )}
         <span className="quiet__text">
           {summary.replace(/^✓ /, "")} {open ? "▾" : "▸"}
         </span>

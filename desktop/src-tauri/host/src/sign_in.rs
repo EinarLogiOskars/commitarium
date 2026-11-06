@@ -23,6 +23,14 @@ const IMAGE: &str = "quay.io/oauth2-proxy/oauth2-proxy:v7.12.0";
 /// Which provider settings the running gate was started with.
 const SPEC_LABEL: &str = "commitarium.sign-in.spec";
 const DEFAULT_SCOPES: &str = "openid email profile";
+/// A person who opens no app for this long signs in again, so a device left
+/// signed in somewhere does not stay open for days. The provider's own
+/// session lasts as long (authentik's is set so), or it would sign them
+/// straight back in.
+pub const SIGN_IN_LASTS_HOURS: u32 = 8;
+/// How often the gate asks the provider whether a person may still sign in:
+/// someone removed there, or moved out of a group, loses access within it.
+const CHECK_EVERY: &str = "1h";
 /// Who signed in, as the gate answers it, and as the app receives it. Caddy
 /// removes the app's names from every request first, so none is forged.
 const IDENTITY: &[(&str, &str)] = &[
@@ -50,6 +58,12 @@ pub struct Provider {
     pub groups_claim: Option<String>,
     /// Seals the sign-in cookie; made once, kept when the provider changes.
     pub cookie_secret: String,
+    /// Where the provider ends its own session (OpenID Connect's
+    /// `end_session_endpoint`), when it has one. Signing out goes there
+    /// after the gate's cookie is cleared, or the provider would sign the
+    /// person straight back in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_session: Option<String>,
 }
 
 /// What a client sends to connect a provider.
@@ -73,6 +87,8 @@ pub struct Connected {
     pub groups_claim: String,
     /// The address to register with the provider.
     pub redirect_url: Option<String>,
+    /// The address that signs a person out of every app on the server.
+    pub sign_out_url: Option<String>,
 }
 
 impl Provider {
@@ -97,9 +113,10 @@ impl Provider {
         };
         // Kept as the provider names itself: tokens carry it exactly, and
         // some (authentik) end it with a slash.
-        let issuer = check_issuer(&issuer)?;
+        let (issuer, end_session) = check_issuer(&issuer)?;
         Ok(Self {
             issuer,
+            end_session,
             client_id,
             client_secret,
             scopes: blank(asked.scopes),
@@ -115,6 +132,7 @@ impl Provider {
             scopes: self.scopes().to_string(),
             groups_claim: self.groups_claim().to_string(),
             redirect_url: domain.map(redirect_url),
+            sign_out_url: domain.map(sign_out_url),
         }
     }
 
@@ -131,11 +149,47 @@ fn redirect_url(domain: &str) -> String {
     format!("https://{NAME}.{domain}/oauth2/callback")
 }
 
-fn check_issuer(issuer: &str) -> Result<String, String> {
+/// One address signs a person out of every app on the server: the gate
+/// clears its cookie, then the provider ends its own session.
+pub fn sign_out_url(domain: &str) -> String {
+    format!("https://{NAME}.{domain}/sign-out")
+}
+
+/// The gate's sign-out, sending the person on to the provider's.
+fn gate_sign_out(provider: &Provider) -> String {
+    match &provider.end_session {
+        Some(end) => format!("/oauth2/sign_out?rd={}", encode(end)),
+        None => "/oauth2/sign_out".into(),
+    }
+}
+
+/// A URL as one query value.
+fn encode(value: &str) -> String {
+    value
+        .bytes()
+        .map(|byte| match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                (byte as char).to_string()
+            }
+            _ => format!("%{byte:02X}"),
+        })
+        .collect()
+}
+
+/// The host part of an https:// address.
+fn host_of(url: &str) -> Option<&str> {
+    let rest = url.strip_prefix("https://")?;
+    let host = rest.split(['/', '?', '#']).next()?;
+    Some(host.split(':').next().unwrap_or(host)).filter(|host| !host.is_empty())
+}
+
+fn check_issuer(issuer: &str) -> Result<(String, Option<String>), String> {
     #[derive(Deserialize)]
     struct Discovery {
         issuer: String,
         authorization_endpoint: String,
+        #[serde(default)]
+        end_session_endpoint: Option<String>,
     }
     let url = format!("{issuer}/.well-known/openid-configuration");
     let discovery: Discovery = block_on(async {
@@ -158,7 +212,10 @@ fn check_issuer(issuer: &str) -> Result<String, String> {
             discovery.issuer
         ));
     }
-    Ok(discovery.issuer)
+    let end_session = discovery
+        .end_session_endpoint
+        .filter(|end| host_of(end).is_some());
+    Ok((discovery.issuer, end_session))
 }
 
 /// 32 random characters: oauth2-proxy takes a 32-byte secret as it is.
@@ -174,7 +231,7 @@ pub(crate) fn new_cookie_secret() -> Result<String, String> {
 
 /// The gate's settings, secrets aside: they reach it in its environment.
 pub(crate) fn arguments(provider: &Provider, domain: &str) -> Vec<String> {
-    vec![
+    let mut arguments = vec![
         "--provider=oidc".into(),
         format!("--oidc-issuer-url={}", provider.issuer),
         format!("--client-id={}", provider.client_id),
@@ -186,6 +243,9 @@ pub(crate) fn arguments(provider: &Provider, domain: &str) -> Vec<String> {
         format!("--http-address=127.0.0.1:{PORT}"),
         "--cookie-secure=true".into(),
         "--cookie-name=_commitarium_sign_in".into(),
+        // Each check renews the cookie, so only unused sign-ins run out.
+        format!("--cookie-expire={SIGN_IN_LASTS_HOURS}h"),
+        format!("--cookie-refresh={CHECK_EVERY}"),
         "--code-challenge-method=S256".into(),
         "--email-domain=*".into(),
         "--reverse-proxy=true".into(),
@@ -193,7 +253,15 @@ pub(crate) fn arguments(provider: &Provider, domain: &str) -> Vec<String> {
         "--skip-provider-button=true".into(),
         // Caddy only asks it; it serves nothing itself.
         "--upstream=static://202".into(),
-    ]
+    ];
+    // Signing out ends at the provider: the gate sends people only to
+    // addresses it is told of.
+    if let Some(host) = provider.end_session.as_deref().and_then(host_of) {
+        if host != domain && !host.ends_with(&format!(".{domain}")) {
+            arguments.push(format!("--whitelist-domain={host}"));
+        }
+    }
+    arguments
 }
 
 /// What the running gate must match: its settings and secrets.
@@ -292,13 +360,29 @@ fn remove() {
 }
 
 /// Caddy's route for the sign-in address: the gate's own pages, where the
-/// provider sends people back.
-pub fn caddy_route(domain: &str) -> Value {
+/// provider sends people back, and `/sign-out`, which ends both sessions.
+pub fn caddy_route(domain: &str, provider: &Provider) -> Value {
     json!({
         "match": [{"host": [format!("{NAME}.{domain}")]}],
         "handle": [{
-            "handler": "reverse_proxy",
-            "upstreams": [{"dial": format!("127.0.0.1:{PORT}")}],
+            "handler": "subroute",
+            "routes": [
+                {
+                    "match": [{"path": ["/sign-out"]}],
+                    "handle": [{
+                        "handler": "static_response",
+                        "status_code": 302,
+                        "headers": {
+                            "Location": [gate_sign_out(provider)],
+                            "Cache-Control": ["no-store"],
+                        },
+                    }],
+                },
+                {"handle": [{
+                    "handler": "reverse_proxy",
+                    "upstreams": [{"dial": format!("127.0.0.1:{PORT}")}],
+                }]},
+            ],
         }],
         "terminal": true,
     })
@@ -375,7 +459,41 @@ mod tests {
             scopes: None,
             groups_claim: None,
             cookie_secret: "c".repeat(32),
+            end_session: Some("https://login.example.com/logout".into()),
         }
+    }
+
+    #[test]
+    fn signing_out_ends_the_gate_then_the_provider() {
+        let route = caddy_route("example.com", &provider());
+        let sign_out = &route["handle"][0]["routes"][0];
+        assert_eq!(sign_out["match"][0]["path"][0], "/sign-out");
+        assert_eq!(
+            sign_out["handle"][0]["headers"]["Location"][0],
+            "/oauth2/sign_out?rd=https%3A%2F%2Flogin.example.com%2Flogout"
+        );
+        assert_eq!(
+            sign_out_url("example.com"),
+            "https://sign-in.example.com/sign-out"
+        );
+        // The provider's own address is allowed as where signing out ends.
+        let arguments = arguments(&provider(), "example.org");
+        assert!(arguments.contains(&"--whitelist-domain=login.example.com".to_string()));
+        let mut ours = provider();
+        ours.end_session = Some("https://auth.example.com/application/o/a/end-session/".into());
+        assert!(!arguments_of(&ours)
+            .iter()
+            .any(|a| a.contains("auth.example.com")));
+        ours.end_session = None;
+        let route = caddy_route("example.com", &ours);
+        assert_eq!(
+            route["handle"][0]["routes"][0]["handle"][0]["headers"]["Location"][0],
+            "/oauth2/sign_out"
+        );
+    }
+
+    fn arguments_of(provider: &Provider) -> Vec<String> {
+        arguments(provider, "example.com")
     }
 
     #[test]
@@ -386,6 +504,8 @@ mod tests {
         assert!(arguments.contains("--cookie-domain=.example.com"));
         assert!(arguments.contains("--scope=openid email profile"));
         assert!(arguments.contains("--http-address=127.0.0.1:4180"));
+        assert!(arguments.contains("--cookie-expire=8h"));
+        assert!(arguments.contains("--cookie-refresh=1h"));
     }
 
     #[test]

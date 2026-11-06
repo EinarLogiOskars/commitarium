@@ -1,3 +1,4 @@
+import { confirmAction } from "../confirm";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   listProfiles,
@@ -655,13 +656,12 @@ function ProfileRow({
           </button>
           <button
             className="ghost"
-            onClick={() => {
-              if (
-                !window.confirm(
-                  `Remove ${profile.name}? Projects and work orders can no longer use it.`,
-                )
-              )
-                return;
+            onClick={async () => {
+              const sure = await confirmAction(
+                `Remove ${profile.name}? Projects and work orders can no longer use it.`,
+                "Remove",
+              );
+              if (!sure) return;
               void run(async () => {
                 await deleteAgent(profile.id);
                 await onAgentsChanged();

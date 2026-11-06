@@ -5,6 +5,7 @@
 // apply.
 
 import { fetch } from "@tauri-apps/plugin-http";
+import { connectedServer, TAILSCALE_HINT, throughTailscale } from "../connection";
 
 // The coordinator listens here under Compose. Loopback only, by design. In
 // remote mode this is the app's bridge, also on loopback (ADR-040), which wants
@@ -76,6 +77,16 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
   if (!response.ok) {
     const body = parsed as ApiErrorBody | undefined;
     if (body?.error) throw new ApiError(body.error.code, body.error.message, response.status);
+    // A server that does not answer reaches here as an empty 502 from the
+    // bridge: said in words.
+    if (response.status === 502 && connectedServer()) {
+      const hint = throughTailscale() ? ` ${TAILSCALE_HINT}` : "";
+      throw new ApiError(
+        "unknown_error",
+        `Commitarium can't reach the server right now.${hint}`,
+        response.status,
+      );
+    }
     throw new ApiError("unknown_error", `HTTP ${response.status}`, response.status);
   }
 

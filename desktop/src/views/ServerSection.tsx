@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { connectedServer } from "../connection";
+import { connectedServer, TAILSCALE_HINT, throughTailscale } from "../connection";
 import {
   authentikPassword,
   connectSignIn,
@@ -14,10 +14,17 @@ import {
   places as readPlaces,
   publishing as readPublishing,
   setDomain,
+  removeDomain,
+  setPlacement,
+  setReach,
+  PUBLISHING_CHANGED,
+  moveServer,
   revealAppsPagePassword,
   setAppsPage,
   setListed,
   type Access,
+  type Placement,
+  type Records,
   type PublishingOverview,
   type ConnectSignIn,
   forgetServer,
@@ -28,8 +35,13 @@ import {
   type Places,
 } from "../ipc";
 import { showPlace } from "./PlaceSwitch";
+import { confirmAction, PLACES_CHANGED } from "../confirm";
 import { ConnectForm } from "./StartChoice";
 import { startChatOn } from "../attention/askAssistant";
+import { getAssistantSettings, type AssistantSettings } from "../api/assistant";
+import { Agents } from "./Agents";
+import { assistantGuidance, GUIDANCE, type AssistantGuidance } from "./setupGuidance";
+import { reloadAgents, useAgentList } from "./useAgents";
 
 /** This app's API version: raise it with `API_VERSION` in the host. */
 const API_VERSION = 1;
@@ -39,6 +51,98 @@ function versionProblem(api: number): string | null {
   return api < API_VERSION
     ? "Your server is too old for this app. Update the server."
     : "This app is too old for your server. Update the app.";
+}
+
+/** Tells every part of the Server settings that publishing changed. */
+function publishingChanged() {
+  window.dispatchEvent(new Event(PUBLISHING_CHANGED));
+}
+
+/** Reads now, and again whenever publishing changes anywhere in Settings. */
+function useFresh(refresh: () => void) {
+  useEffect(() => {
+    refresh();
+    window.addEventListener(PUBLISHING_CHANGED, refresh);
+    return () => window.removeEventListener(PUBLISHING_CHANGED, refresh);
+  }, [refresh]);
+}
+
+/** Opens a new chat with Mayka about serving apps from this server. */
+function askMaykaAboutServing(message: string, onLeave?: () => void) {
+  startChatOn({ kind: "serving" }, message);
+  onLeave?.();
+}
+
+/**
+ * What Mayka still needs before she can answer on this server (ADR-027), and
+ * whether that is known yet. Reloads after the Agents page closes.
+ */
+function useMaykaGuidance(): {
+  guidance: AssistantGuidance;
+  known: boolean;
+  reload: () => void;
+} {
+  const agents = useAgentList();
+  const [settings, setSettings] = useState<AssistantSettings | null>(null);
+  const reload = useCallback(() => {
+    void reloadAgents().catch(() => undefined);
+    void getAssistantSettings()
+      .then(setSettings)
+      .catch(() => undefined);
+  }, []);
+  useEffect(reload, [reload]);
+  const known = agents !== null && (agents.length === 0 || settings !== null);
+  return { guidance: assistantGuidance(agents, settings), known, reload };
+}
+
+/**
+ * Ask Mayka, or, while she has no AI account to work with, the way to give
+ * her one: asking her then would only fail.
+ */
+function AskMayka({
+  message,
+  onLeave,
+  onAsked,
+  link,
+}: {
+  message: string;
+  onLeave?: () => void;
+  onAsked?: () => void;
+  /** Shown as a link inside a sentence rather than a button. */
+  link?: boolean;
+}) {
+  const { guidance, reload } = useMaykaGuidance();
+  const [setUp, setSetUp] = useState(false);
+  const className = link ? "shell-card__link" : undefined;
+  if (guidance) {
+    return (
+      <>
+        <button className={className} onClick={() => setSetUp(true)}>
+          {GUIDANCE[guidance].action} first
+        </button>
+        {setUp && (
+          <Agents
+            focus={guidance === "set_up_assistant" ? "assistant" : undefined}
+            onClose={() => {
+              setSetUp(false);
+              reload();
+            }}
+          />
+        )}
+      </>
+    );
+  }
+  return (
+    <button
+      className={className}
+      onClick={() => {
+        onAsked?.();
+        askMaykaAboutServing(message, onLeave);
+      }}
+    >
+      Ask Mayka
+    </button>
+  );
 }
 
 // The servers this device knows, and the shown one's state, in Settings.
@@ -61,58 +165,206 @@ export function ServerSection({ running, onLeave }: { running: boolean; onLeave?
 }
 
 // The server's base domain, under which deployed apps get their addresses
-// (PUBLISHING_PLAN.md). It is accepted once its wildcard record points here.
-function DomainSection() {
+// (PUBLISHING_PLAN.md), and how its DNS points here: one wildcard record,
+// checked before the domain is kept, or a record for each address, each
+// checked as it is used.
+/** A ? that explains on hover, focus or click. */
+function Hint({ label, children }: { label: string; children: React.ReactNode }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <span className="hint" data-open={open || undefined}>
+      <button
+        type="button"
+        className="hint__mark"
+        aria-label={label}
+        aria-expanded={open}
+        onClick={() => setOpen(!open)}
+        onBlur={() => setOpen(false)}
+      >
+        ?
+      </button>
+      <span role="tooltip" className="hint__tip">
+        {children}
+      </span>
+    </span>
+  );
+}
+
+const RECORDS_LABEL: Record<Records, string> = {
+  wildcard: "Wildcard record",
+  each_name: "A record per app",
+};
+
+// The domains apps are served on. A server holds one for now; the list,
+// adding and removing are already shaped for several (MULTI_DOMAIN, 0.12.1).
+function DomainSection({ onLeave }: { onLeave?: () => void }) {
   const [overview, setOverview] = useState<PublishingOverview | null>(null);
-  const [domain, setDomainText] = useState("");
+  // The domain being added or edited (`editing`: the one it was), if the form is open.
+  const [form, setForm] = useState<{
+    domain: string;
+    records: Records;
+    editing: string | null;
+  } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(() => {
     void readPublishing()
-      .then((found) => {
-        setOverview(found);
-        setDomainText(found.domain ?? "");
-      })
+      .then(setOverview)
       .catch((e) => setError(String(e)));
   }, []);
-  useEffect(refresh, [refresh]);
+  useFresh(refresh);
 
-  const save = async () => {
+  const run = async (work: () => Promise<unknown>) => {
     setBusy(true);
     setError(null);
     try {
-      await setDomain(domain);
-      refresh();
+      await work();
+      publishingChanged();
+      return true;
     } catch (e) {
       setError(String(e));
+      return false;
     } finally {
       setBusy(false);
     }
   };
 
-  const shown = domain.trim().replace(/^\*\./, "") || "example.com";
+  // On a private network there is no domain: the Tailscale name stands in.
+  if (!overview || overview.reach === "private") return null;
+  const domains = overview.domain ? [{ domain: overview.domain, records: overview.records }] : [];
+  const full = domains.length >= 1;
+  const address = overview.server_address ?? "this server's address";
+  const shown = form?.domain.trim().replace(/^\*\./, "") || "example.com";
+  // With a record for each address: the apps whose address has none yet.
+  const missing = overview.apps.filter((app) => app.record_problem?.includes("does not point"));
+  const save = () =>
+    form && void run(() => setDomain(form.domain, form.records)).then((ok) => ok && setForm(null));
+
   return (
     <section className="set__section">
-      <h3 className="set__heading">Domain</h3>
-      <p className="muted set__note">
-        Deployed apps get an address under this domain, such as app.{shown}. At your DNS provider,
-        add an A record for <code>*.{shown}</code> with the value{" "}
-        <code>{overview?.server_address ?? "this server's address"}</code>. Names that already have
-        their own records stay where they are.
-      </p>
-      <div className="set__row">
-        <input
-          aria-label="Domain"
-          placeholder="example.com"
-          value={domain}
-          onChange={(e) => setDomainText(e.target.value)}
-        />
-        <button disabled={busy || !domain.trim()} onClick={() => void save()}>
-          {busy ? "Checking…" : overview?.domain ? "Change" : "Use this domain"}
-        </button>
-      </div>
+      <h3 className="set__heading set__heading--hint">
+        Domains
+        <Hint label="About domains">
+          A domain you own, such as example.com. Each app you deploy gets an address under it, like
+          app.example.com. You need access to its DNS settings. No domain? Buy one from any
+          registrar, or use Homelab for a server at home.
+        </Hint>
+      </h3>
+      {domains.length === 0 && !form && <p className="muted set__note">No domain yet.</p>}
+      {domains.map((item) => (
+        <div className="set__row domain-row" key={item.domain}>
+          <span className="domain-row__name">{item.domain}</span>
+          <span className="muted domain-row__records">{RECORDS_LABEL[item.records]}</span>
+          <button
+            className="ghost"
+            disabled={busy || form !== null}
+            onClick={() => setForm({ ...item, editing: item.domain })}
+          >
+            Edit
+          </button>
+          <button
+            className="ghost"
+            disabled={busy || form !== null}
+            onClick={() => void run(removeDomain)}
+          >
+            Remove
+          </button>
+        </div>
+      ))}
+      {missing.length > 0 && !form && (
+        <div className="set__note">
+          <p>Add these A records at your DNS provider, so each app opens at its address:</p>
+          <ul className="domain-missing">
+            {missing.map((app) => (
+              <li key={app.project_id}>
+                <code>{app.url.replace(/^https:\/\//, "")}</code> → <code>{address}</code>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {form ? (
+        <div className="domain-form">
+          <input
+            aria-label="Domain"
+            placeholder="example.com"
+            value={form.domain}
+            onChange={(e) => setForm({ ...form, domain: e.target.value })}
+          />
+          <label className="set__row">
+            <input
+              type="radio"
+              name="records"
+              checked={form.records === "wildcard"}
+              onChange={() => setForm({ ...form, records: "wildcard" })}
+            />
+            <span>Wildcard record (recommended)</span>
+            <Hint label="About a wildcard record">
+              At your DNS provider, add an A record for <code>*.{shown}</code> with the value{" "}
+              <code>{address}</code>, once. Every app then works with no more DNS changes.
+            </Hint>
+          </label>
+          <label className="set__row">
+            <input
+              type="radio"
+              name="records"
+              checked={form.records === "each_name"}
+              onChange={() => setForm({ ...form, records: "each_name" })}
+            />
+            <span>A record per app</span>
+            <Hint label="About a record per app">
+              Add an A record for each app, such as <code>app.{shown}</code> with the value{" "}
+              <code>{address}</code>. Commitarium tells you which one when you deploy.
+            </Hint>
+          </label>
+          {form.editing !== null && form.domain.trim() !== form.editing && (
+            <p className="muted set__note">
+              Apps here keep their names and move to the new domain; their old addresses stop
+              working.
+            </p>
+          )}
+          <div className="set__row">
+            <button disabled={busy || !form.domain.trim()} onClick={save}>
+              {busy ? "Checking…" : form.editing !== null ? "Save" : "Add"}
+            </button>
+            <button
+              className="ghost"
+              disabled={busy}
+              onClick={() => {
+                setForm(null);
+                setError(null);
+              }}
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="set__row">
+          <button
+            disabled={busy || full}
+            title={full ? "One domain per server for now" : undefined}
+            onClick={() => setForm({ domain: "", records: "wildcard", editing: null })}
+          >
+            Add domain
+          </button>
+        </div>
+      )}
       {error && <p className="set__note">{error}</p>}
+      <p className="muted set__note">
+        Not sure how to set this up at your DNS provider?{" "}
+        <AskMayka
+          link
+          onLeave={onLeave}
+          message={
+            `Help me point ${form?.domain.trim() ? `my domain ${shown}` : (overview.domain ?? "my domain")} ` +
+            `at this server (${address}), with ` +
+            `${(form?.records ?? overview.records) === "wildcard" ? "one wildcard record" : "a record per app"}.`
+          }
+        />{" "}
+        to walk you through it.
+      </p>
     </section>
   );
 }
@@ -135,14 +387,14 @@ function SignInSection({ onLeave }: { onLeave?: () => void }) {
       .then(setOverview)
       .catch((e) => setError(String(e)));
   }, []);
-  useEffect(refresh, [refresh]);
+  useFresh(refresh);
 
   const run = async (work: () => Promise<unknown>) => {
     setBusy(true);
     setError(null);
     try {
       await work();
-      refresh();
+      publishingChanged();
       return true;
     } catch (e) {
       setError(String(e));
@@ -152,7 +404,7 @@ function SignInSection({ onLeave }: { onLeave?: () => void }) {
     }
   };
 
-  if (!overview?.domain) return null;
+  if (!overview?.domain || overview.reach === "private") return null;
   const provider = overview.sign_in;
   const authentik = overview.authentik;
   const memory = authentik.memory_total_bytes;
@@ -162,6 +414,15 @@ function SignInSection({ onLeave }: { onLeave?: () => void }) {
     void run(installAuthentik).finally(() => setInstalling(false));
   };
   const redirect = provider?.redirect_url ?? `https://sign-in.${overview.domain}/oauth2/callback`;
+  const signOut = provider?.sign_out_url && (
+    <p className="muted set__note">
+      Sign out of every app: <code>{provider.sign_out_url}</code>
+      <Hint label="About signing out">
+        Ends the company sign-in session for every app on this server. The apps page links it; ask
+        Mayka to add a Sign out link to an app.
+      </Hint>
+    </p>
+  );
   const field = (key: keyof ConnectSignIn) => ({
     value: asked[key] ?? "",
     autoCapitalize: "off",
@@ -203,6 +464,7 @@ function SignInSection({ onLeave }: { onLeave?: () => void }) {
               )}
             </p>
           )}
+          {signOut}
           <div className="set__row">
             <button
               disabled={busy}
@@ -232,6 +494,7 @@ function SignInSection({ onLeave }: { onLeave?: () => void }) {
           <p className="muted set__note">
             Registered sign-in address: <code>{redirect}</code>
           </p>
+          {signOut}
           <div className="set__row">
             <button
               disabled={busy}
@@ -348,6 +611,611 @@ function SignInSection({ onLeave }: { onLeave?: () => void }) {
   );
 }
 
+const PLACES: { value: Placement; label: string }[] = [
+  { value: "home", label: "On a computer on my network" },
+  { value: "cloud", label: "On a server in the cloud, or a VPS" },
+  { value: "other", label: "Somewhere else, or not sure" },
+];
+
+// Asked once per server (HOMELAB_PLAN.md): where it is, so the app
+// recommends how to serve its apps. It opens as a modal when a server that
+// has not answered is shown, and stays in Settings → Server until it is
+// answered. The answer is kept on the server.
+function WhereSection({
+  onLeave,
+  modal,
+  onClose,
+  onNotNow,
+  onOpenSettings,
+}: {
+  onLeave?: () => void;
+  /** Shown as the modal on opening the server, rather than in Settings. */
+  modal?: boolean;
+  onClose?: () => void;
+  /** Puts the question off on this computer. */
+  onNotNow?: () => void;
+  onOpenSettings?: () => void;
+}) {
+  const [overview, setOverview] = useState<PublishingOverview | null>(null);
+  const [answered, setAnswered] = useState<Placement | null>(null);
+  const [asking, setAsking] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const refresh = useCallback(() => {
+    void readPublishing()
+      .then(setOverview)
+      .catch((e) => setError(String(e)));
+  }, []);
+  useFresh(refresh);
+
+  const run = async (work: () => Promise<unknown>) => {
+    setBusy(true);
+    setError(null);
+    try {
+      await work();
+      publishingChanged();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const answer = (placement: Placement) =>
+    void run(async () => {
+      await setPlacement(placement);
+      setAnswered(placement);
+    });
+
+  // Asked once: a server already serving apps, or already answered, skips
+  // it. Once shown it stays, so Back can change an answer just kept.
+  const fresh =
+    overview !== null &&
+    overview.placement === null &&
+    !overview.domain &&
+    overview.reach !== "private";
+  if (fresh && !asking) setAsking(true);
+  if (!overview || !(fresh || asking)) return null;
+  // In the modal, the settings it recommends are a click away; in Settings,
+  // they are the sections below.
+  const where = (section: string) => (modal ? `in Settings → Server → ${section}` : "below");
+  const toSettings = modal && onOpenSettings && (
+    <button
+      className="ghost"
+      disabled={busy}
+      onClick={() => {
+        onClose?.();
+        onOpenSettings();
+      }}
+    >
+      Open Settings
+    </button>
+  );
+  const back = (
+    <button className="ghost" disabled={busy} onClick={() => setAnswered(null)}>
+      Back
+    </button>
+  );
+  const content = (
+    <>
+      {answered === null ? (
+        <>
+          <p className="muted set__note">
+            So Commitarium can recommend how your apps reach you and others. You can change anything
+            later.
+          </p>
+          <div className="set__actions">
+            {PLACES.map((place) => (
+              <button key={place.value} disabled={busy} onClick={() => answer(place.value)}>
+                {place.label}
+              </button>
+            ))}
+          </div>
+          {modal && (
+            <div className="set__actions">
+              <button className="ghost" onClick={onNotNow}>
+                Not now
+              </button>
+            </div>
+          )}
+          {modal && (
+            <p className="muted set__note">You can answer this any time in Settings → Server.</p>
+          )}
+        </>
+      ) : answered === "home" ? (
+        <>
+          <p className="set__note">
+            Recommended: <strong>Homelab mode</strong>. Your apps are on a private network that only
+            your own devices reach, through Tailscale, at home and away. No domain, nothing open on
+            your router.
+          </p>
+          <div className="set__actions">
+            {overview.reach === "private" ? (
+              <p className="muted set__note">
+                Homelab mode is on: its steps are {where("Homelab")}.
+              </p>
+            ) : (
+              <button disabled={busy} onClick={() => void run(() => setReach("private"))}>
+                Turn on Homelab mode
+              </button>
+            )}
+            {toSettings}
+            {back}
+          </div>
+          <p className="muted set__note">You can change this later {where("Homelab")}.</p>
+        </>
+      ) : answered === "cloud" ? (
+        <>
+          <p className="set__note">
+            Recommended: <strong>your own domain</strong>. Your apps get addresses such as
+            app.yourcompany.com, for anyone on the internet, each open, behind a password, or behind
+            company sign-in. Set it {where("Domain")}: it explains the DNS record to add.
+          </p>
+          <div className="set__actions">
+            {toSettings}
+            {back}
+          </div>
+        </>
+      ) : (
+        <>
+          <p className="set__note">
+            Mayka can help you choose: tell her where it runs and who should open your apps.
+          </p>
+          <div className="set__actions">
+            <AskMayka
+              onLeave={onLeave}
+              onAsked={onClose}
+              message="Help me choose how to serve apps from my Commitarium server."
+            />
+            {back}
+          </div>
+        </>
+      )}
+      {modal && answered !== null && (
+        <div className="set__actions">
+          <button className="ghost" onClick={onClose}>
+            Done
+          </button>
+        </div>
+      )}
+      {error && <p className="set__note">{error}</p>}
+    </>
+  );
+  if (modal) {
+    return (
+      <div className="modal">
+        <div className="modal__card set__section" role="dialog" aria-label="Where is this server?">
+          <div className="panel__head">
+            <h2>Where is this server?</h2>
+          </div>
+          {content}
+        </div>
+      </div>
+    );
+  }
+  return (
+    <section className="set__section">
+      <h3 className="set__heading">Where is this server?</h3>
+      {content}
+    </section>
+  );
+}
+
+const WHERE_DISMISSED = "commitarium:where-not-now:";
+
+/**
+ * The first time a server opens on this computer: Mayka's AI account, if
+ * the server has none yet, since everything else leans on her; then where
+ * the server is. Each step can be put off; Not now on the question keeps it
+ * in Settings → Server only.
+ */
+export function ServerQuestion({ onOpenSettings }: { onOpenSettings: () => void }) {
+  const server = connectedServer();
+  const { guidance, known, reload } = useMaykaGuidance();
+  const [closed, setClosed] = useState(() => {
+    try {
+      return server !== null && localStorage.getItem(WHERE_DISMISSED + server) !== null;
+    } catch {
+      return false;
+    }
+  });
+  // Mayka's step, shown once while this window is open.
+  const [maykaDone, setMaykaDone] = useState(false);
+  const [agentsOpen, setAgentsOpen] = useState(false);
+  if (!server || closed || !known) return null;
+  // Only Not now puts it off on this computer; an answer is kept on the
+  // server, and asking Mayka carries on in her chat.
+  const close = (notNow: boolean) => {
+    if (notNow) {
+      try {
+        localStorage.setItem(WHERE_DISMISSED + server, "1");
+      } catch {
+        // Without storage it may ask again next time: harmless.
+      }
+    }
+    setClosed(true);
+  };
+  if (agentsOpen) {
+    return (
+      <Agents
+        focus={guidance === "set_up_assistant" ? "assistant" : undefined}
+        onClose={() => {
+          setAgentsOpen(false);
+          setMaykaDone(true);
+          reload();
+        }}
+      />
+    );
+  }
+  if (guidance && !maykaDone) {
+    return (
+      <div className="modal">
+        <div className="modal__card set__section" role="dialog" aria-label="Set up Mayka">
+          <div className="panel__head">
+            <h2>{guidance === "add_agent" ? "Connect an AI account" : "Set up Mayka"}</h2>
+          </div>
+          <p className="set__note">{GUIDANCE[guidance].text}</p>
+          <div className="set__actions">
+            <button className="primary" onClick={() => setAgentsOpen(true)}>
+              {GUIDANCE[guidance].action}
+            </button>
+            <button className="ghost" onClick={() => setMaykaDone(true)}>
+              Not now
+            </button>
+          </div>
+          <p className="muted set__note">
+            Until then Mayka cannot answer, here or in a chat. You can do this any time from Agents.
+          </p>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <WhereSection
+      modal
+      onClose={() => close(false)}
+      onNotNow={() => close(true)}
+      onOpenSettings={onOpenSettings}
+    />
+  );
+}
+
+// Homelab mode (HOMELAB_PLAN.md): off, apps are served at the server's own
+// domain, for anyone on the internet; on, only the owner's devices reach
+// them, on their Tailscale network, with the steps Tailscale takes.
+// Set when Homelab is turned on here: once the server is ready, this
+// computer moves to its Tailscale address by itself. It outlives the dialog,
+// since signing in to Tailscale happens in a browser.
+let connectWhenReady = false;
+
+/** Settings → Server → Homelab: one button each way, each asked first. */
+export function HomelabSettings({ onLeave }: { onLeave?: () => void }) {
+  const [overview, setOverview] = useState<PublishingOverview | null>(null);
+  const [confirming, setConfirming] = useState(false);
+  // Turning off would cut this computer off: why, and the way back it tried.
+  const [stranded, setStranded] = useState<{ tried: string | null } | null>(null);
+  // Turned off anyway: this computer can no longer reach the server.
+  const [lost, setLost] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const refresh = useCallback(() => {
+    void readPublishing()
+      .then(setOverview)
+      .catch((e) => setError(String(e)));
+  }, []);
+  useFresh(refresh);
+  const on = overview?.reach === "private";
+  const tailscale = overview?.tailscale ?? null;
+  const ready = on && tailscale?.state === "ready";
+  const waiting = on && !ready;
+  // Signing in and turning on HTTPS happen elsewhere: look again while waiting.
+  useEffect(() => {
+    if (!waiting) return;
+    const timer = setInterval(refresh, 4000);
+    return () => clearInterval(timer);
+  }, [waiting, refresh]);
+
+  const server = connectedServer();
+  const address = tailscale?.address ?? null;
+  const onTailscale = Boolean(address && server?.startsWith(address + ":"));
+
+  const connect = useCallback(async () => {
+    if (!address) return;
+    connectWhenReady = false;
+    setBusy(true);
+    setError(null);
+    try {
+      const found = await readPlaces();
+      if (!found.active) throw new Error("This computer is not showing a server.");
+      await moveServer(found.active, `${address}:7443`);
+      // The window shows the server from its new address, as on a switch.
+      window.location.reload();
+    } catch (e) {
+      setError(String(e));
+      setBusy(false);
+    }
+  }, [address]);
+  useEffect(() => {
+    if (ready && !onTailscale && connectWhenReady) void connect();
+  }, [ready, onTailscale, connect]);
+
+  if (!overview) {
+    // Not read: say why, rather than an empty tab.
+    return error ? (
+      <section className="set__section">
+        <h3 className="set__heading">Homelab</h3>
+        <p className="set__note">Commitarium could not read the server&apos;s settings: {error}</p>
+        {throughTailscale(server) && <p className="muted set__note">{TAILSCALE_HINT}</p>}
+      </section>
+    ) : null;
+  }
+
+  const turnOn = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await setReach("private");
+      connectWhenReady = true;
+      setConfirming(false);
+      publishingChanged();
+      refresh();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const turnOff = async (anyway = false) => {
+    setBusy(true);
+    setError(null);
+    try {
+      // Off stops the server's Tailscale: a computer that reaches the server
+      // through it goes back to the address it had first, or is told what
+      // losing the server means before it does.
+      if (onTailscale && !anyway) {
+        const found = await readPlaces();
+        const shown = found.servers.find((s) => s.fingerprint === found.active);
+        const back = shown?.previous_address ?? null;
+        const movedBack =
+          back !== null &&
+          found.active !== null &&
+          (await moveServer(found.active, back).then(
+            () => true,
+            () => false,
+          ));
+        if (!movedBack) {
+          setStranded({ tried: back });
+          return;
+        }
+      }
+      connectWhenReady = false;
+      if (onTailscale && anyway) {
+        // The answer would come back through Tailscale, which this stops: it
+        // may never arrive, so the server is taken as switched either way.
+        await Promise.race([
+          setReach("internet").catch(() => undefined),
+          new Promise((done) => setTimeout(done, 8000)),
+        ]);
+        setLost(true);
+        return;
+      }
+      await setReach("internet");
+      // The window shows the server from its new address, as on a switch.
+      if (onTailscale) {
+        window.location.reload();
+        return;
+      }
+      setConfirming(false);
+      setStranded(null);
+      publishingChanged();
+      refresh();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const cancel = () => {
+    setConfirming(false);
+    setStranded(null);
+  };
+  const oldLinks = overview.apps.length > 0 ? " Anyone with an old link needs the new one." : "";
+
+  if (lost) {
+    return (
+      <section className="set__section">
+        <h3 className="set__heading">Homelab</h3>
+        <div className="set__warning" role="alert">
+          <p className="set__note">
+            <strong>Homelab is off, and this computer can no longer reach the server.</strong> To
+            connect again, on the same network as the server, run{" "}
+            <code>sudo commitarium-host pair</code> on it and paste the line it prints into
+            Commitarium, under Connect a server.
+          </p>
+          <div className="set__row">
+            <button onClick={() => void showPlace(null)}>Show this computer</button>
+          </div>
+        </div>
+      </section>
+    );
+  }
+
+  return (
+    <section className="set__section">
+      <h3 className="set__heading">Homelab</h3>
+      <p className="muted set__note">
+        For a computer at home: your apps go on a private network that only your own devices reach,
+        through Tailscale, with no domain and nothing open on your router. This computer connects to
+        the server through it too, so Commitarium works away from home. Off, your apps are served at
+        your own domain, for anyone on the internet.
+      </p>
+      {on && (
+        <TailscaleSteps
+          tailscale={tailscale}
+          busy={busy}
+          onTailscale={onTailscale}
+          onMove={() => void connect()}
+        />
+      )}
+      {!confirming && (
+        <div className="set__row">
+          <button
+            className={on ? "ghost" : undefined}
+            disabled={busy}
+            onClick={() => setConfirming(true)}
+          >
+            {on ? "Turn off Homelab" : "Turn on Homelab"}
+          </button>
+        </div>
+      )}
+      {confirming && !stranded && (
+        <div className="set__warning" role="alertdialog" aria-label="Confirm Homelab change">
+          <p className="set__note">
+            <strong>{on ? "Turn off Homelab?" : "Turn on Homelab?"}</strong>{" "}
+            {on
+              ? `Your apps move to addresses under your own domain, for anyone on the internet. Every app gets a new address.${oldLinks}`
+              : `Your apps move to a private network that only your devices reach, through Tailscale. Every app gets a new address, and company sign-in is not offered there.${oldLinks} Next you sign in to Tailscale; once the server is ready, this computer connects through it by itself.`}
+            {on &&
+              onTailscale &&
+              " This computer first goes back to reaching the server at its home network address."}
+          </p>
+          <div className="set__row">
+            <button disabled={busy} onClick={() => void (on ? turnOff() : turnOn())}>
+              {busy ? "Switching…" : on ? "Turn off" : "Turn on"}
+            </button>
+            <button className="ghost" disabled={busy} onClick={cancel}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+      {confirming && stranded && (
+        <div
+          className="set__warning"
+          role="alertdialog"
+          aria-label="This computer would lose the server"
+        >
+          <p className="set__note">
+            This computer reaches the server only through Tailscale
+            {stranded.tried
+              ? `, and it could not reach it at its home network address (${stranded.tried}) just now`
+              : ""}
+            . Turning Homelab off stops Tailscale on the server, so this computer loses the server.
+            To connect again you would need to be on the same network as the server, run{" "}
+            <code>sudo commitarium-host pair</code> on it, and paste the line it prints into
+            Commitarium.
+            {stranded.tried && " If you are away from home, turning it off from home avoids this."}
+          </p>
+          <p className="muted set__note">
+            Not sure what you need? Mayka can help you find the way that fits.
+          </p>
+          <div className="set__actions">
+            <AskMayka
+              onLeave={onLeave}
+              message={
+                "I want to turn off Homelab mode on my server, but this computer reaches it only " +
+                "through Tailscale, so it would lose the server. Help me work out what to do."
+              }
+            />
+            <button className="ghost" disabled={busy} onClick={() => void turnOff(true)}>
+              Turn off anyway
+            </button>
+            <button className="ghost" disabled={busy} onClick={cancel}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+      {error && <p className="set__note">{error}</p>}
+    </section>
+  );
+}
+
+function TailscaleSteps({
+  tailscale,
+  busy,
+  onTailscale,
+  onMove,
+}: {
+  tailscale: PublishingOverview["tailscale"];
+  busy: boolean;
+  onTailscale: boolean;
+  onMove: () => void;
+}) {
+  switch (tailscale?.state) {
+    case "needs_login":
+      return (
+        <>
+          <p className="set__note">
+            Sign in to Tailscale to put this server on your private network. A free personal account
+            is enough; use the same account on your phone and computers.
+          </p>
+          {tailscale.login_url ? (
+            <button onClick={() => void openExternal(tailscale.login_url!)}>
+              Sign in to Tailscale ↗
+            </button>
+          ) : (
+            <p className="muted set__note">Getting the sign-in link…</p>
+          )}
+        </>
+      );
+    case "needs_https":
+      return (
+        <>
+          <p className="set__note">
+            Signed in{tailscale.name ? ` as ${tailscale.name}` : ""}. One more step, once: in
+            Tailscale&apos;s DNS settings, turn on <strong>MagicDNS</strong> and{" "}
+            <strong>HTTPS Certificates</strong>, so your browsers trust your apps&apos; addresses.
+          </p>
+          <button onClick={() => void openExternal(tailscale.https_settings)}>
+            Open Tailscale&apos;s DNS settings ↗
+          </button>
+        </>
+      );
+    case "system_signed_out":
+      return (
+        <p className="set__note">
+          This server runs Tailscale itself, and it is signed out. On the server, run{" "}
+          <code>sudo tailscale up</code> and sign in.
+        </p>
+      );
+    case "ready":
+      return (
+        <>
+          <p className="set__note">
+            Your apps are on your private network at{" "}
+            <button
+              className="shell-card__link"
+              onClick={() => void openExternal(`https://${tailscale.name}`)}
+            >
+              {tailscale.name} ↗
+            </button>
+            . To open them, install Tailscale on your phone and computers and sign in with the same
+            account.
+          </p>
+          {onTailscale ? (
+            <p className="muted set__note">
+              This computer reaches the server through Tailscale, so it works away from home too.
+            </p>
+          ) : (
+            <>
+              <p className="muted set__note">
+                This computer reaches the server at its home network address, which works only at
+                home. With Tailscale on this computer, it can reach it anywhere.
+              </p>
+              <button disabled={busy} onClick={onMove}>
+                {busy ? "Connecting…" : "Connect through Tailscale"}
+              </button>
+            </>
+          )}
+        </>
+      );
+    default:
+      return <p className="muted set__note">Starting Tailscale on the server…</p>;
+  }
+}
+
 const ACCESS_CHOICES: { value: Access; label: string }[] = [
   { value: "public", label: "Anyone, no password" },
   { value: "private", label: "Only with a password" },
@@ -375,7 +1243,7 @@ function AppsPageSection() {
       })
       .catch((e) => setError(String(e)));
   }, []);
-  useEffect(refresh, [refresh]);
+  useFresh(refresh);
 
   const run = async (work: () => Promise<unknown>) => {
     setBusy(true);
@@ -384,7 +1252,7 @@ function AppsPageSection() {
       await work();
       setPassword("");
       setAskPassword(false);
-      refresh();
+      publishingChanged();
     } catch (e) {
       setError(String(e));
     } finally {
@@ -392,12 +1260,17 @@ function AppsPageSection() {
     }
   };
 
-  if (!overview?.domain) return null;
+  const onTailnet = overview?.reach === "private";
+  if (!overview?.domain && !onTailnet) return null;
+  if (!overview) return null;
   const page = overview.apps_page;
   const shownName = name.trim().toLowerCase() || "apps";
-  const renamed = page !== null && shownName !== page.name;
+  // On the private network the page has the Tailscale name to itself.
+  const renamed = !onTailnet && page !== null && shownName !== page.name;
   const choices = ACCESS_CHOICES.filter(
-    (choice) => choice.value !== "company" || overview.sign_in || page?.access === "company",
+    (choice) =>
+      choice.value !== "company" ||
+      (!onTailnet && (overview.sign_in || page?.access === "company")),
   );
   // A password page needs one the first time; after that it keeps its own.
   const choose = (next: Access) => {
@@ -441,7 +1314,7 @@ function AppsPageSection() {
         One address that lists this server&apos;s apps and opens them, in any browser and on a
         phone. People use the apps there; nothing of Commitarium is shown.
       </p>
-      <label className="muted">
+      <label className="muted" hidden={onTailnet}>
         Address
         <span className="deploy-address__name">
           <input
@@ -581,17 +1454,24 @@ function Servers() {
   useEffect(refresh, [refresh]);
 
   if (!known || known.servers.length === 0) return null;
-  const act = (work: Promise<unknown>) => work.then(refresh).catch((e) => setError(String(e)));
+  const changed = () => {
+    refresh();
+    window.dispatchEvent(new Event(PLACES_CHANGED));
+  };
+  const act = (work: Promise<unknown>) => work.then(changed).catch((e) => setError(String(e)));
   const save = (fingerprint: string) => {
     setNaming(null);
     act(renameServer(fingerprint, name));
   };
-  const forget = (fingerprint: string, label: string) => {
-    if (!window.confirm(`Forget ${label} on this computer? Pairing it again needs a new code.`))
-      return;
+  const forget = async (fingerprint: string, label: string) => {
+    const sure = await confirmAction(
+      `Forget ${label} on this computer? It keeps running, but this computer can only reach it again by pairing anew, with a code from the server.`,
+      "Forget",
+    );
+    if (!sure) return;
     const shown = known.active === fingerprint;
     void forgetServer(fingerprint)
-      .then(() => (shown ? window.location.reload() : refresh()))
+      .then(() => (shown ? window.location.reload() : changed()))
       .catch((e) => setError(String(e)));
   };
 
@@ -630,7 +1510,7 @@ function Servers() {
           >
             Rename
           </button>
-          <button className="ghost" onClick={() => forget(server.fingerprint, server.name)}>
+          <button className="ghost" onClick={() => void forget(server.fingerprint, server.name)}>
             Forget
           </button>
         </div>
@@ -719,7 +1599,8 @@ function ConnectedServer({
         <button onClick={() => void showPlace(null)}>Show this computer</button>
       </section>
 
-      <DomainSection />
+      <WhereSection onLeave={onLeave} />
+      <DomainSection onLeave={onLeave} />
       <SignInSection onLeave={onLeave} />
       <AppsPageSection />
 

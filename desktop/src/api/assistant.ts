@@ -33,6 +33,7 @@ export interface AssistantQuestion {
   text: string;
   options: string[];
   /** The option the assistant would pick. */
+  /** The answer the assistant would pick, or -1 for a fact about the user. */
   suggested: number;
   /** Set once answered; option is absent when the user wrote their own. */
   answer?: { option?: number; text: string; answered_at: string };
@@ -204,7 +205,7 @@ export interface AssistantActivity {
 
 /** What the conversation is about: a work order, the vision, or the stack. */
 export interface AssistantFocus {
-  kind: "work_order" | "vision" | "stack" | "sign_in";
+  kind: "work_order" | "vision" | "stack" | "sign_in" | "serving";
   work_order_id?: string;
   /** What the chip says; the coordinator fills it in. */
   label?: string;

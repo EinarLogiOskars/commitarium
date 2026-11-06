@@ -42,6 +42,17 @@ describe("graphColumns", () => {
     expect(ids(columns)).toEqual([["a", "b"], ["c", "other"], ["next"]]);
   });
 
+  it("keeps queued work in its phase while later phases still run", () => {
+    const columns = graphColumns([
+      node("p0.1", { start: 0, end: 5, phase: 0 }),
+      node("p0.2", { start: 1, status: "running", phase: 0 }),
+      node("p1.1", { start: 6, status: "running", phase: 1 }),
+      node("p0.3", { status: "queued", phase: 0, after: "p0.2" }),
+    ]);
+    expect(ids(columns)).toEqual([["p0.1", "p0.2"], ["p0.3"], ["p1.1"]]);
+    expect(columns.map((c) => c.opens)).toEqual([0, undefined, 1]);
+  });
+
   it("survives work that waits for itself in a loop", () => {
     const columns = graphColumns([
       node("a", { status: "queued", after: "b" }),

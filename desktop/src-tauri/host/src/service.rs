@@ -234,16 +234,37 @@ pub fn pair(data_dir: &Path, address: Option<&str>) -> Result<String, String> {
     let connection = read_connection(data_dir)?;
     let opened: PairingOpened =
         ask_service(&connection, reqwest::Method::POST, "/v1/pairing/open", None)?;
-    let address = address
-        .map(str::to_string)
-        .or_else(tailscale_address)
-        .or_else(outgoing_address)
-        .ok_or("could not find this server's address; pass --address <address>")?;
-    Ok(format!(
+    let (tailscale, home) = match address {
+        Some(address) => (None, Some(address.to_string())),
+        None => (tailscale_address(), outgoing_address()),
+    };
+    pairing_text(&opened, tailscale.as_deref(), home.as_deref())
+        .ok_or("could not find this server's address; pass --address <address>".to_string())
+}
+
+/// The line to paste. A server on Tailscale gives two: its Tailscale address
+/// works from anywhere with Tailscale on, its own only on its network.
+fn pairing_text(
+    opened: &PairingOpened,
+    tailscale: Option<&str>,
+    home: Option<&str>,
+) -> Option<String> {
+    let lines = match (tailscale, home) {
+        (Some(tailscale), Some(home)) if tailscale != home => format!(
+            "With Tailscale on that device, from anywhere:\n\n  {}\n\n\
+             Or on this server's own network:\n\n  {}\n",
+            pairing_line(tailscale, opened),
+            pairing_line(home, opened),
+        ),
+        (Some(address), _) | (None, Some(address)) => {
+            format!("  {}\n", pairing_line(address, opened))
+        }
+        (None, None) => return None,
+    };
+    Some(format!(
         "In Commitarium, choose Connect to a server and paste this.\n\
-         It works once, for {} minutes:\n\n  {}\n",
+         It works once, for {} minutes:\n\n{lines}",
         opened.seconds / 60,
-        pairing_line(&address, &opened),
     ))
 }
 
@@ -346,6 +367,21 @@ mod tests {
         assert_eq!(data_dir(&[]), Path::new(DEFAULT_DATA_DIR));
         let chosen = ["--data-dir".to_string(), "/srv/c".to_string()];
         assert_eq!(data_dir(&chosen), Path::new("/srv/c"));
+    }
+
+    #[test]
+    fn a_server_on_tailscale_prints_both_lines() {
+        let opened = PairingOpened {
+            code: "ABCD2345".into(),
+            port: 7443,
+            seconds: 300,
+        };
+        let both = pairing_text(&opened, Some("100.64.0.1"), Some("192.168.1.20")).unwrap();
+        assert!(both.contains("commitarium://100.64.0.1:7443#ABCD2345"));
+        assert!(both.contains("commitarium://192.168.1.20:7443#ABCD2345"));
+        let one = pairing_text(&opened, None, Some("192.168.1.20")).unwrap();
+        assert!(one.contains("192.168.1.20") && !one.contains("anywhere"));
+        assert!(pairing_text(&opened, None, None).is_none());
     }
 
     #[test]

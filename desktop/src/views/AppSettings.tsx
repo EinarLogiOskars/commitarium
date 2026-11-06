@@ -1,4 +1,5 @@
-import { ServerSection } from "./ServerSection";
+import { HomelabSettings, ServerSection } from "./ServerSection";
+import { connectedServer } from "../connection";
 import { useEffect, useRef, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import {
@@ -110,8 +111,9 @@ export function AppSettings({
       trapFocus(e, cardRef.current);
     }
   };
+  const tabs = shownTabs();
   const onTabKey = (e: React.KeyboardEvent, index: number) => {
-    const last = TABS.length - 1;
+    const last = tabs.length - 1;
     const next =
       e.key === "ArrowDown" || e.key === "ArrowRight"
         ? index === last
@@ -128,14 +130,15 @@ export function AppSettings({
               : null;
     if (next === null) return;
     e.preventDefault();
-    choose(TABS[next].id);
-    tabRefs.current[TABS[next].id]?.focus();
+    choose(tabs[next].id);
+    tabRefs.current[tabs[next].id]?.focus();
   };
 
   // Every panel stays mounted, so a backup in progress keeps reporting while
   // another tab is open.
   const panels: Record<Tab, React.ReactNode> = {
     server: <ServerSection running={running.length > 0} onLeave={close} />,
+    homelab: <HomelabSettings onLeave={close} />,
     general: (
       <>
         <Appearance />
@@ -327,7 +330,7 @@ export function AppSettings({
 
         <div className="settings__body">
           <div className="settings__tabs" role="tablist" aria-label="Settings sections">
-            {TABS.map(({ id, label }, index) => (
+            {tabs.map(({ id, label, sub }, index) => (
               <button
                 key={id}
                 ref={(element) => {
@@ -338,7 +341,9 @@ export function AppSettings({
                 aria-selected={tab === id}
                 aria-controls={`settings-panel-${id}`}
                 tabIndex={tab === id ? 0 : -1}
-                className={`settings__tab ${tab === id ? "settings__tab--on" : ""}`}
+                className={`settings__tab ${sub ? "settings__tab--sub" : ""} ${
+                  tab === id ? "settings__tab--on" : ""
+                }`}
                 onClick={() => choose(id)}
                 onKeyDown={(e) => onTabKey(e, index)}
               >
@@ -346,7 +351,7 @@ export function AppSettings({
               </button>
             ))}
           </div>
-          {TABS.map(({ id }) => (
+          {tabs.map(({ id }) => (
             <div
               key={id}
               id={`settings-panel-${id}`}
@@ -365,16 +370,23 @@ export function AppSettings({
   );
 }
 
-type Tab = "general" | "server" | "notifications" | "marketplace" | "backup" | "about";
+type Tab = "general" | "server" | "homelab" | "notifications" | "marketplace" | "backup" | "about";
 
-const TABS: { id: Tab; label: string }[] = [
+const TABS: { id: Tab; label: string; sub?: boolean }[] = [
   { id: "general", label: "General" },
   { id: "server", label: "Server" },
+  // A server's own setting: shown under Server while one is connected.
+  { id: "homelab", label: "Homelab", sub: true },
   { id: "notifications", label: "Notifications" },
   { id: "marketplace", label: "Marketplace" },
   { id: "backup", label: "Backup" },
   { id: "about", label: "About" },
 ];
+
+/** The tabs that apply now: Homelab only while a server is shown. */
+function shownTabs() {
+  return TABS.filter((t) => t.id !== "homelab" || connectedServer() !== null);
+}
 
 const TAB_KEY = "commitarium.settings.tab";
 
@@ -383,7 +395,7 @@ const TAB_KEY = "commitarium.settings.tab";
 function readTab(): Tab {
   try {
     const stored = localStorage.getItem(TAB_KEY);
-    if (TABS.some((t) => t.id === stored)) return stored as Tab;
+    if (shownTabs().some((t) => t.id === stored)) return stored as Tab;
   } catch {
     // Storage blocked: start on General.
   }

@@ -22,7 +22,17 @@ const (
 	// FocusSignIn is setting up company sign-in for the project's deployed
 	// app (COMPANY_SIGN_IN_PLAN.md, C3).
 	FocusSignIn FocusKind = "sign_in"
+	// FocusServing is how the user's server serves their apps: where it
+	// runs, homelab mode, and pointing their domain's DNS at it
+	// (HOMELAB_PLAN.md).
+	FocusServing FocusKind = "serving"
 )
+
+// serverFocus says whether a focus is about the user's server rather than
+// one project, so a chat outside any project may have it too.
+func serverFocus(kind FocusKind) bool {
+	return kind == FocusSignIn || kind == FocusServing
+}
 
 type Focus struct {
 	Kind        FocusKind `json:"kind"`
@@ -32,10 +42,11 @@ type Focus struct {
 }
 
 // SetFocus focuses a project's chat (ctx's, or the most recently used) on
-// an item, or clears the focus when focus is nil.
+// an item, or clears the focus when focus is nil. A chat outside any project
+// may be focused on the user's server only.
 func (service *Service) SetFocus(ctx context.Context, scope string, focus *Focus) (Conversation, error) {
-	if scope == TopLevel {
-		return Conversation{}, fmt.Errorf("%w: only a project's conversation has a focus", ErrInvalid)
+	if scope == TopLevel && focus != nil && !serverFocus(focus.Kind) {
+		return Conversation{}, fmt.Errorf("%w: only a project's conversation has this focus", ErrInvalid)
 	}
 	if err := service.checkScope(ctx, scope); err != nil {
 		return Conversation{}, err
@@ -48,6 +59,8 @@ func (service *Service) SetFocus(ctx context.Context, scope string, focus *Focus
 			*focus = Focus{Kind: FocusStack, Label: "The stack"}
 		case FocusSignIn:
 			*focus = Focus{Kind: FocusSignIn, Label: "Company sign-in"}
+		case FocusServing:
+			*focus = Focus{Kind: FocusServing, Label: "Serving your apps"}
 		case FocusWorkOrder:
 			item, err := service.workOrder(ctx, scope, focus.WorkOrderID)
 			if err != nil {
@@ -55,8 +68,8 @@ func (service *Service) SetFocus(ctx context.Context, scope string, focus *Focus
 			}
 			*focus = Focus{Kind: FocusWorkOrder, WorkOrderID: item.ID, Label: item.Title}
 		default:
-			return Conversation{}, fmt.Errorf("%w: focus on a work order, the vision, the stack, or company sign-in",
-				ErrInvalid)
+			return Conversation{}, fmt.Errorf("%w: focus on a work order, the vision, the stack, company sign-in, "+
+				"or serving apps", ErrInvalid)
 		}
 	}
 	chat, err := service.chatFor(ctx, scope)
@@ -158,6 +171,8 @@ func (service *Service) focusInstructions(ctx context.Context, scope string, foc
 			"has code, design_stack checks the stack the code uses."
 	case FocusSignIn:
 		return signInInstructions
+	case FocusServing:
+		return servingInstructions
 	}
 	return ""
 }

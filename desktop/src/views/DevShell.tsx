@@ -1,4 +1,5 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { connectedServer } from "../connection";
 import {
   createChat,
   getConversation,
@@ -38,7 +39,9 @@ import { ProjectCost } from "./usage";
 import { BrandMark } from "./BrandMark";
 
 const TOP = "commitarium";
-const SELECTED_KEY = "commitarium.chats.selected";
+/** The chat on screen, kept per place: a chat of one server is not
+ * another's, and switching places reloads the window. */
+const selectedKey = () => `commitarium.chats.selected:${connectedServer() ?? "local"}`;
 const EXPANDED_KEY = "commitarium.chats.expanded";
 const ALL_PROJECTS_KEY = "commitarium.chats.allProjects";
 const ORDERS_HIDDEN_KEY = "commitarium.chats.ordersHidden";
@@ -53,7 +56,7 @@ interface Selection {
 
 function readSelection(): Selection {
   try {
-    const stored = JSON.parse(localStorage.getItem(SELECTED_KEY) ?? "null");
+    const stored = JSON.parse(localStorage.getItem(selectedKey()) ?? "null");
     if (stored && typeof stored.scope === "string") {
       return {
         scope: stored.scope,
@@ -202,7 +205,7 @@ export function DevShell({
     setShowProjects(false);
     setPage(null);
     setError(null);
-    remember(SELECTED_KEY, next);
+    remember(selectedKey(), next);
   }, []);
   const expand = useCallback((id: string, open = true) => {
     setExpanded((current) => {
@@ -221,7 +224,7 @@ export function DevShell({
     setSelection((current) => {
       if (current.scope === focusProject) return current;
       const next = { scope: focusProject };
-      remember(SELECTED_KEY, next);
+      remember(selectedKey(), next);
       setShownChat(null);
       setShowProjects(false);
       return next;
@@ -240,7 +243,7 @@ export function DevShell({
     setSelection((current) => {
       if (current.scope === projectId) return current;
       const next = { scope: projectId };
-      remember(SELECTED_KEY, next);
+      remember(selectedKey(), next);
       setShownChat(null);
       return next;
     });
@@ -745,7 +748,16 @@ export function DevShell({
                   className={`chat-side__item ${
                     selection.scope === p.id && !open ? "chat-side__item--on" : ""
                   }`}
-                  onClick={() => expand(p.id, !expanded.has(p.id))}
+                  onClick={() => {
+                    const opening = !expanded.has(p.id);
+                    expand(p.id, opening);
+                    // Opening a project opens its top chat, unless one of
+                    // its chats is already on screen.
+                    if (opening && selection.scope !== p.id) {
+                      const top = chats[p.id]?.[0];
+                      select(top ? { scope: p.id, chat: top.id } : { scope: p.id });
+                    }
+                  }}
                   aria-expanded={open}
                   title={p.name}
                 >

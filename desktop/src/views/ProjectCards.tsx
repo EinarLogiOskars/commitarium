@@ -74,6 +74,7 @@ export function ProjectCards({
   );
   const open = (mode: PageMode) => onOpenPage({ mode });
   const openOrder = (orderId: string) => onOpenPage({ mode: "order", orderId });
+  const agents = useAgentsAtWork(projectId);
   const hasRepo = !!project?.forgejo_repository;
 
   return (
@@ -92,12 +93,13 @@ export function ProjectCards({
         features={data.features}
         items={items}
         running={running}
+        agents={agents}
         onOpen={openOrder}
         onNew={() => open("new")}
         onAll={() => open("work")}
         onGraph={() => open("graph")}
       />
-      <AgentsCard projectId={projectId} onOpen={openOrder} />
+      <AgentsCard agents={agents} onOpen={openOrder} />
       {hasRepo && (
         <PreviewCard
           projectId={projectId}
@@ -263,6 +265,7 @@ function WorkOrdersCard({
   features,
   items,
   running,
+  agents,
   onOpen,
   onNew,
   onAll,
@@ -271,6 +274,7 @@ function WorkOrdersCard({
   features: Feature[] | null;
   items: AttentionItem[];
   running: RunningWorkOrder[];
+  agents: AgentAtWork[] | null;
   onOpen: (featureId: string) => void;
   onNew: () => void;
   /** Every work order and session, done ones included. */
@@ -278,8 +282,8 @@ function WorkOrdersCard({
   onGraph: () => void;
 }) {
   const board = useMemo(
-    () => (features ? workBoard(features, items, running) : null),
-    [features, items, running],
+    () => (features ? workBoard(features, items, running, agents ?? []) : null),
+    [features, items, running, agents],
   );
 
   return (
@@ -408,13 +412,12 @@ function useAgentsAtWork(projectId: string): AgentAtWork[] | null {
 // works. "All" opens every one of them as a grid once there are more than
 // fit.
 function AgentsCard({
-  projectId,
+  agents,
   onOpen,
 }: {
-  projectId: string;
+  agents: AgentAtWork[] | null;
   onOpen: (featureId: string) => void;
 }) {
-  const agents = useAgentsAtWork(projectId);
   const modelName = useModelName();
   const [showAll, setShowAll] = useState(false);
   const working = agents?.filter((a) => a.working).length ?? 0;
