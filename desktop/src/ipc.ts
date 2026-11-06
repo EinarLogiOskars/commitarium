@@ -3,7 +3,7 @@
 // mirrors the commands registered in src-tauri/src/lib.rs and the routes in
 // src-tauri/host/src/server.rs.
 
-import { connectedServer } from "./connection";
+import { connectedServer, TAILSCALE_HINT, throughTailscale } from "./connection";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { fetch } from "@tauri-apps/plugin-http";
@@ -63,6 +63,11 @@ const hostGet = async <T>(path: string): Promise<T> => {
  * middle of an update, may answer with something else for a moment: that is
  * said in words, not as a parsing error. */
 const hostAnswer = async <T>(response: Response): Promise<T> => {
+  // The bridge answers an empty 502 when the server itself does not.
+  if (response.status === 502 && connectedServer()) {
+    const hint = throughTailscale() ? ` ${TAILSCALE_HINT}` : "";
+    throw new Error(`Commitarium can't reach the server right now.${hint}`);
+  }
   const text = await response.text();
   let body: { error?: string } | null;
   try {

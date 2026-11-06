@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { connectedServer } from "../connection";
+import { connectedServer, TAILSCALE_HINT, throughTailscale } from "../connection";
 import {
   authentikPassword,
   connectSignIn,
@@ -940,7 +940,16 @@ export function HomelabSettings({ onLeave }: { onLeave?: () => void }) {
     if (ready && !onTailscale && connectWhenReady) void connect();
   }, [ready, onTailscale, connect]);
 
-  if (!overview) return null;
+  if (!overview) {
+    // Not read: say why, rather than an empty tab.
+    return error ? (
+      <section className="set__section">
+        <h3 className="set__heading">Homelab</h3>
+        <p className="set__note">Commitarium could not read the server&apos;s settings: {error}</p>
+        {throughTailscale(server) && <p className="muted set__note">{TAILSCALE_HINT}</p>}
+      </section>
+    ) : null;
+  }
 
   const turnOn = async () => {
     setBusy(true);

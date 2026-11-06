@@ -1,7 +1,7 @@
 import type { BootPhase } from "../boot/useBoot";
 import type { DockerProbe } from "../ipc";
 import { openExternal, chooseThisComputer } from "../ipc";
-import { connectedServer } from "../connection";
+import { connectedServer, TAILSCALE_HINT, throughTailscale } from "../connection";
 import "./BootScreen.css";
 import { BrandMark } from "./BrandMark";
 
@@ -32,7 +32,10 @@ export function BootScreen({
   const server = connectedServer();
   const actionMessage = (() => {
     if (server) {
-      if (!probe) return `Commitarium can't reach your server at ${server}.`;
+      if (!probe)
+        return `Commitarium can't reach your server at ${server}.${
+          throughTailscale(server) ? ` ${TAILSCALE_HINT}` : ""
+        }`;
       return failed
         ? "Your server couldn't start its services."
         : "Docker isn't running on your server. Start it there, then re-check.";
