@@ -3587,13 +3587,14 @@ button.danger:not(.ghost) {
   text-align: right;
   overflow-wrap: anywhere;
 }
-/* A change that asks first, in place. */
-.set__confirm {
+/* A change that asks first, in place, as a warning. */
+.set__warning {
   display: flex;
   flex-direction: column;
   gap: 10px;
   padding: 12px 14px;
-  border: 1px solid var(--warn);
+  border: 1px solid color-mix(in srgb, var(--warn) 55%, transparent);
+  background: color-mix(in srgb, var(--warn) 5%, transparent);
   border-radius: var(--radius-s);
 }
 .set__actions {

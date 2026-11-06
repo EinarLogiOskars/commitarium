@@ -1029,7 +1029,7 @@ export function HomelabSettings({ onLeave }: { onLeave?: () => void }) {
         </div>
       )}
       {confirming && !stranded && (
-        <div className="set__confirm" role="alertdialog" aria-label="Confirm Homelab change">
+        <div className="set__warning" role="alertdialog" aria-label="Confirm Homelab change">
           <p className="set__note">
             <strong>{on ? "Turn off Homelab?" : "Turn on Homelab?"}</strong>{" "}
             {on
@@ -1051,7 +1051,7 @@ export function HomelabSettings({ onLeave }: { onLeave?: () => void }) {
       )}
       {confirming && stranded && (
         <div
-          className="set__confirm"
+          className="set__warning"
           role="alertdialog"
           aria-label="This computer would lose the server"
         >
