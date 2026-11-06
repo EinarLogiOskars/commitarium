@@ -208,12 +208,18 @@ pub(crate) fn show_this_computer(app: &AppHandle) {
     }
 }
 
+/// Drops a server's bridge, so the next time it is shown it connects anew,
+/// at whatever address it is saved at now.
+pub(crate) fn drop_bridge(app: &AppHandle, fingerprint: &str) {
+    if let Ok(mut servers) = app.state::<Host>().servers.lock() {
+        servers.remove(fingerprint);
+    }
+}
+
 /// Drops a forgotten server's bridge.
 pub(crate) fn close_server(app: &AppHandle, fingerprint: &str) {
     let host = app.state::<Host>();
-    if let Ok(mut servers) = host.servers.lock() {
-        servers.remove(fingerprint);
-    }
+    drop_bridge(app, fingerprint);
     if host.active().as_deref() == Some(fingerprint) {
         show_this_computer(app);
     }

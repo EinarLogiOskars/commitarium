@@ -354,6 +354,8 @@ pub async fn move_server(
         .moved(&fingerprint, &address)
         .ok_or("this server is not paired")?;
     save(&app, &saved)?;
+    // The open bridge still goes to the old address.
+    crate::host::drop_bridge(&app, &fingerprint);
     if shown {
         crate::host::show_server(&app, &moved).await;
     }

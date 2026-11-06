@@ -889,7 +889,6 @@ function HomelabSection({ onLeave }: { onLeave?: () => void }) {
   const [stranded, setStranded] = useState<{ tried: string | null } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [moved, setMoved] = useState(false);
 
   const refresh = useCallback(() => {
     void readPublishing()
@@ -910,8 +909,7 @@ function HomelabSection({ onLeave }: { onLeave?: () => void }) {
   const tailscale = overview.tailscale;
   const switching = asked !== null && asked !== on;
   const server = connectedServer();
-  const onTailscale =
-    Boolean(tailscale?.address && server?.startsWith(tailscale.address + ":")) || moved;
+  const onTailscale = Boolean(tailscale?.address && server?.startsWith(tailscale.address + ":"));
   const change = async (anyway = false) => {
     if (asked === null) return;
     setBusy(true);
@@ -935,9 +933,13 @@ function HomelabSection({ onLeave }: { onLeave?: () => void }) {
           setStranded({ tried: back });
           return;
         }
-        setMoved(false);
       }
       await setReach(asked ? "private" : "internet");
+      // The window shows the server from its new address, as on a switch.
+      if (!asked && onTailscale) {
+        window.location.reload();
+        return;
+      }
       setAsked(null);
       setStranded(null);
       publishingChanged();
@@ -955,7 +957,8 @@ function HomelabSection({ onLeave }: { onLeave?: () => void }) {
       const found = await readPlaces();
       if (!found.active) throw new Error("This computer is not showing a server.");
       await moveServer(found.active, `${tailscale.address}:7443`);
-      setMoved(true);
+      // The window shows the server from its new address, as on a switch.
+      window.location.reload();
     } catch (e) {
       setError(String(e));
     } finally {
