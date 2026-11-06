@@ -34,7 +34,8 @@ export function BootScreen({
     if (server) {
       if (!probe)
         return `Commitarium can't reach your server at ${server}.${
-          throughTailscale(server) ? ` ${TAILSCALE_HINT}` : ""
+          // Said once: the error below may carry it already.
+          throughTailscale(server) && !detail.includes(TAILSCALE_HINT) ? ` ${TAILSCALE_HINT}` : ""
         }`;
       return failed
         ? "Your server couldn't start its services."
