@@ -1,3 +1,4 @@
+import { confirmAction } from "../confirm";
 import { connectedServer } from "../connection";
 import { useEffect, useState } from "react";
 import { Fact } from "./Fact";
@@ -230,13 +231,12 @@ function ServerBackupSection({ running }: { running: boolean }) {
     }
   };
 
-  const restore = (backup: ServerBackup) => {
-    if (
-      !window.confirm(
-        `Restore the backup from ${when(backup.created_at_unix_seconds)}? Everything on the server goes back to how it was then: projects, chats, agents' history and deployed apps' data. Work since then is lost.`,
-      )
-    )
-      return;
+  const restore = async (backup: ServerBackup) => {
+    const sure = await confirmAction(
+      `Restore the backup from ${when(backup.created_at_unix_seconds)}? Everything on the server goes back to how it was then: projects, chats, agents' history and deployed apps' data. Work since then is lost.`,
+      "Restore",
+    );
+    if (!sure) return;
     void act("restoring", () => restoreServerBackup(backup.name), "Restored.");
   };
 
@@ -270,7 +270,7 @@ function ServerBackupSection({ running }: { running: boolean }) {
               · {megabytes(backup.size)} · Commitarium {backup.app_version}
             </span>
           </span>
-          <button disabled={busy !== null || running} onClick={() => restore(backup)}>
+          <button disabled={busy !== null || running} onClick={() => void restore(backup)}>
             {busy === "restoring" ? "Restoring…" : "Restore"}
           </button>
         </div>

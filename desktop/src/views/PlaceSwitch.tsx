@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { chooseThisComputer, places as readPlaces, showServer, type Places } from "../ipc";
 import { markSwitched } from "../boot/useBoot";
 import { ConnectForm } from "./StartChoice";
+import { PLACES_CHANGED } from "../confirm";
 
 const THIS_COMPUTER = "this-computer";
 const CONNECT = "connect";
@@ -17,12 +18,16 @@ export const showPlace = async (fingerprint: string | null) => {
 export function usePlaceName(): string {
   const [name, setName] = useState("This computer");
   useEffect(() => {
-    void readPlaces()
-      .then((known) => {
-        const shown = known.servers.find((server) => server.fingerprint === known.active);
-        if (shown) setName(shown.name);
-      })
-      .catch(() => {});
+    const read = () =>
+      void readPlaces()
+        .then((known) => {
+          const shown = known.servers.find((server) => server.fingerprint === known.active);
+          if (shown) setName(shown.name);
+        })
+        .catch(() => {});
+    read();
+    window.addEventListener(PLACES_CHANGED, read);
+    return () => window.removeEventListener(PLACES_CHANGED, read);
   }, []);
   return name;
 }
@@ -87,9 +92,14 @@ export function PlaceSwitch() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    void readPlaces()
-      .then(setKnown)
-      .catch(() => setKnown({ servers: [], active: null }));
+    // Servers forgotten or renamed in Settings show here at once.
+    const read = () =>
+      void readPlaces()
+        .then(setKnown)
+        .catch(() => setKnown({ servers: [], active: null }));
+    read();
+    window.addEventListener(PLACES_CHANGED, read);
+    return () => window.removeEventListener(PLACES_CHANGED, read);
   }, []);
 
   if (!known) return null;

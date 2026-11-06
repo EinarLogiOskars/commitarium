@@ -35,6 +35,7 @@ import {
   type Places,
 } from "../ipc";
 import { showPlace } from "./PlaceSwitch";
+import { confirmAction, PLACES_CHANGED } from "../confirm";
 import { ConnectForm } from "./StartChoice";
 import { startChatOn } from "../attention/askAssistant";
 import { getAssistantSettings, type AssistantSettings } from "../api/assistant";
@@ -1444,17 +1445,24 @@ function Servers() {
   useEffect(refresh, [refresh]);
 
   if (!known || known.servers.length === 0) return null;
-  const act = (work: Promise<unknown>) => work.then(refresh).catch((e) => setError(String(e)));
+  const changed = () => {
+    refresh();
+    window.dispatchEvent(new Event(PLACES_CHANGED));
+  };
+  const act = (work: Promise<unknown>) => work.then(changed).catch((e) => setError(String(e)));
   const save = (fingerprint: string) => {
     setNaming(null);
     act(renameServer(fingerprint, name));
   };
-  const forget = (fingerprint: string, label: string) => {
-    if (!window.confirm(`Forget ${label} on this computer? Pairing it again needs a new code.`))
-      return;
+  const forget = async (fingerprint: string, label: string) => {
+    const sure = await confirmAction(
+      `Forget ${label} on this computer? It keeps running, but this computer can only reach it again by pairing anew, with a code from the server.`,
+      "Forget",
+    );
+    if (!sure) return;
     const shown = known.active === fingerprint;
     void forgetServer(fingerprint)
-      .then(() => (shown ? window.location.reload() : refresh()))
+      .then(() => (shown ? window.location.reload() : changed()))
       .catch((e) => setError(String(e)));
   };
 
@@ -1493,7 +1501,7 @@ function Servers() {
           >
             Rename
           </button>
-          <button className="ghost" onClick={() => forget(server.fingerprint, server.name)}>
+          <button className="ghost" onClick={() => void forget(server.fingerprint, server.name)}>
             Forget
           </button>
         </div>
