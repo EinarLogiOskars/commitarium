@@ -430,8 +430,11 @@ impl Api<'_> {
             "flows/instances/?slug=default-provider-authorization-implicit-consent",
             "authorization flow",
         )?;
+        // Signing out of the apps ends the authentik session too: the
+        // provider-only flow would leave it, and the gate would sign the
+        // person straight back in.
         let invalidation = self.pk_of(
-            "flows/instances/?slug=default-provider-invalidation-flow",
+            "flows/instances/?slug=default-invalidation-flow",
             "invalidation flow",
         )?;
         let signing_key = self.pk_of(
