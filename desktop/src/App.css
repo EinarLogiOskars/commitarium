@@ -3587,6 +3587,15 @@ button.danger:not(.ghost) {
   text-align: right;
   overflow-wrap: anywhere;
 }
+/* A change that asks first, in place. */
+.set__confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--warn);
+  border-radius: var(--radius-s);
+}
 .set__actions {
   display: flex;
   flex-wrap: wrap;
@@ -6003,6 +6012,11 @@ select:focus {
 .settings__tab:hover {
   background: var(--hover);
 }
+/* A tab that belongs to the one above it. */
+.settings__tab--sub {
+  margin-left: 14px;
+  font-size: var(--text-sm);
+}
 .settings__tab--on,
 .settings__tab--on:hover {
   background: var(--selected);
@@ -6055,6 +6069,9 @@ select:focus {
   }
   .settings__tab {
     white-space: nowrap;
+  }
+  .settings__tab--sub {
+    margin-left: 0;
   }
 }
 

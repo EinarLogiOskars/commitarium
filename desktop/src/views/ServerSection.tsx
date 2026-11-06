@@ -882,9 +882,15 @@ export function ServerQuestion({ onOpenSettings }: { onOpenSettings: () => void 
 // Homelab mode (HOMELAB_PLAN.md): off, apps are served at the server's own
 // domain, for anyone on the internet; on, only the owner's devices reach
 // them, on their Tailscale network, with the steps Tailscale takes.
-function HomelabSection({ onLeave }: { onLeave?: () => void }) {
+// Set when Homelab is turned on here: once the server is ready, this
+// computer moves to its Tailscale address by itself. It outlives the dialog,
+// since signing in to Tailscale happens in a browser.
+let connectWhenReady = false;
+
+/** Settings → Server → Homelab: one button each way, each asked first. */
+export function HomelabSettings({ onLeave }: { onLeave?: () => void }) {
   const [overview, setOverview] = useState<PublishingOverview | null>(null);
-  const [asked, setAsked] = useState<boolean | null>(null);
+  const [confirming, setConfirming] = useState(false);
   // Turning off would cut this computer off: why, and the way back it tried.
   const [stranded, setStranded] = useState<{ tried: string | null } | null>(null);
   const [busy, setBusy] = useState(false);
@@ -896,7 +902,10 @@ function HomelabSection({ onLeave }: { onLeave?: () => void }) {
       .catch((e) => setError(String(e)));
   }, []);
   useFresh(refresh);
-  const waiting = overview?.reach === "private" && overview.tailscale?.state !== "ready";
+  const on = overview?.reach === "private";
+  const tailscale = overview?.tailscale ?? null;
+  const ready = on && tailscale?.state === "ready";
+  const waiting = on && !ready;
   // Signing in and turning on HTTPS happen elsewhere: look again while waiting.
   useEffect(() => {
     if (!waiting) return;
@@ -904,21 +913,55 @@ function HomelabSection({ onLeave }: { onLeave?: () => void }) {
     return () => clearInterval(timer);
   }, [waiting, refresh]);
 
-  if (!overview) return null;
-  const on = overview.reach === "private";
-  const tailscale = overview.tailscale;
-  const switching = asked !== null && asked !== on;
   const server = connectedServer();
-  const onTailscale = Boolean(tailscale?.address && server?.startsWith(tailscale.address + ":"));
-  const change = async (anyway = false) => {
-    if (asked === null) return;
+  const address = tailscale?.address ?? null;
+  const onTailscale = Boolean(address && server?.startsWith(address + ":"));
+
+  const connect = useCallback(async () => {
+    if (!address) return;
+    connectWhenReady = false;
+    setBusy(true);
+    setError(null);
+    try {
+      const found = await readPlaces();
+      if (!found.active) throw new Error("This computer is not showing a server.");
+      await moveServer(found.active, `${address}:7443`);
+      // The window shows the server from its new address, as on a switch.
+      window.location.reload();
+    } catch (e) {
+      setError(String(e));
+      setBusy(false);
+    }
+  }, [address]);
+  useEffect(() => {
+    if (ready && !onTailscale && connectWhenReady) void connect();
+  }, [ready, onTailscale, connect]);
+
+  if (!overview) return null;
+
+  const turnOn = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await setReach("private");
+      connectWhenReady = true;
+      setConfirming(false);
+      publishingChanged();
+      refresh();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const turnOff = async (anyway = false) => {
     setBusy(true);
     setError(null);
     try {
       // Off stops the server's Tailscale: a computer that reaches the server
       // through it goes back to the address it had first, or is told what
       // losing the server means before it does.
-      if (!asked && onTailscale && !anyway) {
+      if (onTailscale && !anyway) {
         const found = await readPlaces();
         const shown = found.servers.find((s) => s.fingerprint === found.active);
         const back = shown?.previous_address ?? null;
@@ -934,62 +977,84 @@ function HomelabSection({ onLeave }: { onLeave?: () => void }) {
           return;
         }
       }
-      await setReach(asked ? "private" : "internet");
+      connectWhenReady = false;
+      await setReach("internet");
       // The window shows the server from its new address, as on a switch.
-      if (!asked && onTailscale) {
+      if (onTailscale) {
         window.location.reload();
         return;
       }
-      setAsked(null);
+      setConfirming(false);
       setStranded(null);
       publishingChanged();
+      refresh();
     } catch (e) {
       setError(String(e));
     } finally {
       setBusy(false);
     }
   };
-  const moveHere = async () => {
-    if (!tailscale?.address) return;
-    setBusy(true);
-    setError(null);
-    try {
-      const found = await readPlaces();
-      if (!found.active) throw new Error("This computer is not showing a server.");
-      await moveServer(found.active, `${tailscale.address}:7443`);
-      // The window shows the server from its new address, as on a switch.
-      window.location.reload();
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setBusy(false);
-    }
+  const cancel = () => {
+    setConfirming(false);
+    setStranded(null);
   };
+  const oldLinks = overview.apps.length > 0 ? " Anyone with an old link needs the new one." : "";
 
   return (
     <section className="set__section">
       <h3 className="set__heading">Homelab</h3>
-      <label className="set__row">
-        <input
-          type="checkbox"
-          checked={asked ?? on}
-          disabled={busy}
-          onChange={(e) => {
-            setAsked(e.target.checked);
-            setStranded(null);
-          }}
+      <p className="muted set__note">
+        For a computer at home: your apps go on a private network that only your own devices reach,
+        through Tailscale, with no domain and nothing open on your router. This computer connects to
+        the server through it too, so Commitarium works away from home. Off, your apps are served at
+        your own domain, for anyone on the internet.
+      </p>
+      {on && (
+        <TailscaleSteps
+          tailscale={tailscale}
+          busy={busy}
+          onTailscale={onTailscale}
+          onMove={() => void connect()}
         />
-        <span>Use this server as my homelab</span>
-      </label>
-      {!switching && !on && (
-        <p className="muted set__note">
-          For a computer at home: your apps go on a private network that only your own devices
-          reach, through Tailscale, with no domain and nothing open on your router. Off, they are
-          served at your own domain, for anyone on the internet.
-        </p>
       )}
-      {switching && stranded && (
-        <>
+      {!confirming && (
+        <div className="set__row">
+          <button
+            className={on ? "ghost" : undefined}
+            disabled={busy}
+            onClick={() => setConfirming(true)}
+          >
+            {on ? "Turn off Homelab" : "Turn on Homelab"}
+          </button>
+        </div>
+      )}
+      {confirming && !stranded && (
+        <div className="set__confirm" role="alertdialog" aria-label="Confirm Homelab change">
+          <p className="set__note">
+            <strong>{on ? "Turn off Homelab?" : "Turn on Homelab?"}</strong>{" "}
+            {on
+              ? `Your apps move to addresses under your own domain, for anyone on the internet. Every app gets a new address.${oldLinks}`
+              : `Your apps move to a private network that only your devices reach, through Tailscale. Every app gets a new address, and company sign-in is not offered there.${oldLinks} Next you sign in to Tailscale; once the server is ready, this computer connects through it by itself.`}
+            {on &&
+              onTailscale &&
+              " This computer first goes back to reaching the server at its home network address."}
+          </p>
+          <div className="set__row">
+            <button disabled={busy} onClick={() => void (on ? turnOff() : turnOn())}>
+              {busy ? "Switching…" : on ? "Turn off" : "Turn on"}
+            </button>
+            <button className="ghost" disabled={busy} onClick={cancel}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+      {confirming && stranded && (
+        <div
+          className="set__confirm"
+          role="alertdialog"
+          aria-label="This computer would lose the server"
+        >
           <p className="set__note">
             This computer reaches the server only through Tailscale
             {stranded.tried
@@ -1012,50 +1077,14 @@ function HomelabSection({ onLeave }: { onLeave?: () => void }) {
                 "through Tailscale, so it would lose the server. Help me work out what to do."
               }
             />
-            <button className="ghost" disabled={busy} onClick={() => void change(true)}>
+            <button className="ghost" disabled={busy} onClick={() => void turnOff(true)}>
               Turn off anyway
             </button>
-            <button
-              className="ghost"
-              disabled={busy}
-              onClick={() => {
-                setStranded(null);
-                setAsked(null);
-              }}
-            >
+            <button className="ghost" disabled={busy} onClick={cancel}>
               Cancel
             </button>
           </div>
-        </>
-      )}
-      {switching && !stranded && (
-        <>
-          <p className="set__note">
-            {asked
-              ? "Your apps move to a private network that only your devices reach, through Tailscale: no domain, nothing open on your router. Every app gets a new address, and company sign-in is not offered there."
-              : "Your apps move to addresses under your own domain, for anyone on the internet. Every app gets a new address."}
-            {overview.apps.length > 0 && " Anyone with an old link needs the new one."}
-            {!asked &&
-              onTailscale &&
-              " This computer first goes back to reaching the server at its home network address."}
-          </p>
-          <div className="set__row">
-            <button disabled={busy} onClick={() => void change()}>
-              {busy ? "Switching…" : asked ? "Turn on" : "Turn off"}
-            </button>
-            <button className="ghost" disabled={busy} onClick={() => setAsked(null)}>
-              Cancel
-            </button>
-          </div>
-        </>
-      )}
-      {!switching && on && (
-        <TailscaleSteps
-          tailscale={tailscale}
-          busy={busy}
-          onTailscale={onTailscale}
-          onMove={() => void moveHere()}
-        />
+        </div>
       )}
       {error && <p className="set__note">{error}</p>}
     </section>
@@ -1135,7 +1164,7 @@ function TailscaleSteps({
                 home. With Tailscale on this computer, it can reach it anywhere.
               </p>
               <button disabled={busy} onClick={onMove}>
-                Connect through Tailscale
+                {busy ? "Connecting…" : "Connect through Tailscale"}
               </button>
             </>
           )}
@@ -1523,7 +1552,6 @@ function ConnectedServer({
       </section>
 
       <WhereSection onLeave={onLeave} />
-      <HomelabSection onLeave={onLeave} />
       <DomainSection onLeave={onLeave} />
       <SignInSection onLeave={onLeave} />
       <AppsPageSection />
