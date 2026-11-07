@@ -1,14 +1,19 @@
-//! Publishing (PUBLISHING_PLAN.md, D2): a server's base domain, and an
-//! address for each deployed app, served by Caddy. Caddy is the only public
-//! door. It runs in a container on the host's network, so it reaches the
-//! deployments' loopback ports, and its admin API is a socket inside that
-//! container, never a port. The host writes Caddy's whole configuration from
-//! the settings and the running deployments, and reloads it when it changes.
+//! Publishing (PUBLISHING_PLAN.md, D2): a server's domains, and an address
+//! for each deployed app, served by Caddy. Caddy is the only public door. It
+//! runs in a container on the host's network, so it reaches the deployments'
+//! loopback ports, and its admin API is a socket inside that container, never
+//! a port. The host writes Caddy's whole configuration from the settings and
+//! the running deployments, and reloads it when it changes.
+//!
+//! A server can hold several domains (MULTI_DOMAIN_PLAN.md). Each has its own
+//! DNS mode, apps page and company sign-in; an app has one main address and
+//! any number of extra ones, on any of them. The empty name is the domain
+//! itself, for a website.
 
 use crate::authentik::{self, Authentik};
 use crate::deployments::Deployments;
 use crate::docker;
-use crate::sign_in::{self, Provider};
+use crate::sign_in::{self, Gate, Provider};
 use crate::tailscale::{self, Tailscale};
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
@@ -34,7 +39,8 @@ const CADDY_DATA: &str = "commitarium-caddy-data";
 const CADDY_ADMIN: &str = "unix//tmp/caddy-admin.sock";
 /// How often the routes are checked against the running deployments.
 const SYNC_EVERY: Duration = Duration::from_secs(5);
-/// Names that read as the server's own, or as something else's.
+/// Names that read as the server's own, or as something else's, on every
+/// domain. `www` is a bare-domain app's redirect.
 const RESERVED: &[&str] = &[
     "www",
     "mail",
@@ -67,9 +73,40 @@ pub enum Access {
     Company,
 }
 
+/// Where an app answers: a name under one of the server's domains. The
+/// empty name is the domain itself.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Address {
+    pub domain: String,
+    #[serde(default)]
+    pub name: String,
+}
+
+impl Address {
+    fn host(&self) -> String {
+        host(&self.name, &self.domain)
+    }
+
+    fn is_bare(&self) -> bool {
+        self.name.is_empty()
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 struct AppRoute {
+    /// The domain of its main address. Empty only for an app published on
+    /// the private network before the server had a domain.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    domain: String,
+    /// Its main address's name; empty for the domain itself.
     name: String,
+    /// For an app at a bare domain: whether `www.<domain>` answers too, by
+    /// sending people to the bare address. On unless the owner turns it off.
+    #[serde(default = "yes", skip_serializing_if = "is_yes")]
+    www: bool,
+    /// Its extra addresses, which reach the same running app.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    aliases: Vec<Address>,
     access: Access,
     /// bcrypt, only for a private app: what Caddy checks against.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -85,7 +122,7 @@ struct AppRoute {
     groups: Vec<String>,
     /// Whether the apps page lists it (APPS_PAGE_PLAN.md): yes unless the
     /// owner hides it, say while it is a work in progress.
-    #[serde(default = "listed_by_default", skip_serializing_if = "is_listed")]
+    #[serde(default = "yes", skip_serializing_if = "is_yes")]
     listed: bool,
     /// Its port on the Tailscale name, in homelab mode: given once and kept,
     /// so its address never changes.
@@ -93,8 +130,67 @@ struct AppRoute {
     port: Option<u16>,
 }
 
+impl AppRoute {
+    fn main(&self) -> Address {
+        Address {
+            domain: self.domain.clone(),
+            name: self.name.clone(),
+        }
+    }
+
+    /// Every address it answers on, its main one first.
+    fn addresses(&self) -> Vec<Address> {
+        let mut addresses = vec![self.main()];
+        addresses.extend(self.aliases.iter().cloned());
+        addresses
+    }
+
+    /// The domains it has an address on, its main one first.
+    fn domains(&self) -> Vec<String> {
+        let mut domains: Vec<String> = Vec::new();
+        for address in self.addresses() {
+            if !domains.contains(&address.domain) {
+                domains.push(address.domain);
+            }
+        }
+        domains
+    }
+
+    /// Its address on a domain: the main one when it is there.
+    fn address_on(&self, domain: &str) -> Option<Address> {
+        self.addresses()
+            .into_iter()
+            .find(|address| address.domain == domain)
+    }
+
+    /// The `www` names that send people on to its bare addresses.
+    fn www_redirects(&self) -> Vec<(String, String)> {
+        if !self.www {
+            return Vec::new();
+        }
+        self.addresses()
+            .into_iter()
+            .filter(Address::is_bare)
+            .map(|address| (format!("www.{}", address.domain), address.domain))
+            .collect()
+    }
+
+    /// Every name it needs DNS for, with its domain: each address, and the
+    /// `www` of each bare one.
+    fn dns_names(&self) -> Vec<Address> {
+        let mut names = self.addresses();
+        for (_, domain) in self.www_redirects() {
+            names.push(Address {
+                domain,
+                name: "www".into(),
+            });
+        }
+        names
+    }
+}
+
 /// Who reaches the apps (HOMELAB_PLAN.md): anyone on the internet, at the
-/// server's domain, or only the owner's devices, on their Tailscale network.
+/// server's domains, or only the owner's devices, on their Tailscale network.
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Reach {
@@ -107,7 +203,7 @@ fn is_internet(reach: &Reach) -> bool {
     *reach == Reach::Internet
 }
 
-/// How the domain's DNS points at the server: one wildcard record for every
+/// How a domain's DNS points at the server: one wildcard record for every
 /// name, or a record for each name in use, for a company that keeps no
 /// wildcard.
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Serialize)]
@@ -134,17 +230,18 @@ pub enum Placement {
     Other,
 }
 
-/// Where apps are served: under the domain, or on the Tailscale name.
+/// Where apps are served: at their domains, or on the Tailscale name.
 #[derive(Clone, Copy)]
 enum Base<'a> {
-    Domain(&'a str),
+    Internet,
     Tailnet { name: &'a str },
 }
 
 impl Base<'_> {
     fn app_url(&self, route: &AppRoute) -> String {
         match self {
-            Base::Domain(domain) => address(&route.name, domain),
+            Base::Internet if route.domain.is_empty() => String::new(),
+            Base::Internet => address(&route.name, &route.domain),
             Base::Tailnet { name, .. } => match route.port {
                 Some(port) => format!("https://{name}:{port}"),
                 None => String::new(),
@@ -152,10 +249,16 @@ impl Base<'_> {
         }
     }
 
-    fn page_url(&self, page: &AppsPage) -> String {
+    /// Every address of an app, its main one first.
+    fn app_urls(&self, route: &AppRoute) -> Vec<String> {
         match self {
-            Base::Domain(domain) => address(&page.name, domain),
-            Base::Tailnet { name, .. } => format!("https://{name}"),
+            Base::Internet if route.domain.is_empty() => Vec::new(),
+            Base::Internet => route
+                .addresses()
+                .iter()
+                .map(|address| format!("https://{}", address.host()))
+                .collect(),
+            Base::Tailnet { .. } => vec![self.app_url(route)],
         }
     }
 }
@@ -185,12 +288,12 @@ fn default_apps_page_name() -> String {
     APPS_PAGE_NAME.to_string()
 }
 
-fn listed_by_default() -> bool {
+fn yes() -> bool {
     true
 }
 
-fn is_listed(listed: &bool) -> bool {
-    *listed
+fn is_yes(value: &bool) -> bool {
+    *value
 }
 
 /// The apps page at `<name>.<domain>`, `apps` unless the owner chose
@@ -206,52 +309,330 @@ struct AppsPage {
     password: Option<String>,
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
-struct Settings {
-    domain: Option<String>,
-    #[serde(default)]
-    apps: BTreeMap<String, AppRoute>,
-    /// The company's sign-in provider, once connected.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    sign_in: Option<Provider>,
-    /// The apps page, once turned on.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    apps_page: Option<AppsPage>,
-    #[serde(default, skip_serializing_if = "is_internet")]
-    reach: Reach,
+/// One of the server's domains, with what is its own: how its DNS points
+/// here, its company sign-in and its apps page.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct Domain {
+    name: String,
     #[serde(default, skip_serializing_if = "is_wildcard")]
     records: Records,
+    /// The company's sign-in provider for this domain, once connected.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    sign_in: Option<Provider>,
+    /// Which gate serves its sign-in, given when it is connected.
+    #[serde(default, skip_serializing_if = "Gate::is_first")]
+    gate: Gate,
+    /// Its apps page, once turned on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    apps_page: Option<AppsPage>,
+}
+
+impl Domain {
+    fn new(name: String, records: Records) -> Self {
+        Self {
+            name,
+            records,
+            sign_in: None,
+            gate: Gate::default(),
+            apps_page: None,
+        }
+    }
+
+    /// Its gate, when it has sign-in: where Caddy asks about a request.
+    fn gate(&self) -> Option<(&str, Gate)> {
+        self.sign_in
+            .as_ref()
+            .map(|_| (self.name.as_str(), self.gate))
+    }
+
+    fn page_host(&self) -> Option<String> {
+        self.apps_page
+            .as_ref()
+            .map(|page| host(&page.name, &self.name))
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(from = "Saved")]
+struct Settings {
+    /// The first is the one older apps and clients know as "the domain".
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    domains: Vec<Domain>,
+    #[serde(default)]
+    apps: BTreeMap<String, AppRoute>,
+    /// The apps page on the private network, which has no domain: at the
+    /// Tailscale name itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    private_apps_page: Option<AppsPage>,
+    #[serde(default, skip_serializing_if = "is_internet")]
+    reach: Reach,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     placement: Option<Placement>,
+}
+
+/// The file as this version saves it, or as one before several domains did,
+/// with its one domain and that domain's settings at the top. Those move
+/// into the first domain on reading; only the new shape is written.
+#[derive(Deserialize)]
+struct Saved {
+    #[serde(default)]
+    domains: Vec<Domain>,
+    #[serde(default)]
+    apps: BTreeMap<String, AppRoute>,
+    #[serde(default)]
+    private_apps_page: Option<AppsPage>,
+    #[serde(default)]
+    reach: Reach,
+    #[serde(default)]
+    placement: Option<Placement>,
+    #[serde(default)]
+    domain: Option<String>,
+    #[serde(default)]
+    records: Records,
+    #[serde(default)]
+    sign_in: Option<Provider>,
+    #[serde(default)]
+    apps_page: Option<AppsPage>,
+}
+
+impl From<Saved> for Settings {
+    fn from(saved: Saved) -> Self {
+        let mut settings = Settings {
+            domains: saved.domains,
+            apps: saved.apps,
+            private_apps_page: saved.private_apps_page,
+            reach: saved.reach,
+            placement: saved.placement,
+        };
+        let had_domain = saved.domain.is_some();
+        if let Some(name) = saved.domain.filter(|_| settings.domains.is_empty()) {
+            settings.domains.push(Domain {
+                sign_in: saved.sign_in,
+                apps_page: saved.apps_page.clone(),
+                ..Domain::new(name, saved.records)
+            });
+        }
+        // The one apps page served the private network too.
+        if saved.reach == Reach::Private || !had_domain {
+            settings.private_apps_page = settings.private_apps_page.or(saved.apps_page);
+        }
+        settings.adopt_apps();
+        settings
+    }
 }
 
 impl Settings {
     /// Where apps are served now, if anywhere yet.
     fn base<'a>(&'a self, tailnet: Option<&'a tailscale::Status>) -> Option<Base<'a>> {
         match self.reach {
-            Reach::Internet => self.domain.as_deref().map(Base::Domain),
+            Reach::Internet => (!self.domains.is_empty()).then_some(Base::Internet),
             Reach::Private => {
                 let (name, _) = tailnet?.serving()?;
                 Some(Base::Tailnet { name })
             }
         }
     }
+
+    /// Apps without a domain go to the first one, as they did when a server
+    /// had only one.
+    fn adopt_apps(&mut self) {
+        let Some(first) = self.domains.first().map(|domain| domain.name.clone()) else {
+            return;
+        };
+        for route in self.apps.values_mut() {
+            if route.domain.is_empty() {
+                route.domain = first.clone();
+            }
+        }
+    }
+
+    /// A domain by name, or the first when none is named.
+    fn domain(&self, name: Option<&str>) -> Result<&Domain, String> {
+        let index = self.domain_index(name)?;
+        Ok(&self.domains[index])
+    }
+
+    fn domain_mut(&mut self, name: Option<&str>) -> Result<&mut Domain, String> {
+        let index = self.domain_index(name)?;
+        Ok(&mut self.domains[index])
+    }
+
+    fn domain_index(&self, name: Option<&str>) -> Result<usize, String> {
+        match name.map(|name| name.trim().trim_end_matches('.').to_ascii_lowercase()) {
+            None if self.domains.is_empty() => Err(NO_DOMAIN.into()),
+            None => Ok(0),
+            Some(name) => self
+                .domains
+                .iter()
+                .position(|domain| domain.name == name)
+                .ok_or_else(|| format!("{name} is not one of this server's domains")),
+        }
+    }
+
+    /// Whether an address is free for this app: no other app, no apps page
+    /// has it. Names are per domain: notes on one is free on another.
+    fn is_free(&self, address: &Address, project_id: &str) -> Result<(), String> {
+        let host = address.host();
+        if self
+            .apps
+            .iter()
+            .filter(|(other, _)| *other != project_id)
+            .any(|(_, route)| route.addresses().contains(address))
+        {
+            return Err(format!("{host} is already another app's address"));
+        }
+        let page = self
+            .domains
+            .iter()
+            .any(|domain| domain.page_host().as_deref() == Some(host.as_str()));
+        if page {
+            return Err(format!(
+                "{host} is the apps page's address. Choose another name."
+            ));
+        }
+        Ok(())
+    }
+
+    /// The domain whose apps page has this host, as the request names it.
+    fn page_domain(&self, host: &str) -> Option<&Domain> {
+        let host = host.split(':').next().unwrap_or(host).to_ascii_lowercase();
+        self.domains
+            .iter()
+            .find(|domain| domain.page_host().as_deref() == Some(host.as_str()))
+    }
+
+    /// Company sign-in is per domain: an app behind it needs it on every
+    /// domain it has an address on.
+    fn sign_in_for(&self, route: &AppRoute) -> Result<(), String> {
+        for name in route.domains() {
+            let connected = self
+                .domains
+                .iter()
+                .any(|domain| domain.name == name && domain.sign_in.is_some());
+            if !connected {
+                return Err(self.no_provider(&name));
+            }
+        }
+        Ok(())
+    }
+
+    fn no_provider(&self, domain: &str) -> String {
+        match self.domains.len() {
+            0 | 1 => NO_PROVIDER.into(),
+            _ => format!("connect your company's sign-in for {domain} in Settings first"),
+        }
+    }
+
+    /// The gates the domains with sign-in run.
+    fn gates(&self) -> Vec<(Gate, &Provider, &str)> {
+        self.domains
+            .iter()
+            .filter_map(|domain| {
+                Some((domain.gate, domain.sign_in.as_ref()?, domain.name.as_str()))
+            })
+            .collect()
+    }
+
+    /// The domain authentik lives at, when it is set up. A server set up
+    /// before several domains has it at the domain whose sign-in is its
+    /// first application, or else at the first domain.
+    fn authentik_home(&self, authentik: &Authentik) -> Option<String> {
+        if !authentik.installed() {
+            return None;
+        }
+        authentik
+            .home()
+            .or_else(|| {
+                self.domains
+                    .iter()
+                    .find(|domain| {
+                        domain.sign_in.as_ref().is_some_and(|provider| {
+                            provider.issuer == authentik::issuer(&domain.name, &domain.name)
+                        })
+                    })
+                    .map(|domain| domain.name.clone())
+            })
+            .or_else(|| self.domains.first().map(|domain| domain.name.clone()))
+    }
+
+    /// The domains whose sign-in is this server's authentik.
+    fn authentik_domains(&self, home: &str) -> Vec<String> {
+        self.domains
+            .iter()
+            .filter(|domain| {
+                domain
+                    .sign_in
+                    .as_ref()
+                    .is_some_and(|provider| authentik::serves(home, &provider.issuer))
+            })
+            .map(|domain| domain.name.clone())
+            .collect()
+    }
+
+    /// The apps page an app is shown in, by origin: each of its domains'.
+    fn page_origins(&self, route: &AppRoute) -> Vec<String> {
+        route
+            .domains()
+            .iter()
+            .filter_map(|name| {
+                let domain = self.domains.iter().find(|domain| domain.name == *name)?;
+                Some(format!("https://{}", domain.page_host()?))
+            })
+            .collect()
+    }
+
+    /// What is wrong with an app's DNS records, if anything: each address
+    /// with a record for each name, and a bare address and its `www` with a
+    /// wildcard, which does not cover the domain itself.
+    fn record_problem(&self, route: &AppRoute) -> Option<String> {
+        let problems: Vec<String> = route
+            .dns_names()
+            .iter()
+            .filter(|address| {
+                // `www` is never an app's name: here it is a redirect's.
+                address.is_bare()
+                    || address.name == "www"
+                    || self.domains.iter().any(|domain| {
+                        domain.name == address.domain && domain.records == Records::EachName
+                    })
+            })
+            .filter_map(|address| points_here(&address.name, &address.domain).err())
+            .collect();
+        (!problems.is_empty()).then(|| problems.join(" "))
+    }
+}
+
+/// An address as a client sees it.
+#[derive(Serialize)]
+pub struct AddressShown {
+    domain: String,
+    name: String,
+    url: String,
 }
 
 /// A published app as a client sees it.
 #[derive(Serialize)]
 pub struct PublishedApp {
     project_id: String,
+    /// Its main address: its domain and name; the empty name is the domain.
+    domain: String,
     name: String,
     access: Access,
+    /// Its main address.
     url: String,
+    /// Every address, its main one first.
+    urls: Vec<String>,
+    /// For a bare-domain app: whether `www.` sends people to it.
+    www: bool,
+    /// Its extra addresses.
+    aliases: Vec<AddressShown>,
     /// Whether its deployment runs, so the address answers with the app.
     live: bool,
     groups: Vec<String>,
     /// Whether the apps page lists it.
     listed: bool,
-    /// With a record for each name: what is wrong with its record, when its
-    /// address does not point here (such as after the domain changed).
+    /// What is wrong with its records, when an address does not point here
+    /// (such as after the domain changed, or a bare domain with no record).
     record_problem: Option<String>,
 }
 
@@ -263,9 +644,23 @@ pub struct AppsPageShown {
     url: String,
 }
 
+/// A domain as a client sees it.
+#[derive(Serialize)]
+pub struct DomainShown {
+    name: String,
+    records: Records,
+    /// Its company sign-in, when one is connected.
+    sign_in: Option<sign_in::Connected>,
+    /// Whether that sign-in is this server's authentik.
+    authentik: bool,
+    /// Its apps page, when it is on.
+    apps_page: Option<AppsPageShown>,
+}
+
 /// An app as the apps page shows it to the person looking.
 #[derive(Debug, PartialEq, Serialize)]
 pub struct CatalogApp {
+    /// Its name at the page's domain; empty for the domain itself.
     name: String,
     url: String,
     access: Access,
@@ -274,15 +669,19 @@ pub struct CatalogApp {
 
 #[derive(Serialize)]
 pub struct Overview {
+    domains: Vec<DomainShown>,
+    /// The first domain, and below its sign-in, apps page and records: what
+    /// clients before several domains read. Kept for one release.
     domain: Option<String>,
-    /// The address the wildcard record should point at.
+    /// The address the domains' records should point at.
     server_address: Option<String>,
     apps: Vec<PublishedApp>,
-    /// The company's sign-in provider, when one is connected.
+    /// The first domain's sign-in provider, when one is connected.
     sign_in: Option<sign_in::Connected>,
     /// authentik on this server, and what it needs.
     authentik: authentik::Status,
-    /// The apps page, when it is on.
+    /// The first domain's apps page when it is on; on the private network,
+    /// the one there.
     apps_page: Option<AppsPageShown>,
     reach: Reach,
     /// Tailscale, in homelab mode.
@@ -296,6 +695,20 @@ pub struct Overview {
 #[derive(Serialize)]
 pub struct Published {
     url: String,
+    /// Every address, its main one first.
+    urls: Vec<String>,
+}
+
+/// Where an app is published, as a client asks: each part kept as it was,
+/// or the first domain and `www` on for a new app, when left out.
+#[derive(Default, Deserialize)]
+pub struct Placing {
+    #[serde(default)]
+    pub domain: Option<String>,
+    #[serde(default)]
+    pub www: Option<bool>,
+    #[serde(default)]
+    pub aliases: Option<Vec<Address>>,
 }
 
 #[derive(Clone)]
@@ -333,14 +746,62 @@ impl Publishing {
         write_private(&self.file, &body)
     }
 
+    fn lock(&self) -> Result<std::sync::MutexGuard<'_, Option<String>>, String> {
+        self.applied
+            .lock()
+            .map_err(|_| "publishing is unavailable".to_string())
+    }
+
     pub fn overview(&self, deployments: &Deployments) -> Result<Overview, String> {
         let settings = self.read()?;
         let running = deployments.running_ports();
-        let tailnet = (settings.reach == Reach::Private).then(|| self.tailscale.status());
+        let private = settings.reach == Reach::Private;
+        let tailnet = private.then(|| self.tailscale.status());
         let base = settings.base(tailnet.as_ref());
-        // Each name needs its own record; a wildcard covers them all.
-        let check_records =
-            settings.reach == Reach::Internet && settings.records == Records::EachName;
+        let home = settings.authentik_home(&self.authentik);
+        let domains: Vec<DomainShown> = settings
+            .domains
+            .iter()
+            .map(|domain| DomainShown {
+                name: domain.name.clone(),
+                records: domain.records,
+                sign_in: domain
+                    .sign_in
+                    .as_ref()
+                    .map(|provider| provider.shown(Some(&domain.name))),
+                authentik: domain.sign_in.as_ref().is_some_and(|provider| {
+                    home.as_deref()
+                        .is_some_and(|home| authentik::serves(home, &provider.issuer))
+                }),
+                apps_page: domain.apps_page.as_ref().map(|page| AppsPageShown {
+                    name: page.name.clone(),
+                    access: page.access,
+                    url: address(&page.name, &domain.name),
+                }),
+            })
+            .collect();
+        let first = settings.domains.first();
+        let apps_page = match (private, base) {
+            (true, Some(Base::Tailnet { name })) => {
+                settings
+                    .private_apps_page
+                    .as_ref()
+                    .map(|page| AppsPageShown {
+                        name: page.name.clone(),
+                        access: page.access,
+                        url: format!("https://{name}"),
+                    })
+            }
+            (true, _) => None,
+            (false, _) => first.and_then(|domain| {
+                let page = domain.apps_page.as_ref()?;
+                Some(AppsPageShown {
+                    name: page.name.clone(),
+                    access: page.access,
+                    url: address(&page.name, &domain.name),
+                })
+            }),
+        };
         Ok(Overview {
             server_address: server_address().map(|ip| ip.to_string()),
             apps: settings
@@ -348,158 +809,243 @@ impl Publishing {
                 .iter()
                 .map(|(project_id, route)| PublishedApp {
                     project_id: project_id.clone(),
+                    domain: route.domain.clone(),
                     name: route.name.clone(),
                     access: route.access,
                     url: base.map(|base| base.app_url(route)).unwrap_or_default(),
+                    urls: base.map(|base| base.app_urls(route)).unwrap_or_default(),
+                    www: route.www,
+                    aliases: route
+                        .aliases
+                        .iter()
+                        .map(|alias| AddressShown {
+                            domain: alias.domain.clone(),
+                            name: alias.name.clone(),
+                            url: format!("https://{}", alias.host()),
+                        })
+                        .collect(),
                     live: running.contains_key(project_id),
                     groups: route.groups.clone(),
                     listed: route.listed,
-                    record_problem: settings
-                        .domain
-                        .as_deref()
-                        .filter(|_| check_records)
-                        .and_then(|domain| points_here(&route.name, domain).err()),
+                    record_problem: (!private).then(|| settings.record_problem(route)).flatten(),
                 })
                 .collect(),
-            apps_page: settings.apps_page.as_ref().and_then(|page| {
-                Some(AppsPageShown {
-                    name: page.name.clone(),
-                    access: page.access,
-                    url: base?.page_url(page),
-                })
-            }),
+            apps_page,
             reach: settings.reach,
-            records: settings.records,
+            records: first.map(|domain| domain.records).unwrap_or_default(),
             placement: settings.placement,
             tailscale: tailnet.clone(),
-            sign_in: settings
-                .sign_in
-                .as_ref()
-                .map(|provider| provider.shown(settings.domain.as_deref())),
-            authentik: self.authentik.status(settings.domain.as_deref()),
-            domain: settings.domain,
+            sign_in: first.and_then(|domain| {
+                let provider = domain.sign_in.as_ref()?;
+                Some(provider.shown(Some(&domain.name)))
+            }),
+            authentik: self.authentik.status(home.as_deref()),
+            domain: first.map(|domain| domain.name.clone()),
+            domains,
         })
     }
 
-    /// Sets the base domain. With a wildcard, once it points here; with a
-    /// record for each name, each name is checked as it is used.
+    /// Sets the first domain, as the server had one before. With a wildcard,
+    /// once it points here; with a record for each name, each name is
+    /// checked as it is used. Changing it moves what was at the old name.
     pub fn set_domain(&self, domain: &str, records: Records) -> Result<(), String> {
         let domain = normalized_domain(domain)?;
-        let here = server_address().ok_or("this server's address is unknown")?;
-        if records == Records::Wildcard
-            && lookup(&format!("commitarium-check.{domain}"), here) != Lookup::Here
-        {
-            return Err(format!(
-                "*.{domain} does not point at this server yet. At your DNS provider, add an \
-                 A record for *.{domain} with the value {here}, then try again. New records \
-                 can take a few minutes. Or add a record for each address instead."
-            ));
-        }
-        let _held = self
-            .applied
-            .lock()
-            .map_err(|_| "publishing is unavailable")?;
+        wildcard_points_here(&domain, records)?;
+        let _held = self.lock()?;
         let mut settings = self.read()?;
-        settings.domain = Some(domain);
-        settings.records = records;
+        let Some(first) = settings.domains.first().map(|first| first.name.clone()) else {
+            settings.domains.push(Domain::new(domain, records));
+            settings.adopt_apps();
+            return self.write(&settings);
+        };
+        if first != domain && settings.domains.iter().any(|other| other.name == domain) {
+            return Err(format!("{domain} is already one of this server's domains"));
+        }
+        settings.domains[0].name = domain.clone();
+        settings.domains[0].records = records;
+        for route in settings.apps.values_mut() {
+            if route.domain == first {
+                route.domain = domain.clone();
+            }
+            for alias in &mut route.aliases {
+                if alias.domain == first {
+                    alias.domain = domain.clone();
+                }
+            }
+        }
         self.write(&settings)
     }
 
-    /// Lets go of the domain, once nothing is served on it any more.
-    pub fn remove_domain(&self) -> Result<(), String> {
-        let _held = self
-            .applied
-            .lock()
-            .map_err(|_| "publishing is unavailable")?;
+    /// Adds a domain to the server, checked as the first one is.
+    pub fn add_domain(&self, domain: &str, records: Records) -> Result<(), String> {
+        let domain = normalized_domain(domain)?;
+        if self
+            .read()?
+            .domains
+            .iter()
+            .any(|other| other.name == domain)
+        {
+            return Err(format!("{domain} is already one of this server's domains"));
+        }
+        wildcard_points_here(&domain, records)?;
+        let _held = self.lock()?;
         let mut settings = self.read()?;
-        let Some(domain) = settings.domain.clone() else {
+        if settings.domains.iter().any(|other| other.name == domain) {
+            return Err(format!("{domain} is already one of this server's domains"));
+        }
+        settings.domains.push(Domain::new(domain, records));
+        settings.adopt_apps();
+        self.write(&settings)
+    }
+
+    /// Lets go of a domain, once nothing is served on it any more; with no
+    /// domain named, the server's only one.
+    pub fn remove_domain(&self, domain: Option<&str>) -> Result<(), String> {
+        let _held = self.lock()?;
+        let mut settings = self.read()?;
+        if settings.domains.is_empty() {
             return Ok(());
-        };
+        }
+        if domain.is_none() && settings.domains.len() > 1 {
+            return Err("say which of this server's domains to remove".into());
+        }
+        let index = settings.domain_index(domain)?;
+        let name = settings.domains[index].name.clone();
         if settings.reach == Reach::Internet {
+            let entry = &settings.domains[index];
             let mut used = Vec::new();
-            if !settings.apps.is_empty() {
-                used.push("its apps (give each a new address or take it down first)");
+            if settings
+                .apps
+                .values()
+                .any(|route| route.domains().contains(&name))
+            {
+                used.push("its apps (give each a new address or take it down first)".to_string());
             }
-            if settings.apps_page.is_some() {
-                used.push("the apps page (turn it off first)");
+            if entry.apps_page.is_some() {
+                used.push("the apps page (turn it off first)".into());
             }
-            if settings.sign_in.is_some() {
-                used.push("company sign-in (disconnect it first)");
+            if entry.sign_in.is_some() {
+                used.push("company sign-in (disconnect it first)".into());
+            }
+            if settings.authentik_home(&self.authentik).as_deref() == Some(name.as_str()) {
+                used.push(format!("authentik, which lives at auth.{name}"));
             }
             if !used.is_empty() {
                 return Err(format!(
-                    "{domain} is still in use by {}.",
+                    "{name} is still in use by {}.",
                     used.join(", and ")
                 ));
             }
         }
-        settings.domain = None;
-        settings.records = Records::default();
+        // On the private network the domains are set aside: an app there
+        // keeps its name, and takes the next first domain when there is one.
+        for route in settings.apps.values_mut() {
+            route.aliases.retain(|alias| alias.domain != name);
+            if route.domain == name {
+                route.domain = String::new();
+            }
+        }
+        settings.domains.remove(index);
+        settings.adopt_apps();
         self.write(&settings)
     }
 
     /// Keeps where the owner said the server is.
     pub fn set_placement(&self, placement: Placement) -> Result<(), String> {
-        let _held = self
-            .applied
-            .lock()
-            .map_err(|_| "publishing is unavailable")?;
+        let _held = self.lock()?;
         let mut settings = self.read()?;
         settings.placement = Some(placement);
         self.write(&settings)
     }
 
-    /// Gives a deployed app its address. A private app needs a password the
-    /// first time; after that it keeps its own unless a new one is given.
+    /// Gives a deployed app its addresses. A private app needs a password
+    /// the first time; after that it keeps its own unless a new one is given.
     pub fn publish(
         &self,
         project_id: &str,
         name: &str,
         access: Access,
         password: Option<&str>,
+        placing: Placing,
     ) -> Result<Published, String> {
         let name = valid_name(name)?;
-        let _held = self
-            .applied
-            .lock()
-            .map_err(|_| "publishing is unavailable")?;
+        let _held = self.lock()?;
         let mut settings = self.read()?;
         let private = settings.reach == Reach::Private;
-        let domain = match (&settings.domain, private) {
-            (_, true) => String::new(),
-            (Some(domain), false) => domain.clone(),
-            (None, false) => return Err("set this server's domain in Settings first".into()),
-        };
+        let previous = settings.apps.get(project_id).cloned();
         if private && access == Access::Company {
             return Err(PRIVATE_NO_COMPANY.into());
         }
-        if settings
-            .apps
-            .iter()
-            .any(|(other, route)| other != project_id && route.name == name)
-        {
-            return Err(format!("{name} is already another app's address"));
+        if private && name.is_empty() {
+            return Err("on the private network, an app needs a name".into());
         }
-        if settings
-            .apps_page
+        let domain = match placing.domain.as_deref() {
+            Some(asked) => settings.domain(Some(asked))?.name.clone(),
+            None => previous
+                .as_ref()
+                .map(|route| route.domain.clone())
+                .filter(|domain| !domain.is_empty())
+                .or_else(|| settings.domains.first().map(|first| first.name.clone()))
+                .unwrap_or_default(),
+        };
+        if domain.is_empty() && !private {
+            return Err(NO_DOMAIN.into());
+        }
+        let aliases = match placing.aliases {
+            Some(asked) if private && !asked.is_empty() => {
+                return Err("extra addresses need your own domain, on the internet".into())
+            }
+            Some(asked) => asked
+                .iter()
+                .map(|alias| {
+                    Ok(Address {
+                        domain: settings.domain(Some(&alias.domain))?.name.clone(),
+                        name: valid_name(&alias.name)?,
+                    })
+                })
+                .collect::<Result<Vec<_>, String>>()?,
+            None => previous
+                .as_ref()
+                .map(|route| route.aliases.clone())
+                .unwrap_or_default(),
+        };
+        let previous_hash = previous
             .as_ref()
-            .is_some_and(|page| page.name == name)
-        {
-            return Err(format!(
-                "{name} is the apps page's address. Choose another name."
-            ));
+            .and_then(|route| Some((route.password_hash.clone()?, route.password.clone())));
+        let (groups, listed, port) = previous.as_ref().map_or((Vec::new(), true, None), |route| {
+            (route.groups.clone(), route.listed, route.port)
+        });
+        let mut route = AppRoute {
+            domain,
+            name,
+            www: placing
+                .www
+                .or(previous.as_ref().map(|route| route.www))
+                .unwrap_or(true),
+            aliases,
+            access,
+            password_hash: None,
+            password: None,
+            groups,
+            listed,
+            port,
+        };
+        let addresses = route.addresses();
+        for (index, address) in addresses.iter().enumerate() {
+            if addresses[..index].contains(address) {
+                return Err(format!("{} is given twice", address.host()));
+            }
+            settings.is_free(address, project_id)?;
         }
         // On the private network, names are only labels: no DNS to check.
         if !private {
-            points_here(&name, &domain)?;
+            for address in route.dns_names() {
+                points_here(&address.name, &address.domain)?;
+            }
         }
-        let previous = settings
-            .apps
-            .get(project_id)
-            .and_then(|route| Some((route.password_hash.clone()?, route.password.clone())));
         // A public app keeps the password it had, so making it private again
         // needs no new one; Caddy asks for it only while the app is private.
-        let (password_hash, password) = match (access, password, previous) {
+        (route.password_hash, route.password) = match (access, password, previous_hash) {
             (_, Some(password), _) => (Some(hashed(password)?), Some(password.to_string())),
             (_, None, Some((hash, kept))) => (Some(hash), kept),
             (Access::Public | Access::Company, None, None) => (None, None),
@@ -507,47 +1053,27 @@ impl Publishing {
                 return Err("choose a password for who may open it".into())
             }
         };
-        if access == Access::Company && settings.sign_in.is_none() {
-            return Err(NO_PROVIDER.into());
+        if access == Access::Company {
+            settings.sign_in_for(&route)?;
         }
-        let (groups, listed, port) = settings
-            .apps
-            .get(project_id)
-            .map_or((Vec::new(), true, None), |route| {
-                (route.groups.clone(), route.listed, route.port)
-            });
-        settings.apps.insert(
-            project_id.to_string(),
-            AppRoute {
-                name,
-                access,
-                password_hash,
-                password,
-                groups,
-                listed,
-                port,
-            },
-        );
+        settings.apps.insert(project_id.to_string(), route);
         if private {
             assign_ports(&mut settings);
         }
         self.write(&settings)?;
         let tailnet = private.then(|| self.tailscale.status());
-        let url = settings
+        let (url, urls) = settings
             .base(tailnet.as_ref())
             .zip(settings.apps.get(project_id))
-            .map(|(base, route)| base.app_url(route))
+            .map(|(base, route)| (base.app_url(route), base.app_urls(route)))
             .unwrap_or_default();
-        Ok(Published { url })
+        Ok(Published { url, urls })
     }
 
     /// Changes a private app's password.
     pub fn set_app_password(&self, project_id: &str, password: &str) -> Result<(), String> {
         let hash = hashed(password)?;
-        let _held = self
-            .applied
-            .lock()
-            .map_err(|_| "publishing is unavailable")?;
+        let _held = self.lock()?;
         let mut settings = self.read()?;
         let route = settings
             .apps
@@ -561,21 +1087,20 @@ impl Publishing {
     /// Who can open an app: anyone, or only with its password. Making it
     /// private again uses the password it had.
     pub fn set_access(&self, project_id: &str, access: Access) -> Result<(), String> {
-        let _held = self
-            .applied
-            .lock()
-            .map_err(|_| "publishing is unavailable")?;
+        let _held = self.lock()?;
         let mut settings = self.read()?;
         let route = settings
             .apps
-            .get_mut(project_id)
+            .get(project_id)
             .ok_or("this app is not published")?;
         if access == Access::Private && route.password_hash.is_none() {
             return Err("choose a password for who may open it".into());
         }
-        route.access = access;
-        if access == Access::Company && settings.sign_in.is_none() {
-            return Err(NO_PROVIDER.into());
+        if access == Access::Company {
+            settings.sign_in_for(route)?;
+        }
+        if let Some(route) = settings.apps.get_mut(project_id) {
+            route.access = access;
         }
         self.write(&settings)
     }
@@ -589,10 +1114,7 @@ impl Publishing {
             .collect::<Result<Vec<_>, _>>()?;
         groups.sort();
         groups.dedup();
-        let _held = self
-            .applied
-            .lock()
-            .map_err(|_| "publishing is unavailable")?;
+        let _held = self.lock()?;
         let mut settings = self.read()?;
         let route = settings
             .apps
@@ -602,48 +1124,52 @@ impl Publishing {
         self.write(&settings)
     }
 
-    /// Connects the company's sign-in provider, once it answers as one. A
-    /// changed provider keeps the cookie secret, so no one is signed out
-    /// for nothing.
+    /// Connects a domain's company sign-in provider, once it answers as
+    /// one. A changed provider keeps the domain's cookie secret, so no one
+    /// is signed out for nothing.
     pub fn connect_sign_in(&self, asked: sign_in::Connect) -> Result<sign_in::Connected, String> {
         let settings = self.read()?;
-        sign_in_names_point_here(&settings, &[sign_in::NAME])?;
-        let kept = settings.sign_in.map(|provider| provider.cookie_secret);
+        let domain = settings.domain(asked.domain.as_deref())?.clone();
+        sign_in_names_point_here(&domain, &[sign_in::NAME])?;
+        let kept = domain.sign_in.map(|provider| provider.cookie_secret);
         // Checked before the lock: it waits on the provider.
         let provider = Provider::connect(asked, kept)?;
-        let _held = self
-            .applied
-            .lock()
-            .map_err(|_| "publishing is unavailable")?;
+        let _held = self.lock()?;
         let mut settings = self.read()?;
-        let shown = provider.shown(settings.domain.as_deref());
-        settings.sign_in = Some(provider);
+        let shown = provider.shown(Some(&domain.name));
+        connect(&mut settings, &domain.name, provider)?;
         self.write(&settings)?;
         Ok(shown)
     }
 
-    /// Sets authentik up on this server and connects it as the company's
-    /// provider. It takes minutes: images, then its first start.
-    pub fn install_authentik(&self) -> Result<sign_in::Connected, String> {
+    /// Sets authentik up on this server and connects it as a domain's
+    /// provider. It takes minutes: images, then its first start. One
+    /// authentik serves every domain, at the address it was first set up on;
+    /// each domain gets its own application in it.
+    pub fn install_authentik(&self, domain: Option<&str>) -> Result<sign_in::Connected, String> {
         let settings = self.read()?;
-        let domain = settings
-            .domain
-            .clone()
-            .ok_or("set this server's domain in Settings first")?;
-        if settings.sign_in.is_some() && !self.authentik.installed() {
-            return Err("another provider is connected: disconnect it first".into());
+        let entry = settings.domain(domain)?.clone();
+        let home = settings
+            .authentik_home(&self.authentik)
+            .unwrap_or_else(|| entry.name.clone());
+        let before = settings.authentik_domains(&home);
+        if entry.sign_in.is_some() && !before.contains(&entry.name) {
+            return Err(format!(
+                "another provider is connected for {}: disconnect it first",
+                entry.name
+            ));
         }
-        sign_in_names_point_here(&settings, &[sign_in::NAME, authentik::NAME])?;
-        let connection = self.authentik.install(&domain)?;
-        let _held = self
-            .applied
-            .lock()
-            .map_err(|_| "publishing is unavailable")?;
+        sign_in_names_point_here(&entry, &[sign_in::NAME])?;
+        if let Ok(home_entry) = settings.domain(Some(&home)) {
+            sign_in_names_point_here(home_entry, &[authentik::NAME])?;
+        }
+        let connection = self.authentik.install(&home, &before, &entry.name)?;
+        let _held = self.lock()?;
         let mut settings = self.read()?;
         // Its own: no need to ask it whether it answers, before Caddy has
         // its address.
-        let cookie_secret = match settings.sign_in.take() {
-            Some(provider) => provider.cookie_secret,
+        let cookie_secret = match &settings.domain(Some(&entry.name))?.sign_in {
+            Some(provider) => provider.cookie_secret.clone(),
             None => sign_in::new_cookie_secret()?,
         };
         let provider = Provider {
@@ -655,8 +1181,8 @@ impl Publishing {
             groups_claim: None,
             cookie_secret,
         };
-        let shown = provider.shown(Some(&domain));
-        settings.sign_in = Some(provider);
+        let shown = provider.shown(Some(&entry.name));
+        connect(&mut settings, &entry.name, provider)?;
         self.write(&settings)?;
         Ok(shown)
     }
@@ -666,19 +1192,19 @@ impl Publishing {
         self.authentik.admin_password()
     }
 
-    /// Disconnects the provider, once no app uses it. authentik on this
-    /// server stops with it; its data stays for setting it up again.
-    pub fn disconnect_sign_in(&self) -> Result<(), String> {
-        let _held = self
-            .applied
-            .lock()
-            .map_err(|_| "publishing is unavailable")?;
+    /// Disconnects a domain's provider, once no app there uses it. authentik
+    /// on this server stops once no domain uses it; its data stays for
+    /// setting it up again.
+    pub fn disconnect_sign_in(&self, domain: Option<&str>) -> Result<(), String> {
+        let _held = self.lock()?;
         let mut settings = self.read()?;
-        let using: Vec<&str> = settings
+        let name = settings.domain(domain)?.name.clone();
+        let home = settings.authentik_home(&self.authentik);
+        let using: Vec<String> = settings
             .apps
             .values()
-            .filter(|route| route.access == Access::Company)
-            .map(|route| route.name.as_str())
+            .filter(|route| route.access == Access::Company && route.domains().contains(&name))
+            .map(|route| route.main().host())
             .collect();
         if !using.is_empty() {
             return Err(format!(
@@ -686,17 +1212,20 @@ impl Publishing {
                 using.join(", ")
             ));
         }
-        if settings
+        let entry = settings.domain_mut(Some(&name))?;
+        if entry
             .apps_page
             .as_ref()
             .is_some_and(|page| page.access == Access::Company)
         {
             return Err("the apps page uses company sign-in: choose who can open it first".into());
         }
-        settings.sign_in = None;
+        entry.sign_in = None;
         self.write(&settings)?;
-        if self.authentik.installed() {
-            self.authentik.remove()?;
+        if let Some(home) = home {
+            if settings.authentik_domains(&home).is_empty() {
+                self.authentik.remove()?;
+            }
         }
         Ok(())
     }
@@ -712,44 +1241,51 @@ impl Publishing {
         Ok(route.password.clone())
     }
 
-    /// Turns the apps page on with who may open it, or off with `None`. A
-    /// password page needs a password the first time, as a private app does.
+    /// Turns a domain's apps page on with who may open it, or off with
+    /// `None`. A password page needs a password the first time, as a private
+    /// app does. On the private network there is one page, at the Tailscale
+    /// name, whatever the domain.
     pub fn set_apps_page(
         &self,
+        domain: Option<&str>,
         access: Option<Access>,
         password: Option<&str>,
         name: Option<&str>,
     ) -> Result<(), String> {
         let hash = password.map(hashed).transpose()?;
         let asked_name = name.map(valid_page_name).transpose()?;
-        let _held = self
-            .applied
-            .lock()
-            .map_err(|_| "publishing is unavailable")?;
+        let _held = self.lock()?;
         let mut settings = self.read()?;
+        let private = settings.reach == Reach::Private;
         let Some(access) = access else {
-            settings.apps_page = None;
+            if private {
+                settings.private_apps_page = None;
+            } else if domain.is_some() || !settings.domains.is_empty() {
+                settings.domain_mut(domain)?.apps_page = None;
+            }
             return self.write(&settings);
         };
-        let private = settings.reach == Reach::Private;
-        if settings.domain.is_none() && !private {
-            return Err("set this server's domain in Settings first".into());
-        }
         if access == Access::Company && private {
             return Err(PRIVATE_NO_COMPANY.into());
         }
-        if access == Access::Company && settings.sign_in.is_none() {
-            return Err(NO_PROVIDER.into());
+        let previous = match private {
+            true => settings.private_apps_page.clone(),
+            false => settings.domain(domain)?.apps_page.clone(),
+        };
+        if !private {
+            let entry = settings.domain(domain)?;
+            if access == Access::Company && entry.sign_in.is_none() {
+                return Err(settings.no_provider(&entry.name));
+            }
         }
-        let previous = settings.apps_page.take();
         let previous_name = previous.as_ref().map(|page| page.name.clone());
         let name = asked_name
             .or_else(|| previous_name.clone())
             .unwrap_or_else(default_apps_page_name);
         // On the private network the page has the Tailscale name to itself.
         if previous_name.as_deref() != Some(name.as_str()) && !private {
-            let domain = settings.domain.as_deref().unwrap_or_default();
-            name_is_free(&settings, &name, domain)?;
+            let entry = settings.domain(domain)?;
+            name_is_free(&settings, &name, &entry.name)?;
         }
         let (password_hash, password) = match (hash, previous) {
             (Some(hash), _) => (Some(hash), password.map(str::to_string)),
@@ -761,50 +1297,51 @@ impl Publishing {
             }
             (None, _) => (None, None),
         };
-        settings.apps_page = Some(AppsPage {
+        let page = AppsPage {
             name,
             access,
             password_hash,
             password,
-        });
+        };
+        match private {
+            true => settings.private_apps_page = Some(page),
+            false => settings.domain_mut(domain)?.apps_page = Some(page),
+        }
         self.write(&settings)
     }
 
-    /// Whether the apps page could live at this name: asked before offering
-    /// it, so a name the company already uses is found first.
-    pub fn check_apps_page_name(&self, name: &str) -> Result<(), String> {
+    /// Whether a domain's apps page could live at this name: asked before
+    /// offering it, so a name the company already uses is found first.
+    pub fn check_apps_page_name(&self, domain: Option<&str>, name: &str) -> Result<(), String> {
         let name = valid_page_name(name)?;
         let settings = self.read()?;
         if settings.reach == Reach::Private {
             return Ok(());
         }
-        let domain = settings
-            .domain
-            .as_deref()
-            .ok_or("set this server's domain in Settings first")?;
-        if settings
+        let entry = settings.domain(domain)?;
+        if entry
             .apps_page
             .as_ref()
             .is_some_and(|page| page.name == name)
         {
             return Ok(());
         }
-        name_is_free(&settings, &name, domain)
+        name_is_free(&settings, &name, &entry.name)
     }
 
-    /// The apps page's password, for its owner to share again.
-    pub fn apps_page_password(&self) -> Result<Option<String>, String> {
+    /// A domain's apps page password, for its owner to share again.
+    pub fn apps_page_password(&self, domain: Option<&str>) -> Result<Option<String>, String> {
         let settings = self.read()?;
-        let page = settings.apps_page.ok_or("the apps page is off")?;
-        Ok(page.password)
+        let page = match settings.reach {
+            Reach::Private => settings.private_apps_page,
+            Reach::Internet => settings.domain(domain)?.apps_page.clone(),
+        };
+        Ok(page.ok_or("the apps page is off")?.password)
     }
 
-    /// Lists an app on the apps page, or hides it there.
+    /// Lists an app on the apps pages, or hides it there.
     pub fn set_listed(&self, project_id: &str, listed: bool) -> Result<(), String> {
-        let _held = self
-            .applied
-            .lock()
-            .map_err(|_| "publishing is unavailable")?;
+        let _held = self.lock()?;
         let mut settings = self.read()?;
         let route = settings
             .apps
@@ -814,26 +1351,31 @@ impl Publishing {
         self.write(&settings)
     }
 
-    /// The apps the apps page shows to someone with these groups, when the
-    /// page is behind company sign-in. `None` when it is off.
-    /// Where a person signs out of every app, when the apps page is behind
-    /// company sign-in: the page offers it.
-    pub fn apps_page_sign_out(&self) -> Result<Option<String>, String> {
+    /// Where a person signs out of every app at the page's domain, when its
+    /// apps page is behind company sign-in: the page offers it. `host` is
+    /// the page's address, as the request names it.
+    pub fn apps_page_sign_out(&self, host: Option<&str>) -> Result<Option<String>, String> {
         let settings = self.read()?;
-        let company = settings
+        if settings.reach == Reach::Private {
+            return Ok(None);
+        }
+        let Some(domain) = host.and_then(|host| settings.page_domain(host)) else {
+            return Ok(None);
+        };
+        let company = domain
             .apps_page
             .as_ref()
             .is_some_and(|page| page.access == Access::Company);
-        Ok(match (&settings.sign_in, &settings.domain) {
-            (Some(_), Some(domain)) if company => Some(sign_in::sign_out_url(domain)),
-            _ => None,
-        })
+        Ok((company && domain.sign_in.is_some()).then(|| sign_in::sign_out_url(&domain.name)))
     }
 
+    /// The apps the apps page at `host` shows to someone with these groups,
+    /// when the page is behind company sign-in. `None` when it is off.
     pub fn catalog(
         &self,
         deployments: &Deployments,
         groups: Option<&str>,
+        host: Option<&str>,
     ) -> Result<Option<Vec<CatalogApp>>, String> {
         let settings = self.read()?;
         let tailnet = (settings.reach == Reach::Private).then(|| self.tailscale.status());
@@ -845,6 +1387,7 @@ impl Publishing {
             &deployments.running_ports(),
             groups,
             base,
+            host,
         ))
     }
 
@@ -853,12 +1396,9 @@ impl Publishing {
     /// port and starts Tailscale. Back to the internet stops Commitarium's
     /// Tailscale, keeping its state for coming back.
     pub fn set_reach(&self, reach: Reach) -> Result<(), String> {
-        let _held = self
-            .applied
-            .lock()
-            .map_err(|_| "publishing is unavailable")?;
+        let _held = self.lock()?;
         let mut settings = self.read()?;
-        if reach == Reach::Private && settings.sign_in.is_some() {
+        if reach == Reach::Private && !settings.gates().is_empty() {
             return Err(
                 "disconnect company sign-in first: it needs your own domain, on the internet"
                     .into(),
@@ -879,10 +1419,7 @@ impl Publishing {
     }
 
     pub fn unpublish(&self, project_id: &str) -> Result<(), String> {
-        let _held = self
-            .applied
-            .lock()
-            .map_err(|_| "publishing is unavailable")?;
+        let _held = self.lock()?;
         let mut settings = self.read()?;
         settings.apps.remove(project_id);
         self.write(&settings)
@@ -900,23 +1437,17 @@ impl Publishing {
     }
 
     fn sync(&self, deployments: &Deployments) -> Result<(), String> {
-        let mut applied = self
-            .applied
-            .lock()
-            .map_err(|_| "publishing is unavailable")?;
+        let mut applied = self.lock()?;
         let settings = self.read()?;
         let (config, socket_dir) = match settings.reach {
             Reach::Internet => {
-                let Some(domain) = settings.domain.as_deref() else {
+                if settings.domains.is_empty() {
                     return Ok(());
-                };
-                sign_in::sync(settings.sign_in.as_ref(), domain)?;
+                }
+                sign_in::sync(&settings.gates())?;
                 self.authentik.keep_running()?;
-                let config = caddy_config(
-                    &settings,
-                    &deployments.running_ports(),
-                    self.authentik.installed(),
-                );
+                let home = settings.authentik_home(&self.authentik);
+                let config = caddy_config(&settings, &deployments.running_ports(), home.as_deref());
                 (config, None)
             }
             Reach::Private => {
@@ -955,29 +1486,72 @@ impl Publishing {
     }
 }
 
+/// Keeps a domain's provider, giving it a gate of its own the first time.
+fn connect(settings: &mut Settings, domain: &str, provider: Provider) -> Result<(), String> {
+    let used: Vec<Gate> = settings
+        .domains
+        .iter()
+        .filter(|other| other.name != domain && other.sign_in.is_some())
+        .map(|other| other.gate)
+        .collect();
+    let entry = settings.domain_mut(Some(domain))?;
+    if entry.sign_in.is_none() || used.contains(&entry.gate) {
+        entry.gate = Gate::free(&used)?;
+    }
+    entry.sign_in = Some(provider);
+    Ok(())
+}
+
 /// The apps page's address name unless the owner chose another; `apps` is
 /// kept from apps for it.
 const APPS_PAGE_NAME: &str = "apps";
 
-/// A name for the apps page: an app's rules, except that `apps` is its own.
+/// A name for the apps page: an app's rules, except that `apps` is its own
+/// and it cannot be the domain itself.
 fn valid_page_name(name: &str) -> Result<String, String> {
     let trimmed = name.trim().to_ascii_lowercase();
     if trimmed == APPS_PAGE_NAME {
         return Ok(trimmed);
     }
+    if trimmed.is_empty() {
+        return Err("the apps page needs a name, such as apps".into());
+    }
     valid_name(name)
 }
 
-/// The apps page may take a name no app has, that points at this server:
-/// one the company uses elsewhere has its own record, which the wildcard
-/// does not cover.
+/// The apps page may take a name no app has on its domain, that points at
+/// this server: one the company uses elsewhere has its own record, which
+/// the wildcard does not cover.
 fn name_is_free(settings: &Settings, name: &str, domain: &str) -> Result<(), String> {
-    if settings.apps.values().any(|route| route.name == name) {
+    let address = Address {
+        domain: domain.to_string(),
+        name: name.to_string(),
+    };
+    if settings
+        .apps
+        .values()
+        .any(|route| route.addresses().contains(&address))
+    {
         return Err(format!(
             "{name} is already an app's address. Choose another name."
         ));
     }
     points_here(name, domain)
+}
+
+/// With a wildcard, a domain is kept once `*.<domain>` points here.
+fn wildcard_points_here(domain: &str, records: Records) -> Result<(), String> {
+    let here = server_address().ok_or("this server's address is unknown")?;
+    if records == Records::Wildcard
+        && lookup(&format!("commitarium-check.{domain}"), here) != Lookup::Here
+    {
+        return Err(format!(
+            "*.{domain} does not point at this server yet. At your DNS provider, add an \
+             A record for *.{domain} with the value {here}, then try again. New records \
+             can take a few minutes. Or add a record for each address instead."
+        ));
+    }
+    Ok(())
 }
 
 /// Where a name under the domain points.
@@ -990,18 +1564,24 @@ enum Lookup {
     Missing,
 }
 
-/// Whether name.domain points here, and if not, what to do about it.
+/// Whether name.domain points here, and if not, what to do about it. The
+/// empty name is the domain itself, whose record is named `@`.
 fn points_here(name: &str, domain: &str) -> Result<(), String> {
     let here = server_address().ok_or("this server's address is unknown")?;
-    match lookup(&format!("{name}.{domain}"), here) {
+    let host = host(name, domain);
+    let record = match name {
+        "" => format!("{domain} (the name @)"),
+        _ => host.clone(),
+    };
+    match lookup(&host, here) {
         Lookup::Here => Ok(()),
         Lookup::Elsewhere => Err(format!(
-            "{name}.{domain} points somewhere else, so it is used elsewhere. Choose another \
-             name."
+            "{host} points somewhere else, so it is used elsewhere. Choose another name, or \
+             point it at this server, {here}."
         )),
         Lookup::Missing => Err(format!(
-            "{name}.{domain} does not point at this server yet. At your DNS provider, add an A \
-             record for {name}.{domain} with the value {here}, then try again. New records can \
+            "{host} does not point at this server yet. At your DNS provider, add an A \
+             record for {record} with the value {here}, then try again. New records can \
              take a few minutes."
         )),
     }
@@ -1034,16 +1614,25 @@ fn lookup(host: &str, _here: IpAddr) -> Lookup {
     }
 }
 
-/// What the apps page lists. Behind company sign-in, a person sees only what
-/// they can open: public apps, and company apps open to everyone or to one
-/// of their groups. Hiding is a courtesy: each app keeps its own gate.
+/// What an apps page lists. At a domain, its page lists the apps with an
+/// address there, each at that address. Behind company sign-in, a person
+/// sees only what they can open: public apps, and company apps open to
+/// everyone or to one of their groups. Hiding is a courtesy: each app keeps
+/// its own gate.
 fn catalog(
     settings: &Settings,
     running: &BTreeMap<String, u16>,
     groups: Option<&str>,
     base: Base,
+    host: Option<&str>,
 ) -> Option<Vec<CatalogApp>> {
-    let page = settings.apps_page.as_ref()?;
+    let (page, domain) = match base {
+        Base::Tailnet { .. } => (settings.private_apps_page.as_ref()?, None),
+        Base::Internet => {
+            let domain = settings.page_domain(host?)?;
+            (domain.apps_page.as_ref()?, Some(domain.name.as_str()))
+        }
+    };
     let theirs: Vec<&str> = groups
         .unwrap_or_default()
         .split(',')
@@ -1068,11 +1657,20 @@ fn catalog(
                     }
                 }
         })
-        .map(|(project_id, route)| CatalogApp {
-            name: route.name.clone(),
-            url: base.app_url(route),
-            access: route.access,
-            live: running.contains_key(project_id),
+        .filter_map(|(project_id, route)| {
+            let (name, url) = match domain {
+                Some(domain) => {
+                    let address = route.address_on(domain)?;
+                    (address.name.clone(), format!("https://{}", address.host()))
+                }
+                None => (route.name.clone(), base.app_url(route)),
+            };
+            Some(CatalogApp {
+                name,
+                url,
+                access: route.access,
+                live: running.contains_key(project_id),
+            })
         })
         .collect();
     apps.sort_by(|a, b| a.name.cmp(&b.name));
@@ -1080,17 +1678,18 @@ fn catalog(
 }
 
 /// The apps page's route: its own gate or password, as chosen, then the
-/// host's page.
-fn apps_page_route(settings: &Settings, apps_page: &AppsPage, host: &str, domain: &str) -> Value {
+/// host's page, which reads which domain's page it is from the Host header
+/// Caddy passes on.
+fn apps_page_route(apps_page: &AppsPage, host: &str, gate: Option<(&str, Gate)>) -> Value {
     let mut handle = vec![sign_in::strip_identity()];
-    match (apps_page.access, &apps_page.password_hash) {
-        (Access::Company, _) if settings.sign_in.is_none() => {
+    match (apps_page.access, &apps_page.password_hash, gate) {
+        (Access::Company, _, None) => {
             return json!({"match": [{"host": [host]}], "handle": [page(503, NO_SIGN_IN)], "terminal": true});
         }
-        (Access::Company, _) => {
-            handle.push(sign_in::caddy_gate(domain, &[], page(403, NOT_YOURS)));
+        (Access::Company, _, Some((domain, gate))) => {
+            handle.push(sign_in::caddy_gate(domain, gate, &[], page(403, NOT_YOURS)));
         }
-        (Access::Private, Some(hash)) => handle.push(basic_auth(&apps_page.name, hash)),
+        (Access::Private, Some(hash), _) => handle.push(basic_auth(&apps_page.name, hash)),
         _ => {}
     }
     handle.push(json!({
@@ -1100,15 +1699,15 @@ fn apps_page_route(settings: &Settings, apps_page: &AppsPage, host: &str, domain
     json!({"match": [{"host": [host]}], "handle": handle, "terminal": true})
 }
 
-/// Lets only the apps page show a listed app in a frame. Anything the app
+/// Lets only the apps pages show a listed app in a frame. Anything the app
 /// says about framing itself still counts: browsers apply every policy.
-fn framed_by(page_origin: &str) -> Value {
+fn framed_by(page_origins: &[String]) -> Value {
     json!({
         "handler": "headers",
         "response": {
             "delete": ["X-Frame-Options"],
             "add": {"Content-Security-Policy": [
-                format!("frame-ancestors 'self' {page_origin}")
+                format!("frame-ancestors 'self' {}", page_origins.join(" "))
             ]},
             "deferred": true,
         },
@@ -1129,8 +1728,16 @@ fn basic_auth(realm: &str, hash: &str) -> Value {
     })
 }
 
+/// A name under a domain; the empty name is the domain itself.
+fn host(name: &str, domain: &str) -> String {
+    match name {
+        "" => domain.to_string(),
+        _ => format!("{name}.{domain}"),
+    }
+}
+
 fn address(name: &str, domain: &str) -> String {
-    format!("https://{name}.{domain}")
+    format!("https://{}", host(name, domain))
 }
 
 fn normalized_domain(domain: &str) -> Result<String, String> {
@@ -1157,10 +1764,14 @@ fn normalized_domain(domain: &str) -> Result<String, String> {
     Ok(domain)
 }
 
+/// An app's name under its domain. Empty is the domain itself, for a
+/// website.
 fn valid_name(name: &str) -> Result<String, String> {
     let name = name.trim().to_ascii_lowercase();
-    let valid = !name.is_empty()
-        && name.len() <= 40
+    if name.is_empty() {
+        return Ok(name);
+    }
+    let valid = name.len() <= 40
         && name
             .bytes()
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
@@ -1187,7 +1798,7 @@ fn hashed(password: &str) -> Result<String, String> {
 }
 
 /// The address the server reaches the internet from: its public one on a
-/// VPS, which is where the wildcard record must point.
+/// VPS, which is where the domains' records must point.
 #[cfg(not(test))]
 fn server_address() -> Option<IpAddr> {
     let socket = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
@@ -1202,34 +1813,35 @@ fn server_address() -> Option<IpAddr> {
 
 /// The names company sign-in serves on, besides the apps': with a record
 /// for each name, each needs its own.
-fn sign_in_names_point_here(settings: &Settings, names: &[&str]) -> Result<(), String> {
-    match (&settings.domain, settings.records) {
-        (Some(domain), Records::EachName) => {
-            names.iter().try_for_each(|name| points_here(name, domain))
-        }
-        _ => Ok(()),
+fn sign_in_names_point_here(domain: &Domain, names: &[&str]) -> Result<(), String> {
+    match domain.records {
+        Records::EachName => names
+            .iter()
+            .try_for_each(|name| points_here(name, &domain.name)),
+        Records::Wildcard => Ok(()),
     }
 }
 
-/// One app's route: who may open it, then the app, or the "not running" page.
+/// One app's route at one domain: who may open it, then the app, or the
+/// "not running" page. `gate` is that domain's company sign-in.
 fn app_route(
-    settings: &Settings,
     project_id: &str,
     route: &AppRoute,
     running: &BTreeMap<String, u16>,
-    host: &str,
-    gate_domain: &str,
-    page_origin: Option<&str>,
+    hosts: &[String],
+    gate: Option<(&str, Gate)>,
+    page_origins: &[String],
 ) -> Value {
     let mut handle = vec![sign_in::strip_identity()];
     if route.access == Access::Company {
         // No provider would be no gate: then no way in.
-        if settings.sign_in.is_none() {
+        let Some((domain, gate)) = gate else {
             let page = page(503, NO_SIGN_IN);
-            return json!({"match": [{"host": [host]}], "handle": [page], "terminal": true});
-        }
+            return json!({"match": [{"host": hosts}], "handle": [page], "terminal": true});
+        };
         handle.push(sign_in::caddy_gate(
-            gate_domain,
+            domain,
+            gate,
             &route.groups,
             page(403, NOT_YOURS),
         ));
@@ -1237,65 +1849,98 @@ fn app_route(
     if let (Access::Private, Some(hash)) = (route.access, &route.password_hash) {
         handle.push(basic_auth(&route.name, hash));
     }
-    if let (true, Some(origin)) = (route.listed, page_origin) {
-        handle.insert(1, framed_by(origin));
+    if route.listed && !page_origins.is_empty() {
+        handle.insert(1, framed_by(page_origins));
     }
     match running.get(project_id) {
-        Some(port) => handle.push(json!({
-            "handler": "reverse_proxy",
-            "upstreams": [{"dial": format!("127.0.0.1:{port}")}],
-            // Development servers answer only their own name.
-            "headers": {"request": {"set": {"Host": ["localhost"]}}},
-        })),
+        Some(port) => {
+            let mut proxy = json!({
+                "handler": "reverse_proxy",
+                "upstreams": [{"dial": format!("127.0.0.1:{port}")}],
+            });
+            // Development servers answer only their own name. An app with
+            // several addresses gets the one it was opened on, as a website
+            // that picks its language by address needs; Caddy passes it as
+            // it came, and sets X-Forwarded-Host too.
+            if route.aliases.is_empty() {
+                proxy["headers"] = json!({"request": {"set": {"Host": ["localhost"]}}});
+            }
+            handle.push(proxy);
+        }
         None => handle.push(page(503, NOT_RUNNING)),
     }
-    json!({"match": [{"host": [host]}], "handle": handle, "terminal": true})
+    json!({"match": [{"host": hosts}], "handle": handle, "terminal": true})
+}
+
+/// Sends `www.<domain>` on to the bare domain, keeping the path and query.
+fn www_redirect(www: &str, bare: &str) -> Value {
+    json!({
+        "match": [{"host": [www]}],
+        "handle": [{
+            "handler": "static_response",
+            "status_code": 308,
+            "headers": {"Location": [format!("https://{bare}{{http.request.uri}}")]},
+        }],
+        "terminal": true,
+    })
 }
 
 /// Caddy's whole configuration. A published app with a running deployment
-/// gets a route to it, behind its password when private; one without gets
-/// the "not running" page. Any other name gets "No app here".
-fn caddy_config(settings: &Settings, running: &BTreeMap<String, u16>, authentik: bool) -> Value {
-    let domain = settings.domain.as_deref().unwrap_or_default();
-    let page_origin = settings
-        .apps_page
-        .as_ref()
-        .map(|page| address(&page.name, domain));
-    let mut routes: Vec<Value> = settings
-        .apps
-        .iter()
-        .map(|(project_id, route)| {
-            let host = format!("{}.{domain}", route.name);
-            app_route(
-                settings,
+/// gets a route at each of its domains, behind its password when private;
+/// one without gets the "not running" page. Any other name gets "No app
+/// here". Caddy gets a certificate for each name a route matches.
+fn caddy_config(
+    settings: &Settings,
+    running: &BTreeMap<String, u16>,
+    authentik_home: Option<&str>,
+) -> Value {
+    let mut routes = Vec::new();
+    if let Some(home) = authentik_home {
+        routes.push(json!({
+            "match": [{"host": [format!("{}.{home}", authentik::NAME)]}],
+            "handle": [{
+                "handler": "reverse_proxy",
+                "upstreams": [{"dial": format!("127.0.0.1:{}", authentik::PORT)}],
+            }],
+            "terminal": true,
+        }));
+    }
+    for domain in &settings.domains {
+        if let Some(provider) = &domain.sign_in {
+            routes.push(sign_in::caddy_route(&domain.name, provider, domain.gate));
+        }
+    }
+    for domain in &settings.domains {
+        if let (Some(page), Some(host)) = (&domain.apps_page, domain.page_host()) {
+            routes.push(apps_page_route(page, &host, domain.gate()));
+        }
+    }
+    for route in settings.apps.values() {
+        for (www, bare) in route.www_redirects() {
+            routes.push(www_redirect(&www, &bare));
+        }
+    }
+    for (project_id, route) in &settings.apps {
+        let origins = settings.page_origins(route);
+        for name in route.domains() {
+            let Some(domain) = settings.domains.iter().find(|domain| domain.name == name) else {
+                continue;
+            };
+            let hosts: Vec<String> = route
+                .addresses()
+                .iter()
+                .filter(|address| address.domain == name)
+                .map(Address::host)
+                .collect();
+            routes.push(app_route(
                 project_id,
                 route,
                 running,
-                &host,
-                domain,
-                page_origin.as_deref(),
-            )
-        })
-        .collect();
-    if let Some(page) = &settings.apps_page {
-        let host = format!("{}.{domain}", page.name);
-        routes.insert(0, apps_page_route(settings, page, &host, domain));
-    }
-    if let Some(provider) = &settings.sign_in {
-        routes.insert(0, sign_in::caddy_route(domain, provider));
-    }
-    if authentik {
-        routes.insert(
-            0,
-            json!({
-                "match": [{"host": [format!("{}.{domain}", authentik::NAME)]}],
-                "handle": [{
-                    "handler": "reverse_proxy",
-                    "upstreams": [{"dial": format!("127.0.0.1:{}", authentik::PORT)}],
-                }],
-                "terminal": true,
-            }),
-        );
+                &hosts,
+                domain.gate(),
+                &origins,
+            ));
+        }
     }
     routes.push(json!({"handle": [page(404, NO_APP)]}));
     json!({
@@ -1338,19 +1983,28 @@ fn private_caddy_config(
             }]},
         })
     };
-    let origin = format!("https://{name}");
-    let page_origin = settings.apps_page.as_ref().map(|_| origin.as_str());
+    let origins: Vec<String> = settings
+        .private_apps_page
+        .iter()
+        .map(|_| format!("https://{name}"))
+        .collect();
     let mut home = Vec::new();
-    match &settings.apps_page {
-        Some(page) => home.push(apps_page_route(settings, page, name, "")),
+    match &settings.private_apps_page {
+        Some(page) => home.push(apps_page_route(page, name, None)),
         // The bare name is where people look for their apps.
         None => home.push(json!({"handle": [page(404, APPS_PAGE_OFF)]})),
     }
     let mut servers = serde_json::Map::new();
     servers.insert("apps".into(), server(443, home));
+    let hosts = [name.to_string()];
     for (project_id, route) in &settings.apps {
         let Some(port) = route.port else { continue };
-        let route = app_route(settings, project_id, route, running, name, "", page_origin);
+        // Extra addresses are the internet's: here it is one name.
+        let plain = AppRoute {
+            aliases: Vec::new(),
+            ..route.clone()
+        };
+        let route = app_route(project_id, &plain, running, &hosts, None, &origins);
         servers.insert(format!("app-{port}"), server(port, vec![route]));
     }
     json!({
@@ -1379,6 +2033,7 @@ const APPS_PAGE_OFF: &str =
 const NOT_YOURS: &str = "You are signed in, but this app is for other groups at your company.";
 const NO_SIGN_IN: &str = "This app opens with company sign-in, which is not set up.";
 const NO_PROVIDER: &str = "connect your company's sign-in in Settings first";
+const NO_DOMAIN: &str = "set this server's domain in Settings first";
 const PRIVATE_NO_COMPANY: &str =
     "company sign-in needs your own domain on the internet: on a private network, choose a password or anyone";
 
@@ -1501,47 +2156,58 @@ fn set_private(_path: &Path) -> std::io::Result<()> {
 mod tests {
     use super::*;
 
+    fn app(domain: &str, name: &str, access: Access) -> AppRoute {
+        AppRoute {
+            domain: domain.into(),
+            name: name.into(),
+            www: true,
+            aliases: Vec::new(),
+            access,
+            password_hash: None,
+            password: None,
+            groups: Vec::new(),
+            listed: true,
+            port: None,
+        }
+    }
+
     fn settings() -> Settings {
         let mut settings = Settings {
-            domain: Some("example.com".into()),
-            apps: BTreeMap::new(),
-            sign_in: None,
-            apps_page: None,
-            reach: Reach::Internet,
-            records: Records::Wildcard,
-            placement: None,
+            domains: vec![Domain::new("example.com".into(), Records::Wildcard)],
+            ..Settings::default()
         };
         settings.apps.insert(
             "prj_todo".into(),
             AppRoute {
-                name: "todo".into(),
-                access: Access::Private,
                 password_hash: Some("$2b$12$hash".into()),
                 password: Some("tasks".into()),
-                groups: Vec::new(),
-                listed: true,
-                port: None,
+                ..app("example.com", "todo", Access::Private)
             },
         );
         settings.apps.insert(
             "prj_blog".into(),
-            AppRoute {
-                name: "blog".into(),
-                access: Access::Public,
-                password_hash: None,
-                password: None,
-                groups: Vec::new(),
-                listed: true,
-                port: None,
-            },
+            app("example.com", "blog", Access::Public),
         );
         settings
+    }
+
+    /// The fixture with a second domain, example.org.
+    fn two_domains() -> Settings {
+        let mut settings = settings();
+        settings
+            .domains
+            .push(Domain::new("example.org".into(), Records::EachName));
+        settings
+    }
+
+    fn first(settings: &mut Settings) -> &mut Domain {
+        &mut settings.domains[0]
     }
 
     #[test]
     fn a_running_app_is_proxied_and_a_private_one_asks_first() {
         let running = BTreeMap::from([("prj_todo".to_string(), 32778)]);
-        let config = caddy_config(&settings(), &running, false);
+        let config = caddy_config(&settings(), &running, None);
         let routes = &config["apps"]["http"]["servers"]["public"]["routes"];
         let todo = routes
             .as_array()
@@ -1553,6 +2219,11 @@ mod tests {
         assert_eq!(todo["handle"][0]["handler"], "headers");
         assert_eq!(todo["handle"][1]["handler"], "authentication");
         assert_eq!(todo["handle"][2]["upstreams"][0]["dial"], "127.0.0.1:32778");
+        // One address: the development server's own name.
+        assert_eq!(
+            todo["handle"][2]["headers"]["request"]["set"]["Host"][0],
+            "localhost"
+        );
         let blog = routes
             .as_array()
             .unwrap()
@@ -1579,9 +2250,14 @@ mod tests {
     #[test]
     fn names_and_domains_are_checked() {
         assert_eq!(valid_name(" Todo-App ").unwrap(), "todo-app");
+        // The bare domain, for a website.
+        assert_eq!(valid_name(" ").unwrap(), "");
         assert!(valid_name("www").is_err());
+        assert!(valid_name("sign-in").is_err());
+        assert!(valid_name("auth").is_err());
         assert!(valid_name("-todo").is_err());
         assert!(valid_name("to do").is_err());
+        assert!(valid_page_name("").is_err());
         assert_eq!(
             normalized_domain("*.Einarlogi.is.").unwrap(),
             "einarlogi.is"
@@ -1595,14 +2271,8 @@ mod tests {
         let mut settings = settings();
         settings.apps.get_mut("prj_todo").unwrap().access = Access::Public;
         let running = BTreeMap::from([("prj_todo".to_string(), 32778)]);
-        let config = caddy_config(&settings, &running, false);
-        let todo = config["apps"]["http"]["servers"]["public"]["routes"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|route| route["match"][0]["host"][0] == "todo.example.com")
-            .unwrap()
-            .clone();
+        let config = caddy_config(&settings, &running, None);
+        let todo = route(&config, "todo.example.com");
         assert_eq!(todo["handle"][1]["handler"], "reverse_proxy");
         assert!(settings.apps["prj_todo"].password_hash.is_some());
     }
@@ -1621,8 +2291,24 @@ mod tests {
             .as_array()
             .unwrap()
             .iter()
-            .find(|route| route["match"][0]["host"][0] == host)
+            .find(|route| {
+                route["match"][0]["host"]
+                    .as_array()
+                    .is_some_and(|hosts| hosts.iter().any(|h| h == host))
+            })
+            .unwrap_or_else(|| panic!("no route for {host}"))
+    }
+
+    fn has_route(config: &Value, host: &str) -> bool {
+        config["apps"]["http"]["servers"]["public"]["routes"]
+            .as_array()
             .unwrap()
+            .iter()
+            .any(|route| {
+                route["match"][0]["host"]
+                    .as_array()
+                    .is_some_and(|hosts| hosts.iter().any(|h| h == host))
+            })
     }
 
     #[test]
@@ -1631,23 +2317,16 @@ mod tests {
         let todo = settings.apps.get_mut("prj_todo").unwrap();
         todo.access = Access::Company;
         todo.groups = vec!["sales".into()];
-        settings.sign_in = Some(Provider {
-            issuer: "https://login.example.com".into(),
-            client_id: "commitarium".into(),
-            client_secret: "secret".into(),
-            scopes: None,
-            groups_claim: None,
-            cookie_secret: "c".repeat(32),
-            end_session: None,
-        });
+        first(&mut settings).sign_in = Some(provider());
         let running = BTreeMap::from([("prj_todo".to_string(), 32778)]);
-        let config = caddy_config(&settings, &running, false);
+        let config = caddy_config(&settings, &running, None);
         let todo = route(&config, "todo.example.com");
         assert_eq!(todo["handle"][0]["handler"], "headers");
         assert_eq!(
             todo["handle"][1]["rewrite"]["uri"],
             "/oauth2/auth?allowed_groups=sales"
         );
+        assert_eq!(todo["handle"][1]["upstreams"][0]["dial"], "127.0.0.1:4180");
         assert_eq!(todo["handle"][2]["upstreams"][0]["dial"], "127.0.0.1:32778");
         let sign_in = route(&config, "sign-in.example.com");
         assert_eq!(
@@ -1655,12 +2334,12 @@ mod tests {
             "127.0.0.1:4180"
         );
         // authentik on this server gets its own address.
-        let config = caddy_config(&settings, &running, true);
+        let config = caddy_config(&settings, &running, Some("example.com"));
         let auth = route(&config, "auth.example.com");
         assert_eq!(auth["handle"][0]["upstreams"][0]["dial"], "127.0.0.1:9400");
         // Without a provider there is no way in, not an open door.
-        settings.sign_in = None;
-        let config = caddy_config(&settings, &running, false);
+        first(&mut settings).sign_in = None;
+        let config = caddy_config(&settings, &running, None);
         let todo = route(&config, "todo.example.com");
         assert_eq!(todo["handle"][0]["status_code"], 503);
         assert_eq!(todo["handle"].as_array().unwrap().len(), 1);
@@ -1678,15 +2357,7 @@ mod tests {
                 .unwrap_err(),
             NO_PROVIDER
         );
-        settings.sign_in = Some(Provider {
-            issuer: "https://login.example.com".into(),
-            client_id: "commitarium".into(),
-            client_secret: "secret".into(),
-            scopes: None,
-            groups_claim: None,
-            cookie_secret: "c".repeat(32),
-            end_session: None,
-        });
+        first(&mut settings).sign_in = Some(provider());
         publishing.write(&settings).unwrap();
         publishing.set_access("prj_blog", Access::Company).unwrap();
         publishing
@@ -1697,12 +2368,12 @@ mod tests {
             ["it", "sales"]
         );
         assert!(publishing
-            .disconnect_sign_in()
+            .disconnect_sign_in(None)
             .unwrap_err()
             .contains("blog"));
         publishing.set_access("prj_blog", Access::Public).unwrap();
-        publishing.disconnect_sign_in().unwrap();
-        assert!(publishing.read().unwrap().sign_in.is_none());
+        publishing.disconnect_sign_in(None).unwrap();
+        assert!(publishing.read().unwrap().domains[0].sign_in.is_none());
     }
 
     fn provider() -> Provider {
@@ -1721,7 +2392,7 @@ mod tests {
     /// apps, all running.
     fn company_settings() -> (Settings, BTreeMap<String, u16>) {
         let mut settings = settings();
-        settings.sign_in = Some(provider());
+        first(&mut settings).sign_in = Some(provider());
         for (id, name, groups) in [
             ("prj_crm", "crm", vec!["sales".to_string()]),
             ("prj_wiki", "wiki", vec![]),
@@ -1729,13 +2400,8 @@ mod tests {
             settings.apps.insert(
                 id.into(),
                 AppRoute {
-                    name: name.into(),
-                    access: Access::Company,
-                    password_hash: None,
-                    password: None,
                     groups,
-                    listed: true,
-                    port: None,
+                    ..app("example.com", name, Access::Company)
                 },
             );
         }
@@ -1747,46 +2413,49 @@ mod tests {
         apps.iter().map(|app| app.name.as_str()).collect()
     }
 
+    fn page_at(name: &str, access: Access) -> Option<AppsPage> {
+        Some(AppsPage {
+            name: name.into(),
+            access,
+            password_hash: None,
+            password: None,
+        })
+    }
+
+    const PAGE: Option<&str> = Some("apps.example.com");
+
     #[test]
     fn the_apps_page_lists_only_listed_apps_and_is_off_until_turned_on() {
         let (mut settings, running) = company_settings();
-        assert!(catalog(&settings, &running, None, Base::Domain("example.com")).is_none());
-        settings.apps_page = Some(AppsPage {
-            name: "apps".into(),
-            access: Access::Public,
-            password_hash: None,
-            password: None,
-        });
+        assert!(catalog(&settings, &running, None, Base::Internet, PAGE).is_none());
+        first(&mut settings).apps_page = page_at("apps", Access::Public);
         settings.apps.get_mut("prj_crm").unwrap().listed = false;
-        let apps = catalog(&settings, &running, None, Base::Domain("example.com")).unwrap();
+        let apps = catalog(&settings, &running, None, Base::Internet, PAGE).unwrap();
         // Open to anyone: every listed app, locks and all.
         assert_eq!(names(&apps), ["blog", "todo", "wiki"]);
         assert_eq!(apps[1].url, "https://todo.example.com");
         assert_eq!(apps[1].access, Access::Private);
+        // Asked at no page's address: no page.
+        assert!(catalog(
+            &settings,
+            &running,
+            None,
+            Base::Internet,
+            Some("x.example.com")
+        )
+        .is_none());
     }
 
     #[test]
     fn behind_company_sign_in_each_person_sees_what_they_can_open() {
         let (mut settings, running) = company_settings();
-        settings.apps_page = Some(AppsPage {
-            name: "apps".into(),
-            access: Access::Company,
-            password_hash: None,
-            password: None,
-        });
+        first(&mut settings).apps_page = page_at("apps", Access::Company);
         // No password apps: the page cannot know who has the password.
-        let outsider =
-            catalog(&settings, &running, Some("it"), Base::Domain("example.com")).unwrap();
+        let outsider = catalog(&settings, &running, Some("it"), Base::Internet, PAGE).unwrap();
         assert_eq!(names(&outsider), ["blog", "wiki"]);
-        let seller = catalog(
-            &settings,
-            &running,
-            Some("it, sales"),
-            Base::Domain("example.com"),
-        )
-        .unwrap();
+        let seller = catalog(&settings, &running, Some("it, sales"), Base::Internet, PAGE).unwrap();
         assert_eq!(names(&seller), ["blog", "crm", "wiki"]);
-        let nobody = catalog(&settings, &running, None, Base::Domain("example.com")).unwrap();
+        let nobody = catalog(&settings, &running, None, Base::Internet, PAGE).unwrap();
         assert_eq!(names(&nobody), ["blog", "wiki"]);
     }
 
@@ -1795,15 +2464,10 @@ mod tests {
         let (mut settings, running) = company_settings();
         settings.apps.get_mut("prj_crm").unwrap().listed = false;
         // Off: no route, and no app gets the framing rule.
-        let config = caddy_config(&settings, &running, false);
+        let config = caddy_config(&settings, &running, None);
         assert!(config.to_string().find("apps.example.com").is_none());
-        settings.apps_page = Some(AppsPage {
-            name: "apps".into(),
-            access: Access::Company,
-            password_hash: None,
-            password: None,
-        });
-        let config = caddy_config(&settings, &running, false);
+        first(&mut settings).apps_page = page_at("apps", Access::Company);
+        let config = caddy_config(&settings, &running, None);
         let page = route(&config, "apps.example.com");
         assert_eq!(page["handle"][0]["handler"], "headers");
         // Anyone at the company: the gate with no groups.
@@ -1812,6 +2476,8 @@ mod tests {
             page["handle"][2]["upstreams"][0]["dial"],
             format!("127.0.0.1:{}", crate::apps_page::PORT)
         );
+        // The page reads which domain it is from the Host Caddy passes on.
+        assert!(page["handle"][2].get("headers").is_none());
         let wiki = route(&config, "wiki.example.com");
         assert_eq!(
             wiki["handle"][1]["response"]["add"]["Content-Security-Policy"][0],
@@ -1820,13 +2486,13 @@ mod tests {
         let crm = route(&config, "crm.example.com");
         assert!(crm.to_string().find("frame-ancestors").is_none());
         // Behind a password, as a private app is.
-        settings.apps_page = Some(AppsPage {
+        first(&mut settings).apps_page = Some(AppsPage {
             name: "apps".into(),
             access: Access::Private,
             password_hash: Some("$2b$12$hash".into()),
             password: Some("apps".into()),
         });
-        let config = caddy_config(&settings, &running, false);
+        let config = caddy_config(&settings, &running, None);
         let page = route(&config, "apps.example.com");
         assert_eq!(page["handle"][1]["handler"], "authentication");
         assert_eq!(
@@ -1842,31 +2508,31 @@ mod tests {
         publishing.write(&settings()).unwrap();
         assert_eq!(
             publishing
-                .set_apps_page(Some(Access::Company), None, None)
+                .set_apps_page(None, Some(Access::Company), None, None)
                 .unwrap_err(),
             NO_PROVIDER
         );
         assert!(publishing
-            .set_apps_page(Some(Access::Private), None, None)
+            .set_apps_page(None, Some(Access::Private), None, None)
             .is_err());
         publishing
-            .set_apps_page(Some(Access::Private), Some("open sesame"), None)
+            .set_apps_page(None, Some(Access::Private), Some("open sesame"), None)
             .unwrap();
         // Opening it to anyone, then closing it again, needs no new password.
         publishing
-            .set_apps_page(Some(Access::Public), None, None)
+            .set_apps_page(None, Some(Access::Public), None, None)
             .unwrap();
         publishing
-            .set_apps_page(Some(Access::Private), None, None)
+            .set_apps_page(None, Some(Access::Private), None, None)
             .unwrap();
         assert_eq!(
-            publishing.apps_page_password().unwrap().as_deref(),
+            publishing.apps_page_password(None).unwrap().as_deref(),
             Some("open sesame")
         );
         publishing.set_listed("prj_todo", false).unwrap();
         assert!(!publishing.read().unwrap().apps["prj_todo"].listed);
-        publishing.set_apps_page(None, None, None).unwrap();
-        assert!(publishing.read().unwrap().apps_page.is_none());
+        publishing.set_apps_page(None, None, None, None).unwrap();
+        assert!(publishing.read().unwrap().domains[0].apps_page.is_none());
     }
 
     #[test]
@@ -1883,22 +2549,47 @@ mod tests {
             .set_domain("missing-records.test", Records::EachName)
             .unwrap();
         let mut settings = publishing.read().unwrap();
-        assert_eq!(settings.records, Records::EachName);
-        settings.domain = Some("example.com".into());
+        assert_eq!(settings.domains.len(), 1);
+        assert_eq!(settings.domains[0].records, Records::EachName);
+        settings.domains[0].name = "example.com".into();
         publishing.write(&settings).unwrap();
         assert!(publishing
-            .check_apps_page_name("missing-apps")
+            .check_apps_page_name(None, "missing-apps")
             .unwrap_err()
             .contains("add an A record for missing-apps.example.com"));
-        publishing.check_apps_page_name("apps").unwrap();
+        publishing.check_apps_page_name(None, "apps").unwrap();
         // Company sign-in's names need their records too.
-        settings.domain = Some("test".into());
+        let mut domain = Domain::new("test".into(), Records::EachName);
         let names = ["missing-x"];
-        assert!(sign_in_names_point_here(&settings, &names)
+        assert!(sign_in_names_point_here(&domain, &names)
             .unwrap_err()
             .contains("missing-x.test"));
-        settings.records = Records::Wildcard;
-        assert!(sign_in_names_point_here(&settings, &names).is_ok());
+        domain.records = Records::Wildcard;
+        assert!(sign_in_names_point_here(&domain, &names).is_ok());
+    }
+
+    #[test]
+    fn changing_the_first_domain_moves_what_was_there() {
+        let data = tempfile::tempdir().unwrap();
+        let publishing = Publishing::new(data.path());
+        let mut settings = two_domains();
+        settings.apps.get_mut("prj_blog").unwrap().aliases = vec![Address {
+            domain: "example.com".into(),
+            name: "news".into(),
+        }];
+        publishing.write(&settings).unwrap();
+        assert!(publishing
+            .set_domain("example.org", Records::Wildcard)
+            .unwrap_err()
+            .contains("already one of"));
+        publishing
+            .set_domain("example.net", Records::Wildcard)
+            .unwrap();
+        let settings = publishing.read().unwrap();
+        assert_eq!(settings.domains[0].name, "example.net");
+        assert_eq!(settings.domains[1].name, "example.org");
+        assert_eq!(settings.apps["prj_blog"].domain, "example.net");
+        assert_eq!(settings.apps["prj_blog"].aliases[0].domain, "example.net");
     }
 
     #[test]
@@ -1908,16 +2599,91 @@ mod tests {
         let mut settings = settings();
         publishing.write(&settings).unwrap();
         assert!(publishing
-            .remove_domain()
+            .remove_domain(None)
             .unwrap_err()
             .contains("example.com is still in use by its apps"));
         settings.apps.clear();
-        settings.records = Records::EachName;
+        settings.domains[0].records = Records::EachName;
         publishing.write(&settings).unwrap();
-        publishing.remove_domain().unwrap();
-        let settings = publishing.read().unwrap();
-        assert_eq!(settings.domain, None);
-        assert_eq!(settings.records, Records::Wildcard);
+        publishing.remove_domain(None).unwrap();
+        assert!(publishing.read().unwrap().domains.is_empty());
+    }
+
+    #[test]
+    fn a_second_domain_is_added_and_removed_only_when_unused() {
+        let data = tempfile::tempdir().unwrap();
+        let publishing = Publishing::new(data.path());
+        publishing.write(&settings()).unwrap();
+        publishing
+            .add_domain("Example.org", Records::EachName)
+            .unwrap();
+        assert!(publishing
+            .add_domain("example.org", Records::Wildcard)
+            .unwrap_err()
+            .contains("already one of"));
+        // With two, which one must be said.
+        assert!(publishing
+            .remove_domain(None)
+            .unwrap_err()
+            .contains("which"));
+        publishing
+            .publish(
+                "prj_notes",
+                "notes",
+                Access::Public,
+                None,
+                on("example.org"),
+            )
+            .unwrap();
+        assert!(publishing
+            .remove_domain(Some("example.org"))
+            .unwrap_err()
+            .contains("its apps"));
+        // An extra address counts as using it, too.
+        publishing
+            .publish(
+                "prj_notes",
+                "notes",
+                Access::Public,
+                None,
+                Placing {
+                    domain: Some("example.com".into()),
+                    aliases: Some(vec![Address {
+                        domain: "example.org".into(),
+                        name: "notes".into(),
+                    }]),
+                    ..Placing::default()
+                },
+            )
+            .unwrap();
+        assert!(publishing
+            .remove_domain(Some("example.org"))
+            .unwrap_err()
+            .contains("its apps"));
+        publishing.unpublish("prj_notes").unwrap();
+        publishing
+            .set_apps_page(Some("example.org"), Some(Access::Public), None, None)
+            .unwrap();
+        assert!(publishing
+            .remove_domain(Some("example.org"))
+            .unwrap_err()
+            .contains("apps page"));
+        publishing
+            .set_apps_page(Some("example.org"), None, None, None)
+            .unwrap();
+        publishing.remove_domain(Some("example.org")).unwrap();
+        assert_eq!(publishing.read().unwrap().domains.len(), 1);
+        assert!(publishing
+            .remove_domain(Some("example.org"))
+            .unwrap_err()
+            .contains("not one of"));
+    }
+
+    fn on(domain: &str) -> Placing {
+        Placing {
+            domain: Some(domain.into()),
+            ..Placing::default()
+        }
     }
 
     #[test]
@@ -1936,34 +2702,40 @@ mod tests {
         publishing.write(&settings()).unwrap();
         // A name the company uses elsewhere, or an app's, is found first.
         assert!(publishing
-            .check_apps_page_name("elsewhere-apps")
+            .check_apps_page_name(None, "elsewhere-apps")
             .unwrap_err()
             .contains("points somewhere else"));
         // A name with no record yet says which record to add.
         assert!(publishing
-            .check_apps_page_name("missing-apps")
+            .check_apps_page_name(None, "missing-apps")
             .unwrap_err()
             .contains("add an A record for missing-apps.example.com with the value 203.0.113.7"));
         assert!(publishing
-            .check_apps_page_name("todo")
+            .check_apps_page_name(None, "todo")
             .unwrap_err()
             .contains("already an app's address"));
-        assert!(publishing.check_apps_page_name("www").is_err());
-        publishing.check_apps_page_name("apps").unwrap();
+        assert!(publishing.check_apps_page_name(None, "www").is_err());
+        publishing.check_apps_page_name(None, "apps").unwrap();
         publishing
-            .set_apps_page(Some(Access::Public), None, Some("Tools"))
+            .set_apps_page(None, Some(Access::Public), None, Some("Tools"))
             .unwrap();
         let settings = publishing.read().unwrap();
-        assert_eq!(settings.apps_page.as_ref().unwrap().name, "tools");
+        assert_eq!(
+            settings.domains[0].apps_page.as_ref().unwrap().name,
+            "tools"
+        );
         // Changing who may open it keeps its name.
         publishing
-            .set_apps_page(Some(Access::Private), Some("pw"), None)
+            .set_apps_page(None, Some(Access::Private), Some("pw"), None)
             .unwrap();
-        assert_eq!(publishing.read().unwrap().apps_page.unwrap().name, "tools");
+        let settings = publishing.read().unwrap();
+        assert_eq!(
+            settings.domains[0].apps_page.as_ref().unwrap().name,
+            "tools"
+        );
         // Its route and the framing rule follow the name.
-        let mut settings = publishing.read().unwrap();
         let running = BTreeMap::from([("prj_blog".to_string(), 3000)]);
-        let config = caddy_config(&settings, &running, false);
+        let config = caddy_config(&settings, &running, None);
         route(&config, "tools.example.com");
         assert_eq!(
             route(&config, "blog.example.com")["handle"][1]["response"]["add"]
@@ -1972,13 +2744,13 @@ mod tests {
         );
         // An app cannot take the apps page's name.
         assert!(publishing
-            .publish("prj_new", "tools", Access::Public, None)
+            .publish("prj_new", "tools", Access::Public, None, Placing::default())
             .map(|_| ())
             .unwrap_err()
             .contains("apps page"));
         // A page saved before names were chosen is at apps.
-        settings.apps_page = serde_json::from_str(r#"{"access":"public"}"#).unwrap();
-        assert_eq!(settings.apps_page.unwrap().name, "apps");
+        let page: AppsPage = serde_json::from_str(r#"{"access":"public"}"#).unwrap();
+        assert_eq!(page.name, "apps");
     }
 
     #[test]
@@ -1986,13 +2758,13 @@ mod tests {
         let data = tempfile::tempdir().unwrap();
         let publishing = Publishing::new(data.path());
         let mut settings = settings();
-        settings.sign_in = Some(provider());
+        first(&mut settings).sign_in = Some(provider());
         publishing.write(&settings).unwrap();
         publishing
-            .set_apps_page(Some(Access::Company), None, None)
+            .set_apps_page(None, Some(Access::Company), None, None)
             .unwrap();
         assert!(publishing
-            .disconnect_sign_in()
+            .disconnect_sign_in(None)
             .unwrap_err()
             .contains("apps page"));
     }
@@ -2001,15 +2773,458 @@ mod tests {
     fn an_app_saved_before_the_apps_page_is_listed() {
         let route: AppRoute = serde_json::from_str(r#"{"name":"todo","access":"public"}"#).unwrap();
         assert!(route.listed);
+        assert!(route.www);
         let saved = serde_json::to_string(&route).unwrap();
         assert!(!saved.contains("listed"));
+        assert!(!saved.contains("www"));
+        assert!(!saved.contains("aliases"));
+    }
+
+    #[test]
+    fn an_old_one_domain_file_reads_as_the_first_domain_and_saves_the_new_shape() {
+        let old = serde_json::json!({
+            "domain": "example.com",
+            "records": "each_name",
+            "sign_in": provider(),
+            "apps_page": {"name": "tools", "access": "company"},
+            "apps": {"prj_todo": {"name": "todo", "access": "public"}},
+        });
+        let settings: Settings = serde_json::from_value(old).unwrap();
+        assert_eq!(settings.domains.len(), 1);
+        let domain = &settings.domains[0];
+        assert_eq!(domain.name, "example.com");
+        assert_eq!(domain.records, Records::EachName);
+        assert_eq!(domain.sign_in, Some(provider()));
+        assert!(domain.gate.is_first());
+        assert_eq!(domain.apps_page.as_ref().unwrap().name, "tools");
+        // Its apps are at the domain they were at.
+        assert_eq!(settings.apps["prj_todo"].domain, "example.com");
+        assert!(settings.private_apps_page.is_none());
+        let saved = serde_json::to_value(&settings).unwrap();
+        for old in ["domain", "records", "sign_in", "apps_page"] {
+            assert!(saved.get(old).is_none(), "{old} is still at the top");
+        }
+        assert_eq!(saved["domains"][0]["name"], "example.com");
+        assert_eq!(saved["apps"]["prj_todo"]["domain"], "example.com");
+        // And it reads back the same.
+        let again: Settings = serde_json::from_value(saved).unwrap();
+        assert_eq!(again.domains.len(), 1);
+        assert_eq!(again.domains[0].sign_in, Some(provider()));
+        // The gate the first domain had keeps running as it was.
+        let config = caddy_config(&again, &BTreeMap::new(), None);
+        let sign_in = route(&config, "sign-in.example.com");
+        assert_eq!(
+            sign_in["handle"][0]["routes"][1]["handle"][0]["upstreams"][0]["dial"],
+            "127.0.0.1:4180"
+        );
+        // A homelab server's one apps page stays the private network's.
+        let homelab: Settings = serde_json::from_value(serde_json::json!({
+            "reach": "private",
+            "apps_page": {"access": "public"},
+        }))
+        .unwrap();
+        assert!(homelab.domains.is_empty());
+        assert_eq!(homelab.private_apps_page.unwrap().name, "apps");
+    }
+
+    #[test]
+    fn two_domains_get_their_own_routes_gates_and_apps_pages() {
+        let mut settings = two_domains();
+        let mut second_provider = provider();
+        second_provider.client_id = "other-client".into();
+        second_provider.cookie_secret = "d".repeat(32);
+        settings.domains[0].sign_in = Some(provider());
+        settings.domains[1].sign_in = Some(second_provider);
+        settings.domains[1].gate = Gate::free(&[settings.domains[0].gate]).unwrap();
+        settings.domains[0].apps_page = page_at("apps", Access::Company);
+        settings.domains[1].apps_page = page_at("tools", Access::Company);
+        settings
+            .apps
+            .insert("prj_crm".into(), app("example.org", "crm", Access::Company));
+        let running = settings.apps.keys().map(|id| (id.clone(), 3000)).collect();
+        let config = caddy_config(&settings, &running, None);
+        // Each domain's sign-in address reaches its own gate.
+        let one = route(&config, "sign-in.example.com");
+        let two = route(&config, "sign-in.example.org");
+        assert_eq!(
+            one["handle"][0]["routes"][1]["handle"][0]["upstreams"][0]["dial"],
+            "127.0.0.1:4180"
+        );
+        assert_eq!(
+            two["handle"][0]["routes"][1]["handle"][0]["upstreams"][0]["dial"],
+            "127.0.0.1:4181"
+        );
+        // A company app asks its own domain's gate.
+        let crm = route(&config, "crm.example.org");
+        assert_eq!(crm["handle"][2]["upstreams"][0]["dial"], "127.0.0.1:4181");
+        // Each domain's apps page, behind its own gate.
+        let page = route(&config, "tools.example.org");
+        assert_eq!(page["handle"][1]["upstreams"][0]["dial"], "127.0.0.1:4181");
+        route(&config, "apps.example.com");
+        assert!(!has_route(&config, "tools.example.com"));
+        // Each gate has its own client, cookie secret, cookie domain and port.
+        let gates = settings.gates();
+        assert_eq!(gates.len(), 2);
+        let args: Vec<String> = gates
+            .iter()
+            .map(|(gate, provider, domain)| sign_in::arguments(provider, domain, *gate).join(" "))
+            .collect();
+        assert!(args[0].contains("--cookie-domain=.example.com"));
+        assert!(args[1].contains("--cookie-domain=.example.org"));
+        assert!(args[1].contains("--client-id=other-client"));
+        assert!(args[1].contains("--http-address=127.0.0.1:4181"));
+        assert_ne!(gates[0].1.cookie_secret, gates[1].1.cookie_secret);
+        // Each page lists only its own domain's apps.
+        let com = catalog(&settings, &running, None, Base::Internet, PAGE).unwrap();
+        assert_eq!(names(&com), ["blog"]);
+        let org = catalog(
+            &settings,
+            &running,
+            None,
+            Base::Internet,
+            Some("tools.example.org:443"),
+        )
+        .unwrap();
+        assert_eq!(names(&org), ["crm"]);
+        assert_eq!(org[0].url, "https://crm.example.org");
+    }
+
+    #[test]
+    fn connecting_a_second_domain_gives_it_its_own_gate() {
+        let mut settings = two_domains();
+        connect(&mut settings, "example.com", provider()).unwrap();
+        connect(&mut settings, "example.org", provider()).unwrap();
+        assert!(settings.domains[0].gate.is_first());
+        assert_eq!(settings.domains[1].gate.port(), 4181);
+        // Connecting again keeps the gate it has.
+        connect(&mut settings, "example.org", provider()).unwrap();
+        assert_eq!(settings.domains[1].gate.port(), 4181);
+    }
+
+    #[test]
+    fn a_name_taken_on_one_domain_is_free_on_another_but_no_address_twice() {
+        let data = tempfile::tempdir().unwrap();
+        let publishing = Publishing::new(data.path());
+        publishing.write(&two_domains()).unwrap();
+        // todo is example.com's: free at example.org.
+        let published = publishing
+            .publish("prj_todo2", "todo", Access::Public, None, on("example.org"))
+            .unwrap();
+        assert_eq!(published.url, "https://todo.example.org");
+        assert!(publishing
+            .publish("prj_other", "todo", Access::Public, None, on("example.org"))
+            .map(|_| ())
+            .unwrap_err()
+            .contains("todo.example.org is already another app's address"));
+        // Nor as an extra address.
+        let alias = |domain: &str, name: &str| Placing {
+            domain: Some("example.org".into()),
+            aliases: Some(vec![Address {
+                domain: domain.into(),
+                name: name.into(),
+            }]),
+            ..Placing::default()
+        };
+        assert!(publishing
+            .publish(
+                "prj_other",
+                "other",
+                Access::Public,
+                None,
+                alias("example.com", "blog")
+            )
+            .map(|_| ())
+            .unwrap_err()
+            .contains("blog.example.com is already another app's address"));
+        // Nor its own main address again.
+        assert!(publishing
+            .publish(
+                "prj_other",
+                "other",
+                Access::Public,
+                None,
+                alias("example.org", "other")
+            )
+            .map(|_| ())
+            .unwrap_err()
+            .contains("given twice"));
+        // Nor a domain's apps page.
+        publishing
+            .set_apps_page(Some("example.org"), Some(Access::Public), None, None)
+            .unwrap();
+        assert!(publishing
+            .publish(
+                "prj_other",
+                "other",
+                Access::Public,
+                None,
+                alias("example.org", "apps")
+            )
+            .map(|_| ())
+            .unwrap_err()
+            .contains("kept for other uses"));
+        publishing
+            .set_apps_page(
+                Some("example.org"),
+                Some(Access::Public),
+                None,
+                Some("tools"),
+            )
+            .unwrap();
+        assert!(publishing
+            .publish(
+                "prj_other",
+                "other",
+                Access::Public,
+                None,
+                alias("example.org", "tools")
+            )
+            .map(|_| ())
+            .unwrap_err()
+            .contains("apps page's address"));
+        // The apps page cannot take an app's alias either.
+        publishing
+            .publish(
+                "prj_other",
+                "other",
+                Access::Public,
+                None,
+                alias("example.com", "more"),
+            )
+            .unwrap();
+        assert!(publishing
+            .check_apps_page_name(None, "more")
+            .unwrap_err()
+            .contains("already an app's address"));
+        // But the same name at the other domain is free for a page.
+        publishing
+            .check_apps_page_name(Some("example.org"), "blog")
+            .unwrap();
+        // A domain the server does not have is refused.
+        assert!(publishing
+            .publish("prj_x", "x", Access::Public, None, on("example.net"))
+            .map(|_| ())
+            .unwrap_err()
+            .contains("not one of this server's domains"));
+        // Publishing again without a domain keeps the one it has.
+        let again = publishing
+            .publish(
+                "prj_todo2",
+                "todo",
+                Access::Public,
+                None,
+                Placing::default(),
+            )
+            .unwrap();
+        assert_eq!(again.url, "https://todo.example.org");
+    }
+
+    #[test]
+    fn a_bare_domain_app_answers_there_and_www_sends_people_to_it() {
+        let data = tempfile::tempdir().unwrap();
+        let publishing = Publishing::new(data.path());
+        publishing.write(&settings()).unwrap();
+        let published = publishing
+            .publish("prj_site", "", Access::Public, None, Placing::default())
+            .unwrap();
+        assert_eq!(published.url, "https://example.com");
+        let settings = publishing.read().unwrap();
+        assert!(settings.apps["prj_site"].www);
+        let running = BTreeMap::from([("prj_site".to_string(), 3000)]);
+        let config = caddy_config(&settings, &running, None);
+        let site = route(&config, "example.com");
+        assert_eq!(site["handle"][1]["upstreams"][0]["dial"], "127.0.0.1:3000");
+        let www = route(&config, "www.example.com");
+        assert_eq!(www["handle"][0]["status_code"], 308);
+        assert_eq!(
+            www["handle"][0]["headers"]["Location"][0],
+            "https://example.com{http.request.uri}"
+        );
+        // The bare name is taken once per domain.
+        assert!(publishing
+            .publish("prj_other", "", Access::Public, None, Placing::default())
+            .map(|_| ())
+            .unwrap_err()
+            .contains("example.com is already another app's address"));
+        // Without www, only the bare address.
+        publishing
+            .publish(
+                "prj_site",
+                "",
+                Access::Public,
+                None,
+                Placing {
+                    www: Some(false),
+                    ..Placing::default()
+                },
+            )
+            .unwrap();
+        let settings = publishing.read().unwrap();
+        let config = caddy_config(&settings, &running, None);
+        assert!(!has_route(&config, "www.example.com"));
+        // The apps page opens it at the bare address.
+        let mut settings = settings;
+        first(&mut settings).apps_page = page_at("apps", Access::Public);
+        let apps = catalog(&settings, &running, None, Base::Internet, PAGE).unwrap();
+        assert_eq!(apps[0].name, "");
+        assert_eq!(apps[0].url, "https://example.com");
+    }
+
+    #[test]
+    fn a_bare_domain_needs_its_own_record_even_with_a_wildcard() {
+        let mut settings = Settings {
+            domains: vec![Domain::new("missing-apex.test".into(), Records::Wildcard)],
+            ..Settings::default()
+        };
+        settings.apps.insert(
+            "prj_site".into(),
+            app("missing-apex.test", "", Access::Public),
+        );
+        settings.apps.insert(
+            "prj_notes".into(),
+            app("missing-apex.test", "notes", Access::Public),
+        );
+        let problem = settings.record_problem(&settings.apps["prj_site"]).unwrap();
+        assert!(
+            problem.contains("add an A record for missing-apex.test (the name @)"),
+            "{problem}"
+        );
+        // The wildcard covers a name under it.
+        assert!(settings
+            .record_problem(&settings.apps["prj_notes"])
+            .is_none());
+        // And publishing there says so too.
+        let data = tempfile::tempdir().unwrap();
+        let publishing = Publishing::new(data.path());
+        publishing.write(&settings).unwrap();
+        assert!(publishing
+            .publish("prj_site", "", Access::Public, None, Placing::default())
+            .map(|_| ())
+            .unwrap_err()
+            .contains("(the name @)"));
+        // www is checked too, when it is on.
+        let site = app("example.com", "", Access::Public);
+        let names: Vec<String> = site.dns_names().iter().map(Address::host).collect();
+        assert_eq!(names, ["example.com", "www.example.com"]);
+    }
+
+    #[test]
+    fn an_app_with_extra_addresses_gets_the_address_it_was_opened_on() {
+        let mut settings = two_domains();
+        settings.domains[1].apps_page = page_at("apps", Access::Public);
+        first(&mut settings).apps_page = page_at("apps", Access::Public);
+        settings.apps.insert(
+            "prj_site".into(),
+            AppRoute {
+                aliases: vec![Address {
+                    domain: "example.org".into(),
+                    name: "".into(),
+                }],
+                ..app("example.com", "", Access::Public)
+            },
+        );
+        let running: BTreeMap<String, u16> =
+            settings.apps.keys().map(|id| (id.clone(), 3000)).collect();
+        let config = caddy_config(&settings, &running, None);
+        let main = route(&config, "example.com");
+        let extra = route(&config, "example.org");
+        for site in [main, extra] {
+            let proxy = site["handle"].as_array().unwrap().last().unwrap();
+            assert_eq!(proxy["upstreams"][0]["dial"], "127.0.0.1:3000");
+            // No Host of its own: the one it was opened on passes through.
+            assert!(proxy.get("headers").is_none());
+            // Either domain's apps page may frame it.
+            assert_eq!(
+                site["handle"][1]["response"]["add"]["Content-Security-Policy"][0],
+                "frame-ancestors 'self' https://apps.example.com https://apps.example.org"
+            );
+        }
+        // Both bare addresses get their www.
+        route(&config, "www.example.com");
+        assert_eq!(
+            route(&config, "www.example.org")["handle"][0]["headers"]["Location"][0],
+            "https://example.org{http.request.uri}"
+        );
+        // A plain app keeps the development server's name.
+        let blog = route(&config, "blog.example.com");
+        let proxy = blog["handle"].as_array().unwrap().last().unwrap();
+        assert_eq!(proxy["headers"]["request"]["set"]["Host"][0], "localhost");
+        // Each domain's page lists it at that domain's address.
+        let org = catalog(
+            &settings,
+            &running,
+            None,
+            Base::Internet,
+            Some("apps.example.org"),
+        )
+        .unwrap();
+        assert_eq!(org.len(), 1);
+        assert_eq!(org[0].url, "https://example.org");
+        // And the client sees every address.
+        assert_eq!(
+            Base::Internet.app_urls(&settings.apps["prj_site"]),
+            ["https://example.com", "https://example.org"]
+        );
+    }
+
+    #[test]
+    fn company_access_needs_sign_in_on_every_domain_of_the_app() {
+        let data = tempfile::tempdir().unwrap();
+        let publishing = Publishing::new(data.path());
+        let mut settings = two_domains();
+        first(&mut settings).sign_in = Some(provider());
+        settings.apps.get_mut("prj_blog").unwrap().aliases = vec![Address {
+            domain: "example.org".into(),
+            name: "blog".into(),
+        }];
+        publishing.write(&settings).unwrap();
+        assert!(publishing
+            .set_access("prj_blog", Access::Company)
+            .unwrap_err()
+            .contains("for example.org"));
+        publishing.set_access("prj_todo", Access::Company).unwrap();
+        // The other domain's sign-in is not this one's to disconnect.
+        connect(&mut settings, "example.org", provider()).unwrap();
+        settings.apps.get_mut("prj_todo").unwrap().access = Access::Company;
+        publishing.write(&settings).unwrap();
+        publishing.disconnect_sign_in(Some("example.org")).unwrap();
+        assert!(publishing
+            .disconnect_sign_in(Some("example.com"))
+            .unwrap_err()
+            .contains("todo.example.com"));
+    }
+
+    #[test]
+    fn the_apps_page_signs_out_at_its_own_domain() {
+        let data = tempfile::tempdir().unwrap();
+        let publishing = Publishing::new(data.path());
+        let mut settings = two_domains();
+        connect(&mut settings, "example.com", provider()).unwrap();
+        connect(&mut settings, "example.org", provider()).unwrap();
+        settings.domains[0].apps_page = page_at("apps", Access::Company);
+        settings.domains[1].apps_page = page_at("apps", Access::Public);
+        publishing.write(&settings).unwrap();
+        assert_eq!(
+            publishing
+                .apps_page_sign_out(Some("apps.example.com"))
+                .unwrap()
+                .as_deref(),
+            Some("https://sign-in.example.com/sign-out")
+        );
+        // Open to anyone: nothing to sign out of there.
+        assert_eq!(
+            publishing
+                .apps_page_sign_out(Some("apps.example.org"))
+                .unwrap(),
+            None
+        );
     }
 
     #[test]
     fn on_the_private_network_apps_get_ports_on_the_tailscale_name() {
         let mut settings = settings();
         settings.reach = Reach::Private;
-        settings.domain = None;
+        settings.domains.clear();
         assign_ports(&mut settings);
         // Each app its own port, kept: a new app takes the next free one.
         assert_eq!(settings.apps["prj_blog"].port, Some(8001));
@@ -2054,12 +3269,17 @@ mod tests {
             .to_string();
         assert!(body.contains("The apps page is off"));
 
-        settings.apps_page = Some(AppsPage {
+        settings.private_apps_page = Some(AppsPage {
             name: "apps".into(),
             access: Access::Private,
             password_hash: Some("$2b$12$hash".into()),
             password: Some("pw".into()),
         });
+        // An extra address from the internet changes nothing here.
+        settings.apps.get_mut("prj_todo").unwrap().aliases = vec![Address {
+            domain: "example.org".into(),
+            name: "todo".into(),
+        }];
         let running = BTreeMap::from([("prj_todo".to_string(), 3000)]);
         let config =
             private_caddy_config(&settings, &running, "homelab.tail1234.ts.net", "100.64.0.7");
@@ -2082,9 +3302,13 @@ mod tests {
         );
         assert_eq!(route["handle"][2]["handler"], "authentication");
         assert_eq!(route["handle"][3]["upstreams"][0]["dial"], "127.0.0.1:3000");
-        // The catalog links each app at its port.
+        assert_eq!(
+            route["handle"][3]["headers"]["request"]["set"]["Host"][0],
+            "localhost"
+        );
+        // The catalog links each app at its port, whatever the host.
         let base = settings.base(Some(&status)).unwrap();
-        let apps = catalog(&settings, &running, None, base).unwrap();
+        let apps = catalog(&settings, &running, None, base, None).unwrap();
         assert_eq!(apps[0].url, "https://homelab.tail1234.ts.net:8001");
     }
 
@@ -2093,16 +3317,45 @@ mod tests {
         let data = tempfile::tempdir().unwrap();
         let publishing = Publishing::new(data.path());
         let mut settings = settings();
-        settings.sign_in = Some(provider());
+        first(&mut settings).sign_in = Some(provider());
         settings.reach = Reach::Private;
         publishing.write(&settings).unwrap();
         // Written straight to the file: set_reach would start Tailscale.
         let saved = publishing.read().unwrap();
         assert_eq!(saved.reach, Reach::Private);
         assert!(publishing
-            .set_apps_page(Some(Access::Company), None, None)
+            .set_apps_page(None, Some(Access::Company), None, None)
             .unwrap_err()
             .contains("private network"));
+        // The private network's page is its own, apart from the domain's.
+        publishing
+            .set_apps_page(None, Some(Access::Public), None, None)
+            .unwrap();
+        let saved = publishing.read().unwrap();
+        assert!(saved.private_apps_page.is_some());
+        assert!(saved.domains[0].apps_page.is_none());
+        // Names there are labels: no bare name, no extra addresses.
+        assert!(publishing
+            .publish("prj_x", "", Access::Public, None, Placing::default())
+            .map(|_| ())
+            .is_err());
+        assert!(publishing
+            .publish(
+                "prj_x",
+                "x",
+                Access::Public,
+                None,
+                Placing {
+                    aliases: Some(vec![Address {
+                        domain: "example.com".into(),
+                        name: "y".into(),
+                    }]),
+                    ..Placing::default()
+                }
+            )
+            .map(|_| ())
+            .unwrap_err()
+            .contains("extra addresses"));
         settings.reach = Reach::Internet;
         publishing.write(&settings).unwrap();
         assert!(publishing
@@ -2113,6 +3366,26 @@ mod tests {
         let old: Settings = serde_json::from_str(r#"{"domain":"example.com"}"#).unwrap();
         assert_eq!(old.reach, Reach::Internet);
         assert!(!serde_json::to_string(&old).unwrap().contains("reach"));
+    }
+
+    #[test]
+    fn on_the_private_network_a_removed_domain_leaves_its_apps_for_the_next() {
+        let data = tempfile::tempdir().unwrap();
+        let publishing = Publishing::new(data.path());
+        let mut settings = settings();
+        settings.reach = Reach::Private;
+        publishing.write(&settings).unwrap();
+        publishing.remove_domain(None).unwrap();
+        let saved = publishing.read().unwrap();
+        assert!(saved.domains.is_empty());
+        assert_eq!(saved.apps["prj_todo"].domain, "");
+        publishing
+            .set_domain("example.org", Records::Wildcard)
+            .unwrap();
+        assert_eq!(
+            publishing.read().unwrap().apps["prj_todo"].domain,
+            "example.org"
+        );
     }
 
     /// Writes a company app's Caddy config and gate arguments for a live
@@ -2128,7 +3401,9 @@ mod tests {
         // provider, its files in the same directory.
         let authentik = std::env::var("SIGN_IN_TEST_AUTHENTIK").is_ok();
         let provider = if authentik {
-            let connection = Authentik::new(&dir).install("example.test").unwrap();
+            let connection = Authentik::new(&dir)
+                .install("example.test", &[], "example.test")
+                .unwrap();
             Provider {
                 issuer: connection.issuer,
                 client_id: connection.client_id,
@@ -2150,33 +3425,27 @@ mod tests {
             }
         };
         let mut settings = Settings {
-            domain: Some("example.test".into()),
-            apps: BTreeMap::new(),
-            sign_in: Some(provider.clone()),
-            apps_page: None,
-            reach: Reach::Internet,
-            records: Records::Wildcard,
-            placement: None,
+            domains: vec![Domain {
+                sign_in: Some(provider.clone()),
+                ..Domain::new("example.test".into(), Records::Wildcard)
+            }],
+            ..Settings::default()
         };
         settings.apps.insert(
             "prj_todo".into(),
             AppRoute {
-                name: "todo".into(),
-                access: Access::Company,
-                password_hash: None,
-                password: None,
                 groups,
-                listed: true,
-                port: None,
+                ..app("example.test", "todo", Access::Company)
             },
         );
         let running = BTreeMap::from([("prj_todo".to_string(), 3000)]);
-        let config = caddy_config(&settings, &running, authentik);
+        let home = authentik.then_some("example.test");
+        let config = caddy_config(&settings, &running, home);
         fs::write(dir.join("caddy.json"), config.to_string()).unwrap();
         fs::write(dir.join("client-secret"), &provider.client_secret).unwrap();
         fs::write(
             dir.join("gate-args"),
-            sign_in::arguments(&provider, "example.test").join("\n"),
+            sign_in::arguments(&provider, "example.test", Gate::default()).join("\n"),
         )
         .unwrap();
     }

@@ -14,10 +14,13 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::time::Duration;
 
-/// The address the company's provider sends people back to: one per server,
+/// The address the company's provider sends people back to: one per domain,
 /// registered once with the provider.
 pub const NAME: &str = "sign-in";
+/// The first gate's port; each further gate takes the next one.
 const PORT: u16 = 4180;
+/// How many gates a server may run: one per domain with sign-in.
+const MOST_GATES: u16 = 100;
 const CONTAINER: &str = "commitarium-sign-in";
 const IMAGE: &str = "quay.io/oauth2-proxy/oauth2-proxy:v7.12.0";
 /// Which provider settings the running gate was started with.
@@ -42,6 +45,39 @@ const IDENTITY: &[(&str, &str)] = &[
     ),
     ("X-Auth-Request-Groups", "X-Commitarium-Groups"),
 ];
+
+/// One domain's gate (MULTI_DOMAIN_PLAN.md, M4): a cookie cannot cross
+/// domains, so each domain with sign-in runs its own oauth2-proxy, on its own
+/// loopback port. The first keeps the name and port it had before a server
+/// had several domains, so an upgraded server's gate is left as it was.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(transparent)]
+pub struct Gate(u16);
+
+impl Gate {
+    pub fn is_first(&self) -> bool {
+        self.0 == 0
+    }
+
+    pub fn port(self) -> u16 {
+        PORT + self.0
+    }
+
+    fn container(self) -> String {
+        match self.0 {
+            0 => CONTAINER.to_string(),
+            n => format!("{CONTAINER}-{n}"),
+        }
+    }
+
+    /// The first gate no other domain uses.
+    pub fn free(used: &[Gate]) -> Result<Gate, String> {
+        (0..MOST_GATES)
+            .map(Gate)
+            .find(|gate| !used.contains(gate))
+            .ok_or_else(|| format!("a server has company sign-in on at most {MOST_GATES} domains"))
+    }
+}
 
 /// The company's provider, as the server keeps it.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -76,6 +112,9 @@ pub struct Connect {
     pub scopes: Option<String>,
     #[serde(default)]
     pub groups_claim: Option<String>,
+    /// The domain it signs people in for; the first when unset.
+    #[serde(default)]
+    pub domain: Option<String>,
 }
 
 /// The connected provider as a client sees it: never its secret.
@@ -149,7 +188,7 @@ fn redirect_url(domain: &str) -> String {
     format!("https://{NAME}.{domain}/oauth2/callback")
 }
 
-/// One address signs a person out of every app on the server: the gate
+/// One address signs a person out of every app at the domain: the gate
 /// clears its cookie, then the provider ends its own session.
 pub fn sign_out_url(domain: &str) -> String {
     format!("https://{NAME}.{domain}/sign-out")
@@ -164,7 +203,7 @@ fn gate_sign_out(provider: &Provider) -> String {
 }
 
 /// A URL as one query value.
-fn encode(value: &str) -> String {
+pub(crate) fn encode(value: &str) -> String {
     value
         .bytes()
         .map(|byte| match byte {
@@ -230,7 +269,7 @@ pub(crate) fn new_cookie_secret() -> Result<String, String> {
 }
 
 /// The gate's settings, secrets aside: they reach it in its environment.
-pub(crate) fn arguments(provider: &Provider, domain: &str) -> Vec<String> {
+pub(crate) fn arguments(provider: &Provider, domain: &str, gate: Gate) -> Vec<String> {
     let mut arguments = vec![
         "--provider=oidc".into(),
         format!("--oidc-issuer-url={}", provider.issuer),
@@ -240,7 +279,7 @@ pub(crate) fn arguments(provider: &Provider, domain: &str) -> Vec<String> {
         format!("--redirect-url={}", redirect_url(domain)),
         format!("--cookie-domain=.{domain}"),
         format!("--whitelist-domain=.{domain}"),
-        format!("--http-address=127.0.0.1:{PORT}"),
+        format!("--http-address=127.0.0.1:{}", gate.port()),
         "--cookie-secure=true".into(),
         "--cookie-name=_commitarium_sign_in".into(),
         // Each check renews the cookie, so only unused sign-ins run out.
@@ -265,10 +304,10 @@ pub(crate) fn arguments(provider: &Provider, domain: &str) -> Vec<String> {
 }
 
 /// What the running gate must match: its settings and secrets.
-fn spec(provider: &Provider, domain: &str) -> String {
+fn spec(provider: &Provider, domain: &str, gate: Gate) -> String {
     let mut hash = Sha256::new();
     hash.update(IMAGE);
-    for argument in arguments(provider, domain) {
+    for argument in arguments(provider, domain, gate) {
         hash.update(argument);
         hash.update([0]);
     }
@@ -278,27 +317,40 @@ fn spec(provider: &Provider, domain: &str) -> String {
     format!("{:x}", hash.finalize())
 }
 
-/// Runs the gate for the connected provider, recreating it when the
-/// provider changed, or removes it when there is none.
-pub fn sync(provider: Option<&Provider>, domain: &str) -> Result<(), String> {
-    let running = running_spec();
-    let Some(provider) = provider else {
-        if running.is_some() {
-            remove();
+/// Runs a gate for each domain with a connected provider, recreating one
+/// whose provider changed, and removes the gates no domain needs any more.
+pub fn sync(gates: &[(Gate, &Provider, &str)]) -> Result<(), String> {
+    let wanted: Vec<String> = gates.iter().map(|(gate, ..)| gate.container()).collect();
+    for container in gate_containers() {
+        if !wanted.contains(&container) {
+            remove(&container);
         }
-        return Ok(());
-    };
-    let wanted = spec(provider, domain);
-    if running.as_deref() == Some(wanted.as_str()) {
+    }
+    let mut failed = Vec::new();
+    for (gate, provider, domain) in gates {
+        if let Err(error) = sync_gate(*gate, provider, domain) {
+            failed.push(error);
+        }
+    }
+    match failed.is_empty() {
+        true => Ok(()),
+        false => Err(failed.join("; ")),
+    }
+}
+
+fn sync_gate(gate: Gate, provider: &Provider, domain: &str) -> Result<(), String> {
+    let container = gate.container();
+    let wanted = spec(provider, domain, gate);
+    if running_spec(&container).as_deref() == Some(wanted.as_str()) {
         return Ok(());
     }
-    remove();
+    remove(&container);
     let output = docker::docker_command()
         .args([
             "run",
             "-d",
             "--name",
-            CONTAINER,
+            &container,
             "--restart",
             "unless-stopped",
         ])
@@ -322,28 +374,53 @@ pub fn sync(provider: Option<&Provider>, domain: &str) -> Result<(), String> {
         .env("OAUTH2_PROXY_CLIENT_SECRET", &provider.client_secret)
         .env("OAUTH2_PROXY_COOKIE_SECRET", &provider.cookie_secret)
         .arg(IMAGE)
-        .args(arguments(provider, domain))
+        .args(arguments(provider, domain, gate))
         .output()
-        .map_err(|e| format!("start company sign-in: {e}"))?;
+        .map_err(|e| format!("start company sign-in for {domain}: {e}"))?;
     if !output.status.success() {
         return Err(format!(
-            "start company sign-in: {}",
+            "start company sign-in for {domain}: {}",
             String::from_utf8_lossy(&output.stderr).trim()
         ));
     }
     Ok(())
 }
 
-/// The gate's spec, `None` when there is no gate. One that Docker is
+/// Every gate container there is, by the label each is started with.
+fn gate_containers() -> Vec<String> {
+    docker::docker_command()
+        .args([
+            "ps",
+            "-a",
+            "--filter",
+            &format!("label={SPEC_LABEL}"),
+            "--format",
+            "{{.Names}}",
+        ])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| {
+            String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .map(String::from)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// A gate's spec, `None` when there is no such gate. One that Docker is
 /// restarting counts: it waits for a provider that does not answer yet, and
 /// recreating it would not help.
-fn running_spec() -> Option<String> {
+fn running_spec(container: &str) -> Option<String> {
     let output = docker::docker_command()
         .args([
             "inspect",
             "-f",
             &format!("{{{{.State.Status}}}} {{{{index .Config.Labels \"{SPEC_LABEL}\"}}}}"),
-            CONTAINER,
+            container,
         ])
         .output()
         .ok()?;
@@ -353,15 +430,15 @@ fn running_spec() -> Option<String> {
         .then(|| spec.to_string())
 }
 
-fn remove() {
+fn remove(container: &str) {
     let _ = docker::docker_command()
-        .args(["rm", "-f", CONTAINER])
+        .args(["rm", "-f", container])
         .output();
 }
 
-/// Caddy's route for the sign-in address: the gate's own pages, where the
-/// provider sends people back, and `/sign-out`, which ends both sessions.
-pub fn caddy_route(domain: &str, provider: &Provider) -> Value {
+/// Caddy's route for a domain's sign-in address: its gate's own pages, where
+/// the provider sends people back, and `/sign-out`, which ends both sessions.
+pub fn caddy_route(domain: &str, provider: &Provider, gate: Gate) -> Value {
     json!({
         "match": [{"host": [format!("{NAME}.{domain}")]}],
         "handle": [{
@@ -380,7 +457,7 @@ pub fn caddy_route(domain: &str, provider: &Provider) -> Value {
                 },
                 {"handle": [{
                     "handler": "reverse_proxy",
-                    "upstreams": [{"dial": format!("127.0.0.1:{PORT}")}],
+                    "upstreams": [{"dial": format!("127.0.0.1:{}", gate.port())}],
                 }]},
             ],
         }],
@@ -398,8 +475,9 @@ pub fn strip_identity() -> Value {
 
 /// Caddy's check of a request to a company app: the gate answers 2xx with
 /// who signed in, which is passed to the app; 401 for no one, sent to sign
-/// in; 403 for someone outside the app's groups.
-pub fn caddy_gate(domain: &str, groups: &[String], forbidden: Value) -> Value {
+/// in; 403 for someone outside the app's groups. Each domain asks its own
+/// gate, whose cookie is the domain's.
+pub fn caddy_gate(domain: &str, gate: Gate, groups: &[String], forbidden: Value) -> Value {
     let mut uri = "/oauth2/auth".to_string();
     if !groups.is_empty() {
         uri.push_str("?allowed_groups=");
@@ -417,7 +495,7 @@ pub fn caddy_gate(domain: &str, groups: &[String], forbidden: Value) -> Value {
         .collect();
     json!({
         "handler": "reverse_proxy",
-        "upstreams": [{"dial": format!("127.0.0.1:{PORT}")}],
+        "upstreams": [{"dial": format!("127.0.0.1:{}", gate.port())}],
         "rewrite": {"method": "GET", "uri": uri},
         "headers": {"request": {"set": {
             "X-Forwarded-Method": ["{http.request.method}"],
@@ -465,7 +543,7 @@ mod tests {
 
     #[test]
     fn signing_out_ends_the_gate_then_the_provider() {
-        let route = caddy_route("example.com", &provider());
+        let route = caddy_route("example.com", &provider(), Gate::default());
         let sign_out = &route["handle"][0]["routes"][0];
         assert_eq!(sign_out["match"][0]["path"][0], "/sign-out");
         assert_eq!(
@@ -477,7 +555,7 @@ mod tests {
             "https://sign-in.example.com/sign-out"
         );
         // The provider's own address is allowed as where signing out ends.
-        let arguments = arguments(&provider(), "example.org");
+        let arguments = arguments(&provider(), "example.org", Gate::default());
         assert!(arguments.contains(&"--whitelist-domain=login.example.com".to_string()));
         let mut ours = provider();
         ours.end_session = Some("https://auth.example.com/application/o/a/end-session/".into());
@@ -485,7 +563,7 @@ mod tests {
             .iter()
             .any(|a| a.contains("auth.example.com")));
         ours.end_session = None;
-        let route = caddy_route("example.com", &ours);
+        let route = caddy_route("example.com", &ours, Gate::default());
         assert_eq!(
             route["handle"][0]["routes"][0]["handle"][0]["headers"]["Location"][0],
             "/oauth2/sign_out"
@@ -493,12 +571,12 @@ mod tests {
     }
 
     fn arguments_of(provider: &Provider) -> Vec<String> {
-        arguments(provider, "example.com")
+        arguments(provider, "example.com", Gate::default())
     }
 
     #[test]
     fn the_gate_keeps_its_secrets_out_of_its_arguments() {
-        let arguments = arguments(&provider(), "example.com").join(" ");
+        let arguments = arguments(&provider(), "example.com", Gate::default()).join(" ");
         assert!(!arguments.contains("secret"));
         assert!(arguments.contains("--redirect-url=https://sign-in.example.com/oauth2/callback"));
         assert!(arguments.contains("--cookie-domain=.example.com"));
@@ -510,17 +588,22 @@ mod tests {
 
     #[test]
     fn a_changed_secret_or_domain_recreates_the_gate() {
-        let first = spec(&provider(), "example.com");
-        assert_eq!(first, spec(&provider(), "example.com"));
+        let first = spec(&provider(), "example.com", Gate::default());
+        assert_eq!(first, spec(&provider(), "example.com", Gate::default()));
         let mut changed = provider();
         changed.client_secret = "other".into();
-        assert_ne!(first, spec(&changed, "example.com"));
-        assert_ne!(first, spec(&provider(), "example.org"));
+        assert_ne!(first, spec(&changed, "example.com", Gate::default()));
+        assert_ne!(first, spec(&provider(), "example.org", Gate::default()));
     }
 
     #[test]
     fn the_gate_checks_groups_and_passes_who_signed_in() {
-        let gate = caddy_gate("example.com", &["sales".into(), "Team A".into()], json!({}));
+        let gate = caddy_gate(
+            "example.com",
+            Gate::default(),
+            &["sales".into(), "Team A".into()],
+            json!({}),
+        );
         assert_eq!(
             gate["rewrite"]["uri"],
             "/oauth2/auth?allowed_groups=sales,Team A"
@@ -537,8 +620,35 @@ mod tests {
             .as_str()
             .unwrap()
             .starts_with("https://sign-in.example.com/oauth2/start?rd="));
-        let anyone = caddy_gate("example.com", &[], json!({}));
+        let anyone = caddy_gate("example.com", Gate::default(), &[], json!({}));
         assert_eq!(anyone["rewrite"]["uri"], "/oauth2/auth");
+    }
+
+    #[test]
+    fn each_domain_has_its_own_gate_and_the_first_keeps_its_old_one() {
+        let first = Gate::default();
+        assert_eq!(first.container(), "commitarium-sign-in");
+        assert_eq!(first.port(), 4180);
+        let second = Gate::free(&[first]).unwrap();
+        assert_eq!(second.container(), "commitarium-sign-in-1");
+        assert_eq!(second.port(), 4181);
+        // A gate given up is taken again by the next domain.
+        assert_eq!(Gate::free(&[second]).unwrap(), first);
+        let arguments = arguments(&provider(), "example.org", second).join(" ");
+        assert!(arguments.contains("--http-address=127.0.0.1:4181"));
+        assert!(arguments.contains("--cookie-domain=.example.org"));
+        assert!(arguments.contains("--redirect-url=https://sign-in.example.org/oauth2/callback"));
+        let check = caddy_gate("example.org", second, &[], json!({}));
+        assert_eq!(check["upstreams"][0]["dial"], "127.0.0.1:4181");
+        let route = caddy_route("example.org", &provider(), second);
+        assert_eq!(
+            route["handle"][0]["routes"][1]["handle"][0]["upstreams"][0]["dial"],
+            "127.0.0.1:4181"
+        );
+        assert_ne!(
+            spec(&provider(), "example.org", first),
+            spec(&provider(), "example.org", second)
+        );
     }
 
     #[test]
@@ -552,6 +662,7 @@ mod tests {
             client_secret: "secret".into(),
             scopes: None,
             groups_claim: None,
+            domain: None,
         };
         assert!(Provider::connect(asked, None)
             .unwrap_err()
@@ -575,12 +686,13 @@ mod tests {
     #[ignore]
     fn the_gate_follows_the_provider() {
         let mut provider = provider();
-        sync(Some(&provider), "example.com").unwrap();
+        let gate = Gate::default();
+        sync(&[(gate, &provider, "example.com")]).unwrap();
         let first = container_id();
         assert!(!first.is_empty());
         assert_eq!(
-            running_spec().as_deref(),
-            Some(spec(&provider, "example.com").as_str())
+            running_spec(CONTAINER).as_deref(),
+            Some(spec(&provider, "example.com", gate).as_str())
         );
         let output = docker::docker_command()
             .args(["inspect", "-f", "{{json .Args}}", CONTAINER])
@@ -589,13 +701,13 @@ mod tests {
         let arguments = String::from_utf8_lossy(&output.stdout);
         assert!(!arguments.contains(&provider.client_secret), "{arguments}");
         assert!(!arguments.contains(&provider.cookie_secret), "{arguments}");
-        sync(Some(&provider), "example.com").unwrap();
+        sync(&[(gate, &provider, "example.com")]).unwrap();
         assert_eq!(container_id(), first);
         provider.client_secret = "another secret".into();
-        sync(Some(&provider), "example.com").unwrap();
+        sync(&[(gate, &provider, "example.com")]).unwrap();
         let second = container_id();
         assert!(!second.is_empty() && second != first);
-        sync(None, "example.com").unwrap();
+        sync(&[]).unwrap();
         assert!(container_id().is_empty());
     }
 }

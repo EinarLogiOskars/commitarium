@@ -8,11 +8,18 @@
 //! Its admin password and the secrets live in `authentik.json`, beside the
 //! other state a backup carries; its database is backed up with deployed
 //! apps' data.
+//!
+//! One authentik serves every domain that uses it (MULTI_DOMAIN_PLAN.md,
+//! M4), at `auth.<the domain it was set up on>`. Each domain gets its own
+//! provider and application, with its own client and redirect address, and
+//! once there are two, each application is bound to its domain's group, so
+//! "anyone at the company" means that domain's people.
 
 use crate::docker;
 use crate::runtime::block_on;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
@@ -29,7 +36,6 @@ const DATABASE_IMAGE: &str = "postgres:16.6-alpine";
 pub const PORT: u16 = 9400;
 const ADMIN: &str = "akadmin";
 const APPLICATION: &str = "commitarium";
-const CLIENT_ID: &str = "commitarium";
 const PROVIDER_NAME: &str = "Commitarium apps";
 /// A first start migrates its database, which takes a few minutes on a
 /// small server.
@@ -45,7 +51,15 @@ struct State {
     admin_password: String,
     /// The admin's API token, for setting it up.
     token: String,
+    /// The client secret of the domain it was set up on.
     client_secret: String,
+    /// Each other domain's own client secret.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    clients: BTreeMap<String, String>,
+    /// The domain it lives at, `auth.<domain>`. Unset on a server set up
+    /// before several domains: then it is the first domain.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    domain: Option<String>,
     /// The application the gate signs in with is made.
     #[serde(default)]
     configured: bool,
@@ -108,6 +122,15 @@ impl Authentik {
             .is_some_and(|state| state.configured)
     }
 
+    /// The domain it lives at, when it is set up and has said so.
+    pub fn home(&self) -> Option<String> {
+        self.read()
+            .ok()
+            .flatten()
+            .filter(|state| state.configured)
+            .and_then(|state| state.domain)
+    }
+
     pub fn status(&self, domain: Option<&str>) -> Status {
         let installed = self.installed();
         Status {
@@ -127,9 +150,17 @@ impl Authentik {
             .ok_or_else(|| "authentik is not set up on this server".to_string())
     }
 
-    /// Runs authentik and makes the application the gate signs in with. Safe
-    /// to run again: it reuses its secrets and what it made before.
-    pub fn install(&self, domain: &str) -> Result<Connection, String> {
+    /// Runs authentik at `auth.<home>` and makes, for each domain it
+    /// serves, the application that domain's gate signs in with. `before`
+    /// are the domains it served already, open to everyone until a second
+    /// domain came. Safe to run again: it reuses its secrets and what it
+    /// made before. Answers what `wanted`'s gate needs.
+    pub fn install(
+        &self,
+        home: &str,
+        before: &[String],
+        wanted: &str,
+    ) -> Result<Connection, String> {
         let mut state = match self.read()? {
             Some(state) => state,
             // Its database keeps the password it was made with.
@@ -146,22 +177,39 @@ impl Authentik {
                 admin_password: random(24)?,
                 token: random(48)?,
                 client_secret: random(48)?,
+                clients: BTreeMap::new(),
+                domain: None,
                 configured: false,
             },
         };
+        let home = state.domain.get_or_insert_with(|| home.to_string()).clone();
+        let mut domains: Vec<String> = before.to_vec();
+        if !domains.iter().any(|domain| domain == wanted) {
+            domains.push(wanted.to_string());
+        }
+        for domain in &domains {
+            if *domain != home && !state.clients.contains_key(domain) {
+                state.clients.insert(domain.clone(), random(48)?);
+            }
+        }
         self.write(&state)?;
         self.up(&state)?;
         wait_until_ready()?;
         let api = Api {
             token: &state.token,
         };
-        api.configure(domain, &state.client_secret)?;
+        let clients: Vec<Client> = domains
+            .iter()
+            .map(|domain| Client::of(&state, &home, domain, before.contains(domain)))
+            .collect();
+        api.configure(&clients, clients.len() >= 2)?;
         state.configured = true;
         self.write(&state)?;
+        let client = Client::of(&state, &home, wanted, false);
         Ok(Connection {
-            issuer: issuer(domain),
-            client_id: CLIENT_ID.to_string(),
-            client_secret: state.client_secret,
+            issuer: issuer(&home, wanted),
+            client_id: client.slug,
+            client_secret: client.secret,
         })
     }
 
@@ -225,8 +273,109 @@ impl Authentik {
     }
 }
 
-pub fn issuer(domain: &str) -> String {
-    format!("https://{NAME}.{domain}/application/o/{APPLICATION}/")
+/// One domain's issuer: its application, at authentik's one address.
+pub fn issuer(home: &str, domain: &str) -> String {
+    format!(
+        "https://{NAME}.{home}/application/o/{}/",
+        slug(home, domain)
+    )
+}
+
+/// Whether an issuer is one of this authentik's applications.
+pub fn serves(home: &str, issuer: &str) -> bool {
+    issuer.starts_with(&format!("https://{NAME}.{home}/application/o/"))
+}
+
+/// A domain's application: the one it was set up on keeps the name it had
+/// before several domains, so its gate signs in as it did.
+fn slug(home: &str, domain: &str) -> String {
+    if home == domain {
+        APPLICATION.to_string()
+    } else {
+        format!("{APPLICATION}-{}", domain.replace('.', "-"))
+    }
+}
+
+/// The group a domain's people are in: only they may sign in there.
+pub fn group_name(domain: &str) -> String {
+    format!("{domain} people")
+}
+
+/// One domain's application and provider in authentik.
+struct Client {
+    domain: String,
+    slug: String,
+    /// Its provider's name, how it is found again.
+    name: String,
+    secret: String,
+    /// It served this domain before it was bound to the domain's group, so
+    /// everyone could sign in there: they all go into the group first.
+    open_before: bool,
+}
+
+impl Client {
+    fn of(state: &State, home: &str, domain: &str, open_before: bool) -> Self {
+        let first = home == domain;
+        Self {
+            domain: domain.to_string(),
+            slug: slug(home, domain),
+            name: match first {
+                true => PROVIDER_NAME.to_string(),
+                false => format!("{PROVIDER_NAME} ({domain})"),
+            },
+            secret: match first {
+                true => state.client_secret.clone(),
+                false => state.clients.get(domain).cloned().unwrap_or_default(),
+            },
+            open_before,
+        }
+    }
+}
+
+/// What binding a domain's application to its group still needs.
+#[derive(Debug, PartialEq)]
+enum Binding {
+    Done,
+    Bind,
+    /// It was open to everyone: they all go into the group, then it is bound,
+    /// so no one loses access.
+    BringEveryoneThenBind,
+}
+
+fn binding_needed(bindings: &[Value], group: &Value, open_before: bool) -> Binding {
+    if bindings.iter().any(|binding| binding["group"] == *group) {
+        Binding::Done
+    } else if open_before && bindings.is_empty() {
+        Binding::BringEveryoneThenBind
+    } else {
+        Binding::Bind
+    }
+}
+
+fn binding_body(application: &Value, group: &Value) -> Value {
+    json!({
+        "target": application,
+        "group": group,
+        "order": 0,
+        "enabled": true,
+        "negate": false,
+        "timeout": 30,
+    })
+}
+
+/// The people among authentik's users: not its service accounts, such as
+/// its outposts', which never sign in to an app.
+fn people(users: &[Value]) -> Vec<Value> {
+    users
+        .iter()
+        .filter(|user| {
+            !matches!(
+                user["type"].as_str(),
+                Some("service_account" | "internal_service_account")
+            )
+        })
+        .map(|user| user["pk"].clone())
+        .collect()
 }
 
 /// What the gate asks authentik for: offline_access brings refresh tokens,
@@ -356,6 +505,7 @@ impl Api<'_> {
         body: Option<Value>,
     ) -> Result<Value, String> {
         let url = format!("http://127.0.0.1:{PORT}/api/v3/{path}");
+        // Some answers have no body, such as adding a person to a group.
         block_on(async {
             let mut request = reqwest::Client::new()
                 .request(method, &url)
@@ -372,6 +522,9 @@ impl Api<'_> {
             let text = response.text().await.unwrap_or_default();
             if !status.is_success() {
                 return Err(format!("authentik answered {status} to {path}: {text}"));
+            }
+            if text.trim().is_empty() {
+                return Ok(Value::Null);
             }
             serde_json::from_str(&text)
                 .map_err(|_| format!("authentik answered {path} with no JSON"))
@@ -427,9 +580,10 @@ impl Api<'_> {
         }
     }
 
-    /// Makes, or brings up to date, the provider and application the gate
-    /// signs in with.
-    fn configure(&self, domain: &str, client_secret: &str) -> Result<(), String> {
+    /// Makes, or brings up to date, each domain's provider and application.
+    /// With two or more domains, each application is bound to its domain's
+    /// group.
+    fn configure(&self, clients: &[Client], bind: bool) -> Result<(), String> {
         let authorization = self.pk_of(
             "flows/instances/?slug=default-provider-authorization-implicit-consent",
             "authorization flow",
@@ -460,34 +614,6 @@ impl Api<'_> {
             .map(|mapping| mapping["pk"].clone())
             .collect();
         mappings.push(self.email_mapping()?);
-        let provider = json!({
-            "name": PROVIDER_NAME,
-            "authorization_flow": authorization,
-            "invalidation_flow": invalidation,
-            "client_type": "confidential",
-            "client_id": CLIENT_ID,
-            "client_secret": client_secret,
-            "redirect_uris": [{
-                "matching_mode": "strict",
-                "url": format!("https://{}.{domain}/oauth2/callback", crate::sign_in::NAME),
-            }],
-            "signing_key": signing_key,
-            "property_mappings": mappings,
-        });
-        let provider_pk = match self.first("providers/oauth2/?name=Commitarium%20apps")? {
-            Some(found) => {
-                let pk = found["pk"].clone();
-                self.call(
-                    reqwest::Method::PUT,
-                    &format!("providers/oauth2/{pk}/"),
-                    Some(provider),
-                )?;
-                pk
-            }
-            None => {
-                self.call(reqwest::Method::POST, "providers/oauth2/", Some(provider))?["pk"].clone()
-            }
-        };
         // Its sign-in lasts as long as the gate's: a session kept for the
         // browser's life would sign a person straight back in.
         if let Some(login) = self.first("stages/user_login/?name=default-authentication-login")? {
@@ -502,18 +628,138 @@ impl Api<'_> {
                 })),
             )?;
         }
-        if self
-            .first(&format!("core/applications/?slug={APPLICATION}"))?
-            .is_none()
-        {
-            self.call(
-                reqwest::Method::POST,
-                "core/applications/",
-                Some(json!({"name": PROVIDER_NAME, "slug": APPLICATION, "provider": provider_pk})),
-            )?;
+        let shared = Shared {
+            authorization,
+            invalidation,
+            signing_key,
+            mappings,
+        };
+        for client in clients {
+            let application = self.application(&shared, client)?;
+            if bind {
+                self.bind_to_group(&application, client)?;
+            }
         }
         Ok(())
     }
+
+    /// One domain's provider and application; answers the application's pk.
+    fn application(&self, shared: &Shared, client: &Client) -> Result<Value, String> {
+        let provider = provider_body(shared, client);
+        let provider_pk = match self.first(&format!(
+            "providers/oauth2/?name={}",
+            crate::sign_in::encode(&client.name)
+        ))? {
+            Some(found) => {
+                let pk = found["pk"].clone();
+                self.call(
+                    reqwest::Method::PUT,
+                    &format!("providers/oauth2/{pk}/"),
+                    Some(provider),
+                )?;
+                pk
+            }
+            None => {
+                self.call(reqwest::Method::POST, "providers/oauth2/", Some(provider))?["pk"].clone()
+            }
+        };
+        match self.first(&format!("core/applications/?slug={}", client.slug))? {
+            Some(found) => Ok(found["pk"].clone()),
+            None => Ok(self.call(
+                reqwest::Method::POST,
+                "core/applications/",
+                Some(json!({"name": client.name, "slug": client.slug, "provider": provider_pk})),
+            )?["pk"]
+                .clone()),
+        }
+    }
+
+    /// Binds a domain's application to its group, making the group first.
+    /// One that was open to everyone brings them all into the group before
+    /// it is bound. People added later are the owner's to add, in
+    /// authentik's admin.
+    fn bind_to_group(&self, application: &Value, client: &Client) -> Result<(), String> {
+        let name = group_name(&client.domain);
+        let group = match self.first(&format!(
+            "core/groups/?name={}",
+            crate::sign_in::encode(&name)
+        ))? {
+            Some(found) => found["pk"].clone(),
+            None => self.call(
+                reqwest::Method::POST,
+                "core/groups/",
+                Some(json!({"name": name, "is_superuser": false})),
+            )?["pk"]
+                .clone(),
+        };
+        let target = application.as_str().unwrap_or_default();
+        let bindings = self.get(&format!("policies/bindings/?target={target}"))?["results"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        match binding_needed(&bindings, &group, client.open_before) {
+            Binding::Done => return Ok(()),
+            Binding::Bind => {}
+            Binding::BringEveryoneThenBind => {
+                let group_pk = group.as_str().unwrap_or_default();
+                for person in self.everyone()? {
+                    self.call(
+                        reqwest::Method::POST,
+                        &format!("core/groups/{group_pk}/add_user/"),
+                        Some(json!({"pk": person})),
+                    )?;
+                }
+            }
+        }
+        self.call(
+            reqwest::Method::POST,
+            "policies/bindings/",
+            Some(binding_body(application, &group)),
+        )?;
+        Ok(())
+    }
+
+    /// Every person in authentik, page by page.
+    fn everyone(&self) -> Result<Vec<Value>, String> {
+        let mut found = Vec::new();
+        let mut page = 1;
+        loop {
+            let answer = self.get(&format!("core/users/?page_size=100&page={page}"))?;
+            let users = answer["results"].as_array().cloned().unwrap_or_default();
+            found.extend(people(&users));
+            match answer["pagination"]["next"].as_u64() {
+                Some(next) if next > page => page = next,
+                _ => return Ok(found),
+            }
+        }
+    }
+}
+
+/// What every domain's provider shares.
+struct Shared {
+    authorization: Value,
+    invalidation: Value,
+    signing_key: Value,
+    mappings: Vec<Value>,
+}
+
+/// A domain's provider: its own client, sending people back only to its
+/// own sign-in address.
+fn provider_body(shared: &Shared, client: &Client) -> Value {
+    json!({
+        "name": client.name,
+        "authorization_flow": shared.authorization,
+        "invalidation_flow": shared.invalidation,
+        "client_type": "confidential",
+        "client_id": client.slug,
+        "client_secret": client.secret,
+        "redirect_uris": [{
+            "matching_mode": "strict",
+            "url": format!("https://{}.{}/oauth2/callback", crate::sign_in::NAME, client.domain),
+        }],
+        "signing_key": shared.signing_key,
+        "property_mappings": shared.mappings,
+    })
 }
 
 /// Letters and digits: they need no quoting in its environment file.
@@ -547,10 +793,12 @@ mod tests {
             admin_password: "admin".into(),
             token: "token".into(),
             client_secret: "client".into(),
+            clients: BTreeMap::from([("example.org".into(), "other".into())]),
+            domain: Some("example.com".into()),
             configured: false,
         };
         let compose = compose_file();
-        for secret in ["key", "dbpass", "admin", "token", "client"] {
+        for secret in ["key", "dbpass", "admin", "token", "client", "other"] {
             assert!(!compose.contains(&format!("={secret}")));
         }
         assert!(compose.contains("127.0.0.1:9400:9000"));
@@ -560,9 +808,84 @@ mod tests {
         assert!(env.contains("POSTGRES_PASSWORD=dbpass\n"));
         assert!(env.contains("AUTHENTIK_BOOTSTRAP_TOKEN=token\n"));
         assert_eq!(
-            issuer("example.com"),
+            issuer("example.com", "example.com"),
             "https://auth.example.com/application/o/commitarium/"
         );
+    }
+
+    #[test]
+    fn each_domain_gets_its_own_client_and_the_first_keeps_its_own() {
+        let state = State {
+            secret_key: "key".into(),
+            database_password: "dbpass".into(),
+            admin_password: "admin".into(),
+            token: "token".into(),
+            client_secret: "first".into(),
+            clients: BTreeMap::from([("example.org".into(), "second".into())]),
+            domain: Some("example.com".into()),
+            configured: true,
+        };
+        let first = Client::of(&state, "example.com", "example.com", true);
+        assert_eq!(first.slug, "commitarium");
+        assert_eq!(first.name, "Commitarium apps");
+        assert_eq!(first.secret, "first");
+        let second = Client::of(&state, "example.com", "example.org", false);
+        assert_eq!(second.slug, "commitarium-example-org");
+        assert_eq!(second.name, "Commitarium apps (example.org)");
+        assert_eq!(second.secret, "second");
+        // One authentik, at the domain it was set up on, for both.
+        assert_eq!(
+            issuer("example.com", "example.org"),
+            "https://auth.example.com/application/o/commitarium-example-org/"
+        );
+        assert!(serves("example.com", &issuer("example.com", "example.org")));
+        assert!(!serves(
+            "example.org",
+            &issuer("example.com", "example.org")
+        ));
+        let shared = Shared {
+            authorization: json!("flow"),
+            invalidation: json!("end"),
+            signing_key: json!("key"),
+            mappings: vec![json!("email")],
+        };
+        let body = provider_body(&shared, &second);
+        assert_eq!(body["client_id"], "commitarium-example-org");
+        assert_eq!(body["client_secret"], "second");
+        assert_eq!(
+            body["redirect_uris"][0]["url"],
+            "https://sign-in.example.org/oauth2/callback"
+        );
+        assert_eq!(group_name("example.org"), "example.org people");
+    }
+
+    #[test]
+    fn a_domain_open_to_everyone_brings_them_into_its_group_before_it_is_bound() {
+        let group = json!("group-pk");
+        // The first domain served everyone: keep them, then bind.
+        assert_eq!(
+            binding_needed(&[], &group, true),
+            Binding::BringEveryoneThenBind
+        );
+        // A new domain starts with an empty group.
+        assert_eq!(binding_needed(&[], &group, false), Binding::Bind);
+        // Bound already: nothing more, and no one removed is brought back.
+        let bound = [json!({"group": "group-pk", "target": "app"})];
+        assert_eq!(binding_needed(&bound, &group, true), Binding::Done);
+        // The owner's own bindings stay, and the group joins them.
+        let theirs = [json!({"group": "other", "target": "app"})];
+        assert_eq!(binding_needed(&theirs, &group, true), Binding::Bind);
+        let body = binding_body(&json!("app"), &group);
+        assert_eq!(body["target"], "app");
+        assert_eq!(body["group"], "group-pk");
+        assert_eq!(body["enabled"], true);
+        let users = [
+            json!({"pk": 1, "type": "internal"}),
+            json!({"pk": 2, "type": "external"}),
+            json!({"pk": 3, "type": "service_account"}),
+            json!({"pk": 4, "type": "internal_service_account"}),
+        ];
+        assert_eq!(people(&users), [json!(1), json!(2)]);
     }
 
     #[test]
@@ -593,10 +916,21 @@ mod tests {
         clean();
         let data = tempfile::tempdir().unwrap();
         let authentik = Authentik::new(data.path());
-        let connection = authentik.install("example.test").unwrap();
-        assert_eq!(connection.issuer, issuer("example.test"));
+        let connection = authentik
+            .install("example.test", &[], "example.test")
+            .unwrap();
+        assert_eq!(connection.issuer, issuer("example.test", "example.test"));
         // Again: it reuses what it made.
-        authentik.install("example.test").unwrap();
+        let first = ["example.test".to_string()];
+        authentik
+            .install("example.test", &first, "example.test")
+            .unwrap();
+        // A second domain: its own application, and both bound to groups.
+        let second = authentik
+            .install("example.test", &first, "other.test")
+            .unwrap();
+        assert_ne!(second.client_id, connection.client_id);
+        assert_ne!(second.client_secret, connection.client_secret);
         let discovery: Value = block_on(async {
             reqwest::Client::new()
                 .get(format!(
@@ -617,7 +951,7 @@ mod tests {
         // Its data without its secrets is refused, not half-started.
         let lost = tempfile::tempdir().unwrap();
         let error = Authentik::new(lost.path())
-            .install("example.test")
+            .install("example.test", &[], "example.test")
             .err()
             .unwrap();
         assert!(error.contains("earlier setup"), "{error}");
