@@ -202,18 +202,21 @@ type modelListResponse struct {
 	NextCursor string `json:"nextCursor"`
 }
 
-// Models asks the authenticated Codex App Server in this worker container for
-// its current exact model catalog. It starts no thread or turn.
-func (adapter *Adapter) Models(ctx context.Context, workingDirectory string, environment []string) ([]Model, error) {
+// withAppServer starts a short-lived, initialized Codex App Server in this
+// worker container for a request that starts no thread or turn, and stops it.
+func (adapter *Adapter) withAppServer(
+	ctx context.Context, purpose, workingDirectory string, environment []string,
+	use func(context.Context, *protocolClient) error,
+) error {
 	operationCtx, cancel := context.WithTimeout(ctx, adapter.requestTimeout)
 	defer cancel()
 	process, err := adapter.supervisor.Start(operationCtx, processsupervisor.StartRequest{
-		AttemptID: "models_" + rand.Text(), Executable: adapter.executable,
+		AttemptID: purpose + "_" + rand.Text(), Executable: adapter.executable,
 		Arguments: append([]string(nil), adapter.arguments...), Directory: workingDirectory,
 		Environment: append([]string(nil), environment...),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("start Codex app-server for model discovery: %w", err)
+		return fmt.Errorf("start Codex app-server for %s: %w", purpose, err)
 	}
 	defer func() {
 		stopCtx, stopCancel := context.WithTimeout(context.Background(), adapter.shutdownTimeout)
@@ -227,13 +230,53 @@ func (adapter *Adapter) Models(ctx context.Context, workingDirectory string, env
 	client := newProtocolClient(process)
 	var initialized map[string]any
 	if err := client.request(operationCtx, "initialize", initializeParams{ClientInfo: clientInfo{
-		Name: "commitarium", Title: "Commitarium worker", Version: "0.12.0",
+		Name: "commitarium", Title: "Commitarium worker", Version: "0.12.1",
 	}}, &initialized); err != nil {
-		return nil, fmt.Errorf("initialize Codex app-server for model discovery: %w", err)
+		return fmt.Errorf("initialize Codex app-server for %s: %w", purpose, err)
 	}
 	if err := client.notify(operationCtx, "initialized", struct{}{}); err != nil {
-		return nil, err
+		return err
 	}
+	return use(operationCtx, client)
+}
+
+// ReadUsage asks the Codex App Server for the account's usage limits, which
+// starts no thread or turn, and records them for the Agents page.
+func (adapter *Adapter) ReadUsage(ctx context.Context, workingDirectory string, environment []string) error {
+	return adapter.withAppServer(ctx, "usage", workingDirectory, environment,
+		func(ctx context.Context, client *protocolClient) error {
+			var response struct {
+				RateLimits struct {
+					Primary   *rateLimitWindow `json:"primary"`
+					Secondary *rateLimitWindow `json:"secondary"`
+				} `json:"rateLimits"`
+			}
+			if err := client.request(ctx, "account/rateLimits/read", nil, &response); err != nil {
+				return fmt.Errorf("read Codex usage: %w", err)
+			}
+			windows, names := limitWindows(response.RateLimits.Primary, response.RateLimits.Secondary)
+			if len(windows) == 0 {
+				return fmt.Errorf("read Codex usage: no usage limits in the answer")
+			}
+			recordUsage(windows, names)
+			return nil
+		})
+}
+
+// Models asks the authenticated Codex App Server in this worker container for
+// its current exact model catalog. It starts no thread or turn.
+func (adapter *Adapter) Models(ctx context.Context, workingDirectory string, environment []string) ([]Model, error) {
+	var models []Model
+	err := adapter.withAppServer(ctx, "models", workingDirectory, environment,
+		func(operationCtx context.Context, client *protocolClient) error {
+			var err error
+			models, err = listModels(operationCtx, client)
+			return err
+		})
+	return models, err
+}
+
+func listModels(operationCtx context.Context, client *protocolClient) ([]Model, error) {
 	models := make([]Model, 0)
 	cursor := ""
 	for {
@@ -339,7 +382,7 @@ func (adapter *Adapter) launch(
 
 	var initialized map[string]any
 	if err := client.request(operationCtx, "initialize", initializeParams{ClientInfo: clientInfo{
-		Name: "commitarium", Title: "Commitarium worker", Version: "0.12.0",
+		Name: "commitarium", Title: "Commitarium worker", Version: "0.12.1",
 	}}, &initialized); err != nil {
 		cleanupWithoutSession()
 		return nil, fmt.Errorf("initialize Codex app-server: %w", err)

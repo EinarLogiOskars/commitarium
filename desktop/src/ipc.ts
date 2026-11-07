@@ -12,6 +12,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import type {
   AgentModels,
   AgentProviders,
+  RunningWorkOrder,
   AutonomyPolicy,
   DialogueLimits,
   EnvironmentProvisionResult,
@@ -393,7 +394,6 @@ export interface DesktopSettings {
   notify_attention: boolean;
   notify_failures: boolean;
   notify_auto_merges: boolean;
-  exit_behavior: "keep_running" | "stop_stack";
 }
 
 export interface NativeNotification {
@@ -429,6 +429,9 @@ export interface BackupInspection extends BackupResult {
 
 export interface ExitConfirmationRequested {
   timeout_ms: number;
+  /** What agents do on this computer, whichever place is shown. */
+  running: RunningWorkOrder[];
+  server_shown: boolean;
 }
 
 export const loadDesktopSettings = (): Promise<DesktopSettings> => invoke("load_desktop_settings");

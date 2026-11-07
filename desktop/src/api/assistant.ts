@@ -1,5 +1,6 @@
 import { developerModeOn } from "../devMode";
 import { request } from "./client";
+import { serverFacts } from "../attention/serverFacts";
 
 // The assistant (ASSISTANT_PLAN.md): one conversation at the top level
 // ("commitarium") and one per project, with actions the user approves.
@@ -201,6 +202,8 @@ export interface AssistantActivity {
   started_at?: string;
   /** The automatic retry running, from 1. */
   retry?: number;
+  /** The start of her answer as she writes it, when her agent streams it. */
+  reply?: string;
 }
 
 /** What the conversation is about: a work order, the vision, or the stack. */
@@ -209,6 +212,8 @@ export interface AssistantFocus {
   work_order_id?: string;
   /** What the chip says; the coordinator fills it in. */
   label?: string;
+  /** For a focus on the server: what it reported when the chat opened. */
+  facts?: string;
 }
 
 export type LaunchStage = "vision" | "setup" | "building";
@@ -265,13 +270,19 @@ export const retryAssistantTurn = (scope: ChatTarget): Promise<Conversation> =>
   request(`${conversationPath(scope)}/retry`, { method: "POST" });
 
 /** Focus the conversation on an item, or clear the focus with null. */
-export const setAssistantFocus = (
+export const setAssistantFocus = async (
   scope: ChatTarget,
   focus: AssistantFocus | null,
-): Promise<Conversation> =>
-  focus
-    ? request(`${conversationPath(scope)}/focus`, { method: "PUT", body: focus })
-    : request(`${conversationPath(scope)}/focus`, { method: "DELETE" });
+): Promise<Conversation> => {
+  if (!focus) return request(`${conversationPath(scope)}/focus`, { method: "DELETE" });
+  // A focus on the server carries what it reports, so Mayka need not ask. A
+  // server older than this app refuses the field, so it goes without them.
+  const facts =
+    focus.kind === "serving" || focus.kind === "sign_in" ? await serverFacts() : undefined;
+  const put = (body: AssistantFocus): Promise<Conversation> =>
+    request(`${conversationPath(scope)}/focus`, { method: "PUT", body });
+  return facts ? put({ ...focus, facts }).catch(() => put(focus)) : put(focus);
+};
 
 export const saveAssistantNotes = (scope: string, notes: string): Promise<Conversation> =>
   request(`${conversationPath(scope)}/notes`, { method: "PUT", body: { notes } });
@@ -342,6 +353,15 @@ export const listChats = (scope: string): Promise<ChatSummary[]> =>
 /** Starts a chat in a scope; it is named after its first message. */
 export const createChat = (scope: string): Promise<Conversation> =>
   request(`${conversationPath(scope)}/chats`, { method: "POST" });
+
+/** Names a chat. */
+export const renameChat = (scope: string, chat: string, title: string): Promise<ChatSummary> =>
+  request(conversationPath({ scope, chat }), { method: "PATCH", body: { title } });
+
+/** Deletes a chat and its history for good; the project's notes, vision and
+ * work orders stay. A chat Mayka is still answering in is refused (409). */
+export const deleteChat = (scope: string, chat: string): Promise<void> =>
+  request(conversationPath({ scope, chat }), { method: "DELETE" });
 
 /** Makes a loose chat a project (ADR-038): the chat moves into the new
  * project as its first chat, and its planning starts from the chat. */

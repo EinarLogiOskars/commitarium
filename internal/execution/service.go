@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"github.com/EinarLogiOskars/commitarium/internal/feature"
@@ -19,6 +20,20 @@ type Service struct {
 	planning   *planningMessageBroker
 	generateID func() string
 	now        func() time.Time
+	// changed hears that a run's status changed, so the assistant's
+	// watcher looks at once rather than at its next tick.
+	changed atomic.Pointer[func()]
+}
+
+// OnRunChange has f called after every change of a run's status.
+func (s *Service) OnRunChange(f func()) {
+	s.changed.Store(&f)
+}
+
+func (s *Service) runChanged() {
+	if f := s.changed.Load(); f != nil {
+		(*f)()
+	}
 }
 
 func NewService(store Store) *Service {
@@ -253,6 +268,7 @@ func (s *Service) TransitionRun(
 	if err != nil {
 		return Run{}, fmt.Errorf("transition run %q to %q: %w", id, status, err)
 	}
+	s.runChanged()
 	return run, nil
 }
 
@@ -366,11 +382,15 @@ func (s *Service) ReopenRun(ctx context.Context, runID string) (Run, error) {
 	if !ok {
 		return Run{}, ErrStateConflict
 	}
-	return reopener.ReopenFailedRun(
+	run, err := reopener.ReopenFailedRun(
 		ctx, runID,
 		"The work order was reopened after it failed. Continue to retry the last turn, or message an agent.",
 		s.now().UTC(),
 	)
+	if err == nil {
+		s.runChanged()
+	}
+	return run, err
 }
 
 func (s *Service) ApplyRunPause(
@@ -384,6 +404,9 @@ func (s *Service) ApplyRunPause(
 	})
 	if err != nil {
 		return Run{}, false, fmt.Errorf("apply %s to run %q: %w", action, runID, err)
+	}
+	if applied {
+		s.runChanged()
 	}
 	return run, applied, nil
 }

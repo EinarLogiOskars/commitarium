@@ -60,6 +60,18 @@ func TestChangesWakeTheAssistantOnlyForWhatMatters(t *testing.T) {
 	if events := changes(map[string]string{"fea_1": "completed"}, unchanged); len(events) != 0 {
 		t.Fatalf("an unchanged work order reported events: %+v", events)
 	}
+	// A work order that blocked before the watcher first saw it is still told.
+	blocked := map[string]work{"fea_2": {Title: "Tooltip", Reason: "Unable to verify Git HEAD", State: feature.StateImplementing,
+		RunID: "run_2", RunStatus: execution.RunStatusWaitingForUser, WaitKind: execution.RunWaitKindBlocker}}
+	if events := changes(map[string]string{"fea_1": "completed"}, blocked); len(events) != 1 || !events[0].Wake ||
+		events[0].WorkOrderID != "fea_2" {
+		t.Fatalf("a new blocked work order: events = %+v", events)
+	}
+	newRunning := map[string]work{"fea_3": {Title: "Log", State: feature.StateImplementing, RunID: "run_3",
+		RunStatus: execution.RunStatusRunning}}
+	if events := changes(map[string]string{"fea_1": "completed"}, newRunning); len(events) != 0 {
+		t.Fatalf("a new running work order reported events: %+v", events)
+	}
 }
 
 type deletedProjectStub struct {
@@ -247,5 +259,40 @@ func TestAWorkOrderBackInReadyWakesTheAssistant(t *testing.T) {
 		map[string]work{"fea_1": {Title: "Practice", State: feature.StateReady, RunID: "run_1", RunStatus: execution.RunStatusStopped}})
 	if len(events) != 1 || !events[0].Wake || !strings.Contains(events[0].Text, "back in Ready") {
 		t.Fatalf("events = %+v", events)
+	}
+}
+
+// A work order that blocks before the watcher's first look at it still
+// wakes the assistant, and events a chat was not told are seen again.
+func TestWorkThatBlocksAtOnceWakesTheAssistant(t *testing.T) {
+	service, worker := newTestService(t)
+	if _, err := service.Send(t.Context(), "prj_test", "Hi", "msg-1"); err != nil {
+		t.Fatal(err)
+	}
+	worker.finish(workerhttp.TerminalResult{Outcome: workerhttp.OutcomeCompleted, Disposition: workerhttp.DispositionSucceeded, Summary: "Hello."})
+	current := map[string]work{"fea_1": {Title: "Log", State: feature.StateCompleted}}
+	snapshot := func(context.Context, string) (view, error) { return view{Work: current}, nil }
+	if err := service.observe(t.Context(), "prj_test", snapshot); err != nil {
+		t.Fatal(err)
+	}
+	current["fea_2"] = work{Title: "Tooltip", State: feature.StateImplementing, RunID: "run_2",
+		RunStatus: execution.RunStatusWaitingForUser, WaitKind: execution.RunWaitKindBlocker,
+		Reason: "Unable to verify Git HEAD."}
+	if err := service.observe(t.Context(), "prj_test", snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if len(worker.puts) != 2 || !strings.Contains(worker.puts[1].Instructions, `"Tooltip"`) {
+		t.Fatalf("a work order blocked at once did not wake the assistant: %d turns", len(worker.puts))
+	}
+
+	shared, err := service.sharedOf("prj_test")
+	if err != nil || shared.Watched["fea_2"] == "" {
+		t.Fatalf("watched = %+v, %v", shared.Watched, err)
+	}
+	service.forgetSeen("prj_test", []Event{{WorkOrderID: "fea_2"}, {WorkOrderID: "fea_1"}},
+		map[string]string{"fea_1": "implementing|run_1|running||"})
+	if shared, _ = service.sharedOf("prj_test"); shared.Watched["fea_2"] != "" ||
+		shared.Watched["fea_1"] != "implementing|run_1|running||" {
+		t.Fatalf("unsent events were not put back: %+v", shared.Watched)
 	}
 }

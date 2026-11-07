@@ -110,6 +110,14 @@ func (s *Service) EventsForFeature(
 	return events, nil
 }
 
+// OnFeatureEvent has f called after every work order event, so the
+// assistant's watcher looks at once rather than at its next tick.
+func (s *Service) OnFeatureEvent(f func()) {
+	if s.broker != nil {
+		s.broker.published.Store(&f)
+	}
+}
+
 func (s *Service) SubscribeFeatureEvents(
 	featureID string,
 ) (<-chan Event, func()) {

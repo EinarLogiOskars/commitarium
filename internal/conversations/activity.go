@@ -28,6 +28,9 @@ type Activity struct {
 	StartedAt *time.Time `json:"started_at,omitempty"`
 	// Retry is the automatic retry running, from 1, or 0.
 	Retry int `json:"retry,omitempty"`
+	// Reply is the start of the answer as it is written, when the provider
+	// streams it. The finished turn replaces it with the real message.
+	Reply string `json:"reply,omitempty"`
 }
 
 // ActivityStream is a worker attempt's event stream.
@@ -37,7 +40,7 @@ type ActivityStream interface {
 }
 
 type liveActivity struct {
-	attemptID, label, detail string
+	attemptID, label, detail, reply string
 }
 
 // activityLifetime bounds how long one turn's stream is read.
@@ -45,6 +48,9 @@ const activityLifetime = time.Hour
 
 // maxActivityDetail bounds a step's detail.
 const maxActivityDetail = 160
+
+// maxActivityReply bounds the reply shown while it is written.
+const maxActivityReply = 4000
 
 // followActivity reads the turn's activity stream in the background until
 // the turn ends or another replaces it. chat is the chat's idPart.
@@ -75,22 +81,30 @@ func (service *Service) followActivity(ctx context.Context, chat, agentID string
 			if label == "" {
 				continue
 			}
-			if !service.noteActivity(chat, reference.AttemptID, label, detail) {
+			reply := ""
+			if frame.Preview != nil {
+				reply = frame.Preview.Text
+			}
+			if !service.noteActivity(chat, reference.AttemptID, label, detail, reply) {
 				return
 			}
 		}
 	}()
 }
 
-// noteActivity keeps a step of the chat's turn; false once another turn
-// replaced it.
-func (service *Service) noteActivity(chat, attemptID, label, detail string) bool {
+// noteActivity keeps a step of the chat's turn, and the reply so far when
+// the step brings one; false once another turn replaced it.
+func (service *Service) noteActivity(chat, attemptID, label, detail, reply string) bool {
 	service.activityMu.Lock()
 	defer service.activityMu.Unlock()
-	if service.activity[chat].attemptID != attemptID {
+	current := service.activity[chat]
+	if current.attemptID != attemptID {
 		return false
 	}
-	service.activity[chat] = liveActivity{attemptID: attemptID, label: label, detail: detail}
+	if reply == "" {
+		reply = current.reply
+	}
+	service.activity[chat] = liveActivity{attemptID: attemptID, label: label, detail: detail, reply: reply}
 	return true
 }
 
@@ -105,7 +119,7 @@ func (service *Service) currentActivity(stored record) *Activity {
 		if retry.DueAt != nil {
 			activity.Label = "Trying again"
 			if retry.Correction != "" {
-				activity.Label = "Fixing its reply"
+				activity.Label = "Fixing the reply"
 			}
 			return activity
 		}
@@ -115,6 +129,7 @@ func (service *Service) currentActivity(stored record) *Activity {
 	service.activityMu.Unlock()
 	if ok && live.attemptID == stored.AttemptID && live.label != "" {
 		activity.Label, activity.Detail = live.label, live.detail
+		activity.Reply = bounded(redact.Secrets(live.reply), maxActivityReply)
 	}
 	return activity
 }
@@ -123,7 +138,7 @@ func (service *Service) currentActivity(stored record) *Activity {
 // for one that says nothing new (a step finished).
 func describeFrame(frame workerhttp.StreamFrame) (string, string) {
 	if frame.Preview != nil {
-		return "Writing its reply", ""
+		return "Writing the reply", ""
 	}
 	event := frame.Event
 	if event == nil {
@@ -131,7 +146,7 @@ func describeFrame(frame workerhttp.StreamFrame) (string, string) {
 	}
 	switch event.Type {
 	case workerhttp.EventMessage:
-		return "Writing its reply", ""
+		return "Writing the reply", ""
 	case workerhttp.EventActivity:
 	default:
 		return "", ""
@@ -163,7 +178,10 @@ var toolTexts = []struct{ prefix, label, detail string }{
 	{"started delegated agent work", "Working through a part of it", ""},
 	{"started a command or tool", "Using a tool", ""},
 	{"started a tool call", "Using a tool", ""},
-	{"updated its plan", "Planning its reply", ""},
+	{"started thinking", "Thinking it through", ""},
+	{"started writing its reply", "Writing the reply", ""},
+	{"started looking for a tool", "Getting a tool ready", ""},
+	{"updated its plan", "Planning the reply", ""},
 	{"started working", "Getting started", ""},
 }
 

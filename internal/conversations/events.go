@@ -446,8 +446,9 @@ func changes(previous map[string]string, current map[string]work) []Event {
 	events := make([]Event, 0)
 	for _, id := range ids {
 		item := current[id]
-		before, seen := previous[id]
-		if !seen || before == item.signature() {
+		// A new work order counts too: one that blocked before the first look
+		// (a lead can give up in seconds) would otherwise never be heard of.
+		if before, seen := previous[id]; seen && before == item.signature() {
 			continue
 		}
 		if event, ok := item.event(); ok {
@@ -529,6 +530,9 @@ func (item work) event() (Event, bool) {
 	}
 }
 
+// Nudge asks the watcher to look now: the work changed somewhere.
+func (service *Service) Nudge() { service.nudgeWatcher() }
+
 // nudgeWatcher asks the watcher to look now rather than at its next tick.
 func (service *Service) nudgeWatcher() {
 	select {
@@ -582,8 +586,14 @@ func (service *Service) observe(
 	current := seen.Work
 	driving := service.assistantBuilds(ctx, scope)
 	routed := map[string][]Event{}
+	// before keeps the signatures the events replaced, so a chat that could
+	// not be told hears of them on the next look instead of never.
+	before := map[string]string{}
 	err = service.updateShared(scope, func(shared *sharedState) bool {
 		events := changes(shared.Watched, current)
+		for _, event := range events {
+			before[event.WorkOrderID] = shared.Watched[event.WorkOrderID]
+		}
 		watched := make(map[string]string, len(current))
 		for id, item := range current {
 			watched[id] = item.signature()
@@ -626,10 +636,29 @@ func (service *Service) observe(
 	slices.Sort(chats)
 	for _, chat := range chats {
 		if err := service.tell(scope, chat, routed[chat], driving); err != nil {
+			service.forgetSeen(scope, routed[chat], before)
 			return err
 		}
 	}
 	return service.wakeChats(ctx, scope)
+}
+
+// forgetSeen puts back what the watcher saw of work orders whose events a
+// chat was not told, so the next look reports them again.
+func (service *Service) forgetSeen(scope string, events []Event, before map[string]string) {
+	err := service.updateShared(scope, func(shared *sharedState) bool {
+		for _, event := range events {
+			if previous := before[event.WorkOrderID]; previous != "" {
+				shared.Watched[event.WorkOrderID] = previous
+			} else {
+				delete(shared.Watched, event.WorkOrderID)
+			}
+		}
+		return len(events) > 0
+	})
+	if err != nil {
+		log.Printf("forget the unsent events of %s: %v", scope, err)
+	}
 }
 
 // tell notes events in a chat ("" for the most recently used one), and has

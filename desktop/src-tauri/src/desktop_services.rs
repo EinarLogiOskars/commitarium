@@ -40,22 +40,16 @@ const APP_STATE_FILES: &[&str] = &[
 ];
 
 const BACKUP_PROGRESS_EVENT: &str = "backup_progress";
+// Unknown fields are ignored, so a file from before a setting was dropped
+// (such as the old "when you quit" choice) still reads.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ExitBehavior {
-    KeepRunning,
-    StopStack,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct DesktopSettings {
     pub notifications_configured: bool,
     pub notifications_enabled: bool,
     pub notify_attention: bool,
     pub notify_failures: bool,
     pub notify_auto_merges: bool,
-    pub exit_behavior: ExitBehavior,
 }
 
 impl Default for DesktopSettings {
@@ -66,7 +60,6 @@ impl Default for DesktopSettings {
             notify_attention: true,
             notify_failures: true,
             notify_auto_merges: true,
-            exit_behavior: ExitBehavior::KeepRunning,
         }
     }
 }
@@ -121,22 +114,23 @@ pub enum ExitRequestAction {
     Allow,
 }
 
-#[derive(Clone, Copy, Debug, Serialize)]
+/// Asks the window whether to quit while agents work on this computer.
+/// `running` is this computer's work, whichever place is shown, so the window
+/// lists it rather than the shown server's.
+#[derive(Clone, Debug, Serialize)]
 pub struct ExitConfirmationRequested {
     timeout_ms: u64,
+    running: Vec<serde_json::Value>,
+    server_shown: bool,
 }
 
 impl ExitConfirmationRequested {
-    pub fn new() -> Self {
+    pub fn new(running: Vec<serde_json::Value>, server_shown: bool) -> Self {
         Self {
             timeout_ms: EXIT_CONFIRMATION_TIMEOUT.as_millis() as u64,
+            running,
+            server_shown,
         }
-    }
-}
-
-impl Default for ExitConfirmationRequested {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -413,15 +407,40 @@ pub async fn inspect_backup(source: String) -> Result<BackupInspection, String> 
     .map_err(|_| "backup inspection worker stopped unexpectedly".to_string())?
 }
 
-pub fn exit_behavior(app: &AppHandle) -> ExitBehavior {
-    app_data_dir(app)
-        .and_then(|data| read_json_or_default::<DesktopSettings>(&data.join(SETTINGS_FILE)))
-        .map(|settings| settings.exit_behavior)
-        .unwrap_or(ExitBehavior::KeepRunning)
-}
-
 pub fn begin_exit_stop(coordinator: &ExitCoordinator) -> ExitRequestAction {
     coordinator.begin()
+}
+
+/// Quitting stops this computer's stack: it lives only while the app is open.
+/// Only agents working here are worth a question; otherwise the window hides
+/// and the stack goes down before the app ends. Runs off the event loop,
+/// because both checks ask Docker and the coordinator.
+pub fn decide_exit(app: AppHandle, request_id: u64) {
+    std::thread::spawn(move || {
+        if !crate::host::local_started(&app) && !crate::host::local_stack_up() {
+            if app.state::<ExitCoordinator>().inner().confirm() {
+                app.state::<ExitCoordinator>().inner().finish();
+                app.exit(0);
+            }
+            return;
+        }
+        let running = crate::host::local_running_work();
+        if running.is_empty() {
+            if app.state::<ExitCoordinator>().inner().confirm() {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.hide();
+                }
+                launch_exit_shutdown(app);
+            }
+            return;
+        }
+        let server_shown = crate::host::server_shown(&app);
+        let _ = app.emit(
+            EXIT_CONFIRMATION_EVENT,
+            ExitConfirmationRequested::new(running, server_shown),
+        );
+        schedule_exit_timeout(app, request_id);
+    });
 }
 
 #[tauri::command]
@@ -477,11 +496,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn settings_defaults_require_notification_onboarding_and_keep_stack_running() {
+    fn settings_defaults_require_notification_onboarding() {
         let settings = DesktopSettings::default();
         assert!(!settings.notifications_configured);
         assert!(!settings.notifications_enabled);
-        assert_eq!(settings.exit_behavior, ExitBehavior::KeepRunning);
+    }
+
+    #[test]
+    fn settings_from_before_the_quit_choice_was_dropped_still_read() {
+        let settings: DesktopSettings = serde_json::from_str(
+            r#"{"notifications_configured":true,"exit_behavior":"stop_stack"}"#,
+        )
+        .unwrap();
+        assert!(settings.notifications_configured);
     }
 
     #[test]

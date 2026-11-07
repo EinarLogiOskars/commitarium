@@ -8,7 +8,6 @@ const FALLBACK: DesktopSettings = {
   notify_attention: true,
   notify_failures: true,
   notify_auto_merges: true,
-  exit_behavior: "keep_running",
 };
 
 export interface DesktopSettingsState {

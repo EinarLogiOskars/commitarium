@@ -435,3 +435,53 @@ func TestTheScopesOwnCallsActOnTheMostRecentChat(t *testing.T) {
 		t.Fatalf("every chat = %+v", every)
 	}
 }
+
+// Deleting a chat removes it for good: its waiting events go to another
+// chat, a chat still answering stays, and a project with no chat left opens
+// a new one that is written only once used.
+func TestADeletedChatIsGone(t *testing.T) {
+	service, worker := newTestService(t)
+	if _, err := service.Send(t.Context(), "prj_test", "Hi", "msg-1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.DeleteChat(t.Context(), "prj_test", MainChat); !errors.Is(err, ErrBusy) {
+		t.Fatalf("deleting a chat that answers: %v", err)
+	}
+	worker.finish(workerhttp.TerminalResult{Outcome: workerhttp.OutcomeCompleted, Disposition: workerhttp.DispositionSucceeded, Summary: "Hello."})
+	other, err := service.CreateChat(t.Context(), "prj_test", "Pricing")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.updateShared("prj_test", func(shared *sharedState) bool {
+		shared.PendingEvents = map[string][]string{MainChat: {`"Log" merged.`}}
+		return true
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.DeleteChat(t.Context(), "prj_test", MainChat); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(service.chatPath("prj_test", MainChat)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the chat's file is still there: %v", err)
+	}
+	shared, _ := service.sharedOf("prj_test")
+	if len(shared.PendingEvents[other.Chat]) != 1 || len(shared.PendingEvents[MainChat]) != 0 {
+		t.Fatalf("pending events = %+v", shared.PendingEvents)
+	}
+	if every, _ := service.Chats(t.Context(), "prj_test", true); len(every) != 1 || every[0].ID != other.Chat {
+		t.Fatalf("chats = %+v", every)
+	}
+	if err := service.DeleteChat(t.Context(), "prj_test", MainChat); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("deleting it again: %v", err)
+	}
+	if err := service.DeleteChat(t.Context(), "prj_test", other.Chat); err != nil {
+		t.Fatal(err)
+	}
+	conversation, err := service.Get(t.Context(), "prj_test")
+	if err != nil || conversation.Chat != MainChat || len(conversation.Messages) != 0 {
+		t.Fatalf("with no chat left, get = %+v err=%v", conversation, err)
+	}
+	if every, _ := service.Chats(t.Context(), "prj_test", true); len(every) != 0 {
+		t.Fatalf("an unused new chat was written: %+v", every)
+	}
+}

@@ -2,9 +2,11 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type React
 import { connectedServer } from "../connection";
 import {
   createChat,
+  deleteChat,
   getConversation,
   listChats,
   makeChatProject,
+  renameChat,
   searchChats,
   type ChatMatch,
   type ChatSummary,
@@ -37,6 +39,8 @@ import type { PageTarget } from "./pageTarget";
 import { MarketplaceRelease } from "./MarketplaceRelease";
 import { ProjectCost } from "./usage";
 import { BrandMark } from "./BrandMark";
+import { ContextMenu, type MenuAt } from "./ContextMenu";
+import { Overlay } from "./Overlay";
 
 const TOP = "commitarium";
 /** The chat on screen, kept per place: a chat of one server is not
@@ -182,6 +186,13 @@ export function DevShell({
   const [page, setPage] = useState<ShellPage | null>(null);
   // A project the assistant just created, until the project list has it.
   const created = useRef<string | null>(null);
+  // The right-click menu, and the chat being renamed or deleted from it.
+  const [menu, setMenu] = useState<MenuAt | null>(null);
+  const [renaming, setRenaming] = useState<{ chat: ChatSummary; title: string } | null>(null);
+  const [deleting, setDeleting] = useState<ChatSummary | null>(null);
+  const [dialogBusy, setDialogBusy] = useState(false);
+  const [dialogError, setDialogError] = useState<string | null>(null);
+  const closeMenu = useCallback(() => setMenu(null), []);
 
   const words = query.trim();
   useEffect(() => {
@@ -439,12 +450,12 @@ export function DevShell({
   }, [selection]);
 
   // The chat moves into a new project as its first chat (D2's route).
-  const makeProject = async () => {
-    if (!currentChat) return;
+  const makeProject = async (chat = currentChat) => {
+    if (!chat) return;
     setMaking(true);
     setError(null);
     try {
-      const moved = await makeChatProject(currentChat);
+      const moved = await makeChatProject(chat);
       created.current = moved.scope;
       expand(moved.scope);
       select({ scope: moved.scope, chat: moved.chat });
@@ -462,6 +473,89 @@ export function DevShell({
     }
   };
 
+  // Right-click menus: a chat's, a project's, and a work order's.
+  const openMenu = (e: React.MouseEvent, items: MenuAt["items"]) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setMenu({ x: e.clientX, y: e.clientY, items });
+  };
+  const chatMenu = (chat: ChatSummary): MenuAt["items"] => [
+    {
+      label: "Rename",
+      onSelect: () => {
+        setDialogError(null);
+        setRenaming({ chat, title: chat.title || "" });
+      },
+    },
+    ...(chat.scope === TOP
+      ? [{ label: "Make it a project", onSelect: () => void makeProject(chat.id) }]
+      : []),
+    {
+      label: "Delete",
+      danger: true,
+      onSelect: () => {
+        setDialogError(null);
+        setDeleting(chat);
+      },
+    },
+  ];
+  const projectMenu = (p: Project): MenuAt["items"] => {
+    const openPage = (mode: "vision" | "settings") => {
+      const top = chats[p.id]?.[0];
+      expand(p.id);
+      select(top ? { scope: p.id, chat: top.id } : { scope: p.id });
+      setPage({ mode, scope: p.id });
+    };
+    return [
+      { label: "New chat here", onSelect: () => void newChat(p.id) },
+      { label: "Open the vision", onSelect: () => openPage("vision") },
+      { label: "Project settings", onSelect: () => openPage("settings") },
+    ];
+  };
+  const rename = async () => {
+    if (!renaming) return;
+    setDialogBusy(true);
+    setDialogError(null);
+    try {
+      await renameChat(renaming.chat.scope, renaming.chat.id, renaming.title);
+      setRenaming(null);
+      void loadChats();
+    } catch (e) {
+      setDialogError(describe(e));
+    } finally {
+      setDialogBusy(false);
+    }
+  };
+  // A deleted chat that was on screen gives way to its project's most recent
+  // other chat, or, with none left, to a new one, written once it is used.
+  const remove = async () => {
+    if (!deleting) return;
+    const gone = deleting;
+    setDialogBusy(true);
+    setDialogError(null);
+    try {
+      await deleteChat(gone.scope, gone.id);
+      setDeleting(null);
+      if (selection.scope === gone.scope && currentChat === gone.id) {
+        const next = (chats[gone.scope] ?? []).find((c) => c.id !== gone.id);
+        select(next ? { scope: gone.scope, chat: next.id } : { scope: gone.scope });
+      }
+      setChats((current) => ({
+        ...current,
+        [gone.scope]: (current[gone.scope] ?? []).filter((c) => c.id !== gone.id),
+      }));
+      void loadChats();
+    } catch (e) {
+      setDialogError(
+        e instanceof ApiError && e.status === 409
+          ? "Mayka is still answering in this chat. Delete it once she has finished."
+          : describe(e),
+      );
+    } finally {
+      setDialogBusy(false);
+    }
+  };
+
   const match = (text: string) => !query.trim() || text.toLowerCase().includes(query.toLowerCase());
   // A project found by its name shows all its chats.
   const chatButton = (chat: ChatSummary, sub: boolean, all = false, toggle?: ReactNode) =>
@@ -472,6 +566,7 @@ export function DevShell({
           selection.scope === chat.scope && currentChat === chat.id ? "chat-side__item--on" : ""
         }`}
         onClick={() => select({ scope: chat.scope, chat: chat.id })}
+        onContextMenu={(e) => openMenu(e, chatMenu(chat))}
         title={chat.title || "New chat"}
       >
         <span className={`chat-side__name ${toggle ? "chat-side__name--fit" : ""}`}>
@@ -584,6 +679,15 @@ export function DevShell({
               key={feature.id}
               className={`chat-side__item chat-side__item--order ${on(feature.id) ? "chat-side__item--on" : ""}`}
               onClick={() => setScopePage({ mode: "order", orderId: feature.id })}
+              onContextMenu={(e) =>
+                openMenu(e, [
+                  {
+                    label: "Open",
+                    onSelect: () => setScopePage({ mode: "order", orderId: feature.id }),
+                  },
+                  { label: "Show in the graph", onSelect: () => setScopePage({ mode: "graph" }) },
+                ])
+              }
               title={feature.title}
             >
               <OrderDotView dot={dot} />
@@ -759,6 +863,7 @@ export function DevShell({
                     }
                   }}
                   aria-expanded={open}
+                  onContextMenu={(e) => openMenu(e, projectMenu(p))}
                   title={p.name}
                 >
                   <Chevron open={open} />
@@ -955,6 +1060,59 @@ export function DevShell({
           />
         )}
       </aside>
+
+      {menu && <ContextMenu menu={menu} onClose={closeMenu} />}
+      {renaming && (
+        <Overlay title="Rename chat" onClose={() => !dialogBusy && setRenaming(null)}>
+          <form
+            className="chat-dialog"
+            onSubmit={(e) => {
+              e.preventDefault();
+              void rename();
+            }}
+          >
+            <input
+              autoFocus
+              value={renaming.title}
+              maxLength={120}
+              aria-label="Chat name"
+              onChange={(e) => setRenaming({ ...renaming, title: e.target.value })}
+            />
+            {dialogError && <p className="chat-view__error">{dialogError}</p>}
+            <div className="chat-dialog__actions">
+              <button type="button" className="ghost" onClick={() => setRenaming(null)}>
+                Cancel
+              </button>
+              <button
+                type="submit"
+                className="primary"
+                disabled={dialogBusy || !renaming.title.trim()}
+              >
+                {dialogBusy ? "Renaming…" : "Rename"}
+              </button>
+            </div>
+          </form>
+        </Overlay>
+      )}
+      {deleting && (
+        <Overlay title="Delete chat?" onClose={() => !dialogBusy && setDeleting(null)}>
+          <div className="chat-dialog">
+            <p>
+              “{deleting.title || "New chat"}” and its messages are deleted for good.
+              {deleting.scope !== TOP && " The project’s notes, vision and work orders stay."}
+            </p>
+            {dialogError && <p className="chat-view__error">{dialogError}</p>}
+            <div className="chat-dialog__actions">
+              <button type="button" className="ghost" onClick={() => setDeleting(null)}>
+                Cancel
+              </button>
+              <button className="danger" disabled={dialogBusy} onClick={() => void remove()}>
+                {dialogBusy ? "Deleting…" : "Delete"}
+              </button>
+            </div>
+          </div>
+        </Overlay>
+      )}
     </div>
   );
 }

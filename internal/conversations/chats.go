@@ -756,6 +756,88 @@ func (service *Service) ArchiveChat(ctx context.Context, scope, chat string) (Ch
 	return service.changeChat(ctx, scope, chat, func(stored *record) { stored.Archived = true })
 }
 
+// DeleteChat removes a chat and its history for good. Its project's notes,
+// vision, and work orders stay: they are the project's. Events it had yet to
+// hear go to the scope's most recent other chat, and autopilot reports to
+// whichever chat is in use. A chat whose turn still runs is ErrBusy. With its
+// last chat gone, the scope opens a new one, written on its first message.
+func (service *Service) DeleteChat(ctx context.Context, scope, chat string) error {
+	if err := service.checkScope(ctx, scope); err != nil {
+		return err
+	}
+	chat, err := service.chatFor(InChat(ctx, chat), scope)
+	if err != nil {
+		return err
+	}
+	if chat == "" {
+		return ErrNotFound
+	}
+	stored, done, err := service.open(scope, chat)
+	if err != nil {
+		return err
+	}
+	defer done()
+	if stored.Status == StatusRunning {
+		if stored, err = service.refresh(ctx, stored); err != nil {
+			return err
+		}
+		if stored.Status == StatusRunning {
+			return ErrBusy
+		}
+	}
+	service.mu.Lock()
+	err = service.removeChatLocked(scope, chat)
+	service.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	service.activityMu.Lock()
+	delete(service.activity, stored.idPart())
+	service.activityMu.Unlock()
+	return nil
+}
+
+// removeChatLocked deletes a chat's file and hands what the project kept for
+// it to another chat. The caller holds the service lock and the chat's lock.
+func (service *Service) removeChatLocked(scope, chat string) error {
+	chats, err := service.chatsLocked(scope)
+	if err != nil {
+		return err
+	}
+	other := ""
+	for _, candidate := range chats {
+		if candidate.ID != chat && !candidate.Archived {
+			other = candidate.ID
+			break
+		}
+	}
+	shared, _, err := service.readShared(scope)
+	if err != nil {
+		return err
+	}
+	changed := false
+	if events, held := shared.PendingEvents[chat]; held {
+		if other != "" && len(events) > 0 {
+			shared.PendingEvents[other] = append(shared.PendingEvents[other], events...)
+		}
+		delete(shared.PendingEvents, chat)
+		changed = true
+	}
+	if shared.Goal != nil && shared.Goal.Chat == chat {
+		shared.Goal.Chat, changed = other, true
+	}
+	if changed {
+		shared.UpdatedAt = service.now()
+		if err := writeJSON(service.sharedPath(scope), shared); err != nil {
+			return err
+		}
+	}
+	if err := os.Remove(service.chatPath(scope, chat)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return ErrUnavailable
+	}
+	return nil
+}
+
 func (service *Service) changeChat(ctx context.Context, scope, chat string, change func(*record)) (Chat, error) {
 	if err := service.checkScope(ctx, scope); err != nil {
 		return Chat{}, err

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/EinarLogiOskars/commitarium/internal/execution"
@@ -118,4 +119,66 @@ func (s *ExecutionStore) LatestAgentMessages(ctx context.Context, runID string, 
 		messages[left], messages[right] = messages[right], messages[left]
 	}
 	return messages, rows.Err()
+}
+
+// LastTurn summarises the run's last finished agent turn: from the agent's
+// "started working" to the turn's end, the activity it reported between,
+// and the output tokens recorded for its latest attempt.
+func (s *ExecutionStore) LastTurn(ctx context.Context, runID string) (execution.TurnSummary, bool, error) {
+	var sessionID, role string
+	err := s.db.QueryRowContext(ctx,
+		`SELECT sessions.id, sessions.role
+		   FROM session_events AS events
+		   JOIN sessions ON sessions.id = events.session_id
+		  WHERE sessions.run_id = ? AND events.event_type = 'attempt_terminal'
+		  ORDER BY events.occurred_at DESC, events.sequence DESC
+		  LIMIT 1`, runID).Scan(&sessionID, &role)
+	if errors.Is(err, sql.ErrNoRows) {
+		return execution.TurnSummary{}, false, nil
+	}
+	if err != nil {
+		return execution.TurnSummary{}, false, fmt.Errorf("find the last turn of run %q: %w", runID, err)
+	}
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT event_type, text, occurred_at FROM session_events WHERE session_id = ? ORDER BY sequence`, sessionID)
+	if err != nil {
+		return execution.TurnSummary{}, false, fmt.Errorf("list the events of session %q: %w", sessionID, err)
+	}
+	defer func() { _ = rows.Close() }()
+	var start, end time.Time
+	steps, current := 0, 0
+	for rows.Next() {
+		var kind, text, occurredAt string
+		if err := rows.Scan(&kind, &text, &occurredAt); err != nil {
+			return execution.TurnSummary{}, false, err
+		}
+		at, err := time.Parse(time.RFC3339Nano, occurredAt)
+		if err != nil {
+			return execution.TurnSummary{}, false, err
+		}
+		switch {
+		case kind == "activity" && strings.HasSuffix(text, " started working."):
+			start, current = at, 0
+		case kind == "activity":
+			current++
+		case kind == "attempt_terminal":
+			end, steps = at, current
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return execution.TurnSummary{}, false, err
+	}
+	if start.IsZero() || end.Before(start) {
+		return execution.TurnSummary{}, false, nil
+	}
+	summary := execution.TurnSummary{Role: role, Duration: end.Sub(start), Steps: steps}
+	err = s.db.QueryRowContext(ctx,
+		`SELECT output_tokens FROM attempt_token_usage WHERE session_id = ? ORDER BY recorded_at DESC LIMIT 1`,
+		sessionID).Scan(&summary.OutputTokens)
+	if err == nil {
+		summary.HasTokens = true
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return execution.TurnSummary{}, false, fmt.Errorf("read the last turn's tokens of run %q: %w", runID, err)
+	}
+	return summary, true, nil
 }

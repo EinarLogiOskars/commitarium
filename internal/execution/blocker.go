@@ -89,6 +89,17 @@ type AgentMessage struct {
 	OccurredAt time.Time
 }
 
+// TurnSummary is what an agent did in a run's last finished turn: how long
+// it worked, how many steps it reported (commands, edits, notes), and how
+// many tokens it wrote. A turn of seconds with no steps gave up unlooked.
+type TurnSummary struct {
+	Role         string
+	Duration     time.Duration
+	Steps        int
+	OutputTokens int
+	HasTokens    bool
+}
+
 // Recovery limits on the assistant's choices (ADR-032). The user's own
 // buttons are never limited.
 const (

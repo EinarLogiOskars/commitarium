@@ -82,8 +82,6 @@ export function AppSettings({
     })();
   }, []);
 
-  const keepRunning = settings.exit_behavior === "keep_running";
-  const busy = running.length > 0;
   const [tab, setTab] = useState<Tab>(readTab);
   const choose = (next: Tab) => {
     setTab(next);
@@ -157,39 +155,6 @@ export function AppSettings({
             Off, Commitarium is your apps: ask for one, use it, and ask for changes. On, you also
             see and steer the work behind them.
           </p>
-        </section>
-
-        <section className="set__section">
-          <h3 className="set__heading">When you quit</h3>
-          <label className="set__row">
-            <input
-              type="radio"
-              name="exit-behavior"
-              checked={keepRunning}
-              onChange={() => void save({ exit_behavior: "keep_running" })}
-            />
-            <span>Leave Commitarium services running</span>
-          </label>
-          <label className="set__row">
-            <input
-              type="radio"
-              name="exit-behavior"
-              checked={!keepRunning}
-              onChange={() => void save({ exit_behavior: "stop_stack" })}
-            />
-            <span>Stop Commitarium services</span>
-          </label>
-          <p className="muted set__note">
-            {keepRunning
-              ? "Work continues after you quit, and picks up where it left off next time you open the app. Notifications stop until you reopen it."
-              : "Quitting shuts the services down. Anything an agent is part-way through is interrupted, and quitting waits for the shutdown to finish."}
-          </p>
-          {!keepRunning && busy && (
-            <div className="banner banner--warn">
-              Working right now: {running.map((work) => work.feature_title).join(", ")}. Quitting
-              would interrupt {running.length === 1 ? "it" : "them"}.
-            </div>
-          )}
         </section>
 
         <section className="set__section">
@@ -275,7 +240,7 @@ export function AppSettings({
             : null
         }
         onBusyChange={setBackupBusy}
-        running={busy}
+        running={running.length > 0}
       />
     ),
     about: (

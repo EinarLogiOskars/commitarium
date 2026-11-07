@@ -106,9 +106,10 @@ func implementationInstructions(
 	attemptID string,
 ) string {
 	return "Continue the same provider conversation as the lead and begin implementing the agreed plan. " +
-		"First check Git HEAD and status against the facts below. Preserve any unexpected user work: do " +
+		"First run 'git rev-parse HEAD' and 'git status --short' to check Git HEAD and status against the facts below. Preserve any unexpected user work: do " +
 		"not reset, clean, overwrite, or silently discard it. If the state is missing, contradictory, or " +
 		"ambiguous, stop and explain the problem without making changes. " +
+		gitStateRunFirst +
 		implementationToolchainInstructions +
 		implementationChecklistInstructions +
 		"When you decide the implementation is ready for independent review, " +
@@ -125,9 +126,9 @@ func planlessImplementationInstructions(
 ) string {
 	return "You are the lead, and this work order is a quick change: there is no documented plan and " +
 		"no reviewer, and the user decides the merge. Implement the accepted goal below directly, in as " +
-		"few commits as it needs. First check Git HEAD and status against the facts below. Preserve any " +
+		"few commits as it needs. First run 'git rev-parse HEAD' and 'git status --short' to check Git HEAD and status against the facts below. Preserve any " +
 		"unexpected user work: do not reset, clean, overwrite, or silently discard it. If the state is " +
-		"missing, contradictory, or ambiguous, stop and explain the problem without making changes. Run " +
+		"missing, contradictory, or ambiguous, stop and explain the problem without making changes. " + gitStateRunFirst + "Run " +
 		"the relevant available tests. " + implementationToolchainInstructions +
 		"When the implementation is complete, " +
 		implementationPublicationInstructions(prepared, attemptID) +
@@ -172,7 +173,7 @@ func implementationContinuationInstructions(
 		checklist = implementationChecklistInstructions
 	}
 	return "Continue the same provider conversation and implementation work after the user's " +
-		"guidance below. First check Git HEAD and status against the facts below and the work already " +
+		"guidance below. First run 'git rev-parse HEAD' and 'git status --short' to check Git HEAD and status against the facts below and the work already " +
 		"completed in this conversation. Preserve all existing changes, including manual user edits; " +
 		"do not reset, clean, overwrite, or repeat completed work. If partial work is ambiguous, facts " +
 		"conflict, an external side effect may or may not have happened, or the guidance would change " +
@@ -453,7 +454,7 @@ func implementationBaseUpdateInstructions(
 			"approved commit below, and Forgejo can no longer merge it. "
 	}
 	instructions := "Continue the same provider conversation as the lead. " + moved + "Bring the base " +
-		"branch into the feature branch. First check Git HEAD and status: HEAD should be the approved commit " +
+		"branch into the feature branch. First run 'git rev-parse HEAD' and 'git status --short' to check Git HEAD and status: HEAD should be the approved commit " +
 		"with a clean checkout; if it is neither that nor your own earlier merge of the base branch into it, " +
 		"stop and explain without making changes. Run 'git fetch commitarium " +
 		prepared.BaseBranch + "' and 'git merge --no-edit FETCH_HEAD'. Never rebase, squash, amend, reset, or " +
@@ -495,7 +496,7 @@ func implementationCorrectionInstructions(
 ) string {
 	marker := implementationReviewResponseMarker(attemptID)
 	return "Continue the same provider conversation as the lead. The independent reviewer requested " +
-		"changes to the exact commit below. First check Git HEAD and status against these facts. Do not " +
+		"changes to the exact commit below. First run 'git rev-parse HEAD' and 'git status --short' to check Git HEAD and status against these facts. Do not " +
 		"repeat completed work or discard unexpected user changes. Address every material review finding " +
 		"while preserving the accepted goal and agreed plan, then run the relevant tests. Answer each " +
 		"numbered finding by its number: fixed (say how), already fixed (where, in the reviewed commit), declined " +
@@ -606,3 +607,9 @@ func briefFreshnessInstructions(previousBase, currentBase string) string {
 		"('git log --oneline " + previousBase + ".." + currentBase + "' and the diff of the areas the brief " +
 		"names) and whether the brief still holds. Say briefly what changed and how it affects the plan."
 }
+
+// gitStateRunFirst keeps a lead from blocking on a Git state it never
+// looked at: a fast model once returned "unable to verify Git HEAD" without
+// running a command.
+const gitStateRunFirst = "Never report the Git state as unverified without having run those commands; " +
+	"compare what they print with the facts below before deciding anything is wrong. "
