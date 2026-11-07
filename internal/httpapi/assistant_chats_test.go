@@ -110,7 +110,7 @@ func TestTheScopesRoutesActOnTheMostRecentChat(t *testing.T) {
 		got["title"] != "Greetings" {
 		t.Fatalf("rename = %d %v", code, got)
 	}
-	if code, got := call(http.MethodDelete, scope+"/chats/main", ""); code != http.StatusOK || got["archived"] != true {
+	if code, got := call(http.MethodPost, scope+"/chats/main/archive", ""); code != http.StatusOK || got["archived"] != true {
 		t.Fatalf("archive = %d %v", code, got)
 	}
 	if code, got := call(http.MethodGet, scope, ""); code != http.StatusOK || got["chat"] != other {
@@ -121,6 +121,21 @@ func TestTheScopesRoutesActOnTheMostRecentChat(t *testing.T) {
 	}
 	if code, got := call(http.MethodGet, scope+"/chats?archived=true", ""); code != http.StatusOK || len(got["chats"].([]any)) != 2 {
 		t.Fatalf("list with the archived = %d %v", code, got)
+	}
+	// A chat still answering stays; one at rest is deleted for good.
+	if code, _ := call(http.MethodDelete, scope+"/chats/"+other, ""); code != http.StatusConflict {
+		t.Fatalf("deleting a chat that answers = %d", code)
+	}
+	_, unused := call(http.MethodPost, scope+"/chats", "")
+	spare := unused["chat"].(string)
+	if code, _ := call(http.MethodDelete, scope+"/chats/"+spare, ""); code != http.StatusNoContent {
+		t.Fatalf("delete = %d", code)
+	}
+	if code, got := call(http.MethodGet, scope+"/chats?archived=true", ""); code != http.StatusOK || len(got["chats"].([]any)) != 2 {
+		t.Fatalf("after deleting, list = %d %v", code, got)
+	}
+	if code, _ := call(http.MethodDelete, scope+"/chats/"+spare, ""); code != http.StatusNotFound {
+		t.Fatalf("deleting it again answered %d", code)
 	}
 	if code, _ := call(http.MethodGet, scope+"/chats/chat_0000000000000000", ""); code != http.StatusNotFound {
 		t.Fatalf("a missing chat answered %d", code)

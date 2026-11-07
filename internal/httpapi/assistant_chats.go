@@ -17,6 +17,7 @@ type chatManager interface {
 	CreateChat(ctx context.Context, scope, title string) (conversations.Conversation, error)
 	RenameChat(ctx context.Context, scope, chat, title string) (conversations.Chat, error)
 	ArchiveChat(ctx context.Context, scope, chat string) (conversations.Chat, error)
+	DeleteChat(ctx context.Context, scope, chat string) error
 	SearchChats(ctx context.Context, query string) ([]conversations.ChatMatch, error)
 }
 
@@ -29,7 +30,8 @@ func (api *API) registerChatRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/assistant/conversations/{scope}/chats", api.createChatHandler)
 	mux.HandleFunc("GET "+chat, inChat(api.getConversationHandler))
 	mux.HandleFunc("PATCH "+chat, api.renameChatHandler)
-	mux.HandleFunc("DELETE "+chat, api.archiveChatHandler)
+	mux.HandleFunc("DELETE "+chat, api.deleteChatHandler)
+	mux.HandleFunc("POST "+chat+"/archive", api.archiveChatHandler)
 	mux.HandleFunc("POST "+chat+"/messages", inChat(api.sendConversationHandler))
 	mux.HandleFunc("POST "+chat+"/retry", inChat(api.retryConversationTurnHandler))
 	mux.HandleFunc("POST "+chat+"/messages/{messageID}/questions/{questionID}/answer", inChat(api.answerQuestionHandler))
@@ -123,6 +125,19 @@ func (api *API) renameChatHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, renamed, "assistant chat")
+}
+
+// deleteChatHandler deletes a chat and its history for good.
+func (api *API) deleteChatHandler(w http.ResponseWriter, r *http.Request) {
+	manager, ok := api.chats(w)
+	if !ok {
+		return
+	}
+	if err := manager.DeleteChat(r.Context(), r.PathValue("scope"), r.PathValue("chat")); err != nil {
+		writeConversationError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // archiveChatHandler archives a chat: it leaves the list, keeps its
