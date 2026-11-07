@@ -352,6 +352,15 @@ export const listChats = (scope: string): Promise<ChatSummary[]> =>
 export const createChat = (scope: string): Promise<Conversation> =>
   request(`${conversationPath(scope)}/chats`, { method: "POST" });
 
+/** Names a chat. */
+export const renameChat = (scope: string, chat: string, title: string): Promise<ChatSummary> =>
+  request(conversationPath({ scope, chat }), { method: "PATCH", body: { title } });
+
+/** Deletes a chat and its history for good; the project's notes, vision and
+ * work orders stay. A chat Mayka is still answering in is refused (409). */
+export const deleteChat = (scope: string, chat: string): Promise<void> =>
+  request(conversationPath({ scope, chat }), { method: "DELETE" });
+
 /** Makes a loose chat a project (ADR-038): the chat moves into the new
  * project as its first chat, and its planning starts from the chat. */
 export const makeChatProject = (chat: string): Promise<Conversation> =>

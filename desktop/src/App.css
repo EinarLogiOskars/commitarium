@@ -7397,3 +7397,40 @@ button.shell-agent:hover {
   display: grid;
   gap: 2px;
 }
+
+/* A right-click menu at the pointer (ContextMenu.tsx). */
+.context-menu {
+  position: fixed;
+  z-index: 60;
+  min-width: 180px;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-m);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.25);
+}
+.context-menu__item {
+  all: unset;
+  box-sizing: border-box;
+  padding: 6px 10px;
+  border-radius: var(--radius-s);
+  cursor: default;
+}
+.context-menu__item:hover,
+.context-menu__item:focus-visible {
+  background: var(--hover);
+}
+.context-menu__item--danger {
+  color: var(--bad);
+}
+/* A chat's rename field and delete question (DevShell.tsx). */
+.chat-dialog {
+  max-width: 440px;
+}
+.chat-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
