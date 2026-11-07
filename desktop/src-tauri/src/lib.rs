@@ -157,6 +157,23 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(move |app, event| match event {
+            // The red button closes the main window, and quits the app. Ask
+            // before the window goes, since the quit question shows in it.
+            tauri::RunEvent::WindowEvent {
+                label,
+                event: tauri::WindowEvent::CloseRequested { api, .. },
+                ..
+            } if label == "main" && !updater::is_restarting(app) => {
+                let coordinator = app.state::<desktop_services::ExitCoordinator>();
+                match desktop_services::begin_exit_stop(&coordinator) {
+                    desktop_services::ExitRequestAction::Prompt(request_id) => {
+                        api.prevent_close();
+                        desktop_services::decide_exit(app.clone(), request_id);
+                    }
+                    desktop_services::ExitRequestAction::Wait => api.prevent_close(),
+                    desktop_services::ExitRequestAction::Allow => {}
+                }
+            }
             tauri::RunEvent::ExitRequested { api, .. } if !updater::is_restarting(app) => {
                 let coordinator = app.state::<desktop_services::ExitCoordinator>();
                 match desktop_services::begin_exit_stop(&coordinator) {
