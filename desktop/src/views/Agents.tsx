@@ -618,7 +618,9 @@ function ProfileRow({
       {usage?.windows?.length ? (
         <UsageBars usage={usage} />
       ) : s === "connected" && !signedOut ? (
-        <p className="muted note">Usage not known yet. It shows once the agent's account answers.</p>
+        <p className="muted note">
+          Usage not known yet. It shows once the agent's account answers.
+        </p>
       ) : null}
       {error && <div className="banner banner--error">{error}</div>}
 
