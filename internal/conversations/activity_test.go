@@ -68,9 +68,9 @@ func TestTheAssistantsActivityShowsWhileItAnswers(t *testing.T) {
 		{activityEvent("Codex ran command: curl -H 'Authorization: Bearer abc123' https://x", &workerhttp.Activity{
 			Kind: workerhttp.ActivityKindCommand, Command: "curl -H 'Authorization: Bearer abc123' https://x"}),
 			"Looking something up on the web", "curl -H 'Authorization: Bearer [REDACTED]' https://x", ""},
-		{workerhttp.StreamFrame{Preview: &workerhttp.MessagePreview{Text: "Sign-in uses"}}, "Writing its reply", "", "Sign-in uses"},
-		{workerhttp.StreamFrame{Preview: &workerhttp.MessagePreview{Text: "Sign-in uses a cookie"}}, "Writing its reply", "", "Sign-in uses a cookie"},
-		{activityEvent("Claude started writing its reply.", nil), "Writing its reply", "", "Sign-in uses a cookie"},
+		{workerhttp.StreamFrame{Preview: &workerhttp.MessagePreview{Text: "Sign-in uses"}}, "Writing the reply", "", "Sign-in uses"},
+		{workerhttp.StreamFrame{Preview: &workerhttp.MessagePreview{Text: "Sign-in uses a cookie"}}, "Writing the reply", "", "Sign-in uses a cookie"},
+		{activityEvent("Claude started writing its reply.", nil), "Writing the reply", "", "Sign-in uses a cookie"},
 	} {
 		stream.frames <- step.frame
 		deadline := time.Now().Add(2 * time.Second)

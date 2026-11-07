@@ -11,19 +11,23 @@ export function elapsedLabel(startedAt: string | undefined, now: number): string
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
 }
 
-/** The step line under "thinking": plain words, or what it looked at in
- * Developer mode. */
-export function stepLabel(activity: AssistantActivity | undefined, developer: boolean): string {
-  if (!activity) return "";
-  const step = developer && activity.detail ? activity.detail : activity.label;
-  return activity.retry ? `${step} · trying again` : step;
+/** The activity line: "Mayka is" and the turn's current step, or
+ * "thinking…" before the first one comes. */
+export function activityLine(activity: AssistantActivity | undefined): string {
+  const label = activity?.label?.trim();
+  const step = label ? `Mayka is ${label.charAt(0).toLowerCase()}${label.slice(1)}` : "Mayka is thinking…";
+  return activity?.retry ? `${step} · trying again` : step;
 }
 
-// What the assistant is doing while it answers (the running turn's latest
-// step) under the thinking line, with how long it has run. The step replaces
-// itself as the next one comes; once the turn ends, the line goes. While she
-// writes, the reply so far shows above it, and the finished message takes its
-// place.
+/** In Developer mode, what the step looks at or runs, under the line. */
+export function stepDetail(activity: AssistantActivity | undefined, developer: boolean): string {
+  return developer && activity?.detail ? activity.detail : "";
+}
+
+// What the assistant is doing while it answers, as one line: its latest step
+// after her name, with how long the turn has run. The step replaces itself as
+// the next one comes; once the turn ends, the line goes. While she writes, the
+// reply so far shows above it, and the finished message takes its place.
 export function AssistantActivityLine({
   conversation,
   developer,
@@ -38,7 +42,7 @@ export function AssistantActivityLine({
   }, []);
   const activity = conversation.activity;
   const elapsed = elapsedLabel(activity?.started_at ?? conversation.turn_started_at, now);
-  const step = stepLabel(activity, developer);
+  const detail = stepDetail(activity, developer);
   const reply = activity?.reply;
   return (
     <div className="assistant__activity" aria-live="polite">
@@ -50,14 +54,10 @@ export function AssistantActivityLine({
         </div>
       )}
       <p className="muted status-line live-text">
-        Mayka is thinking…
-        {elapsed && <span className="assistant__elapsed"> {elapsed}</span>}
+        {activityLine(activity)}
+        {elapsed && <span className="assistant__elapsed"> · {elapsed}</span>}
       </p>
-      {step && (
-        <p className="muted assistant__step" title={developer ? activity?.label : undefined}>
-          {step}
-        </p>
-      )}
+      {detail && <p className="muted assistant__step">{detail}</p>}
     </div>
   );
 }

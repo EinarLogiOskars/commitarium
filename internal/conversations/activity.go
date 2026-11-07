@@ -119,7 +119,7 @@ func (service *Service) currentActivity(stored record) *Activity {
 		if retry.DueAt != nil {
 			activity.Label = "Trying again"
 			if retry.Correction != "" {
-				activity.Label = "Fixing its reply"
+				activity.Label = "Fixing the reply"
 			}
 			return activity
 		}
@@ -138,7 +138,7 @@ func (service *Service) currentActivity(stored record) *Activity {
 // for one that says nothing new (a step finished).
 func describeFrame(frame workerhttp.StreamFrame) (string, string) {
 	if frame.Preview != nil {
-		return "Writing its reply", ""
+		return "Writing the reply", ""
 	}
 	event := frame.Event
 	if event == nil {
@@ -146,7 +146,7 @@ func describeFrame(frame workerhttp.StreamFrame) (string, string) {
 	}
 	switch event.Type {
 	case workerhttp.EventMessage:
-		return "Writing its reply", ""
+		return "Writing the reply", ""
 	case workerhttp.EventActivity:
 	default:
 		return "", ""
@@ -179,9 +179,9 @@ var toolTexts = []struct{ prefix, label, detail string }{
 	{"started a command or tool", "Using a tool", ""},
 	{"started a tool call", "Using a tool", ""},
 	{"started thinking", "Thinking it through", ""},
-	{"started writing its reply", "Writing its reply", ""},
+	{"started writing its reply", "Writing the reply", ""},
 	{"started looking for a tool", "Getting a tool ready", ""},
-	{"updated its plan", "Planning its reply", ""},
+	{"updated its plan", "Planning the reply", ""},
 	{"started working", "Getting started", ""},
 }
 
