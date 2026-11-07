@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/EinarLogiOskars/commitarium/internal/conversations"
 	"github.com/EinarLogiOskars/commitarium/internal/documents"
@@ -350,7 +351,16 @@ type approveActionRequest struct {
 	LeadModel     string `json:"lead_model,omitempty"`
 	ReviewerAgent string `json:"reviewer_agent,omitempty"`
 	ReviewerModel string `json:"reviewer_model,omitempty"`
+	// Outcome, for a server card, is what the server's host answered when
+	// the user's app applied it, and Failed says it refused: the card's
+	// result, for Mayka to read (MULTI_DOMAIN_PLAN.md, M5).
+	Outcome string `json:"outcome,omitempty"`
+	Failed  bool   `json:"failed,omitempty"`
 }
+
+// maxOutcomeBytes bounds what a server card's result keeps of the host's
+// answer.
+const maxOutcomeBytes = 2000
 
 // approveConversationActionHandler runs one action the assistant proposed,
 // through the same paths as the app's own buttons.
@@ -381,9 +391,11 @@ func (api *API) approveConversationActionHandler(w http.ResponseWriter, r *http.
 		return
 	}
 	// At the top level the assistant only creates apps and projects to plan;
-	// everything else acts in a project, except research, which needs none.
+	// everything else acts in a project, except research, which needs none,
+	// and the server's cards, which act on the server.
 	topLevel := action.Type == featureartifact.AssistantCreateApp || action.Type == featureartifact.AssistantPlanProject
-	if action.Type != featureartifact.AssistantResearch && (scope == conversations.TopLevel) != topLevel {
+	if action.Type != featureartifact.AssistantResearch && !featureartifact.AnyChat(action.Type) &&
+		(scope == conversations.TopLevel) != topLevel {
 		writeError(w, http.StatusConflict, "action_needs_project", "this action runs in a project's conversation, and a new app at the top level")
 		return
 	}
@@ -464,6 +476,7 @@ func (api *API) approveConversationActionHandler(w http.ResponseWriter, r *http.
 	}
 	var result string
 	var ok bool
+	status := conversations.ActionApplied
 	// The work order the action touched, for the app to open; a new one's ID
 	// is known only once it exists.
 	workOrderID := action.WorkOrderID
@@ -511,6 +524,14 @@ func (api *API) approveConversationActionHandler(w http.ResponseWriter, r *http.
 	case featureartifact.AssistantSetAppsPage:
 		// The server's host changes it; the app that approved this asks it to.
 		result, ok = appsPageResult(action.How), true
+	case featureartifact.AssistantAddDomain, featureartifact.AssistantInstallAuthentik,
+		featureartifact.AssistantSetAppAccess, featureartifact.AssistantSetHomelab:
+		// The user's app applied it through the server's host before this,
+		// and says what the host answered; Commitarium only records it.
+		result, ok = serverCardResult(action.AssistantAction, body.Outcome, body.Failed), true
+		if body.Failed {
+			status = conversations.ActionFailed
+		}
 	case featureartifact.AssistantListOnAppsPage:
 		if action.How == "hide" {
 			result, ok = "Hiding this app on the apps page.", true
@@ -564,7 +585,7 @@ func (api *API) approveConversationActionHandler(w http.ResponseWriter, r *http.
 	if len(chosen) > 0 {
 		result += " The user chose " + strings.Join(chosen, " and ") + "."
 	}
-	conversation, err := api.conversations.Resolve(r.Context(), scope, actionID, conversations.ActionApplied, result, conversations.Created{WorkOrderID: workOrderID, ProjectID: projectID, Helper: helper})
+	conversation, err := api.conversations.Resolve(r.Context(), scope, actionID, status, result, conversations.Created{WorkOrderID: workOrderID, ProjectID: projectID, Helper: helper})
 	if err != nil {
 		writeConversationError(w, err)
 		return
@@ -1022,6 +1043,42 @@ func (api *API) applyAddVisionItem(
 }
 
 // appsPageResult says what an approved apps page card changes.
+// serverCardResult is a server card's result: what the host answered, in
+// a line, after what was asked, or what was asked when it said nothing.
+func serverCardResult(action featureartifact.AssistantAction, outcome string, failed bool) string {
+	asked := ""
+	switch action.Type {
+	case featureartifact.AssistantAddDomain:
+		asked = "Adding " + action.Domain + "."
+	case featureartifact.AssistantInstallAuthentik:
+		asked = "Setting up authentik."
+		if action.Domain != "" {
+			asked = "Setting up authentik for " + action.Domain + "."
+		}
+	case featureartifact.AssistantSetAppAccess:
+		asked = "Changing who may open the app."
+	case featureartifact.AssistantSetHomelab:
+		asked = "Turning Homelab " + action.How + "."
+	}
+	outcome = strings.Join(strings.Fields(outcome), " ")
+	if len(outcome) > maxOutcomeBytes {
+		cut := maxOutcomeBytes
+		for cut > 0 && !utf8.RuneStart(outcome[cut]) {
+			cut--
+		}
+		outcome = outcome[:cut] + "…"
+	}
+	switch {
+	case failed && outcome != "":
+		return asked + " The server refused: " + outcome
+	case failed:
+		return asked + " The server refused."
+	case outcome != "":
+		return asked + " " + outcome
+	}
+	return asked
+}
+
 func appsPageResult(how string) string {
 	switch how {
 	case "off":

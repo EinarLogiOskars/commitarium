@@ -52,6 +52,65 @@ func TestAppsPageCardsNameWhatTheyDo(t *testing.T) {
 	}
 }
 
+// A deploy may propose the app's address: a name under a domain, the bare
+// domain, and extra addresses, kept in lower case.
+func TestADeployMayProposeItsAddress(t *testing.T) {
+	site := AssistantAction{Type: AssistantDeployApp, Reason: "Asked", Domain: " EinarLogi.is ", Name: "",
+		Aliases: []AppAddress{{Domain: "einarlogi.com", Name: ""}, {Domain: "einarlogi.is", Name: " En "}}}
+	turn, err := AssistantTurn{Actions: []AssistantAction{site}}.Normalize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := turn.Actions[0]; got.Domain != "einarlogi.is" || got.Aliases[1].Name != "en" {
+		t.Fatalf("normalized = %+v", got)
+	}
+	for _, action := range []AssistantAction{
+		{Type: AssistantDeployApp, Reason: "Asked", Name: "notes"},
+		{Type: AssistantDeployApp, Reason: "Asked", Domain: "example.com", Name: "a.b"},
+		{Type: AssistantDeployApp, Reason: "Asked", Domain: "example.com", Aliases: []AppAddress{{Name: "x"}}},
+	} {
+		if _, err := (AssistantTurn{Actions: []AssistantAction{action}}).Normalize(); !errors.Is(err, ErrInvalidArtifact) {
+			t.Fatalf("%+v accepted: %v", action, err)
+		}
+	}
+}
+
+// The server's setup cards say what they change; anything else is refused.
+func TestServerCardsNameWhatTheyChange(t *testing.T) {
+	for _, action := range []AssistantAction{
+		{Type: AssistantAddDomain, Reason: "Asked", Domain: "commitarium.com"},
+		{Type: AssistantAddDomain, Reason: "Asked", Domain: "commitarium.com", How: "each_name"},
+		{Type: AssistantInstallAuthentik, Reason: "Asked"},
+		{Type: AssistantInstallAuthentik, Reason: "Asked", Domain: "commitarium.com"},
+		{Type: AssistantSetAppAccess, Reason: "Asked", How: "company", App: "notes.example.com", Groups: []string{"sales"}},
+		{Type: AssistantSetAppAccess, Reason: "Asked", How: "private"},
+		{Type: AssistantSetHomelab, Reason: "Asked", How: "off"},
+		{Type: AssistantSetAppsPage, Reason: "Asked", How: "public", Domain: "commitarium.com"},
+	} {
+		if _, err := (AssistantTurn{Actions: []AssistantAction{action}}).Normalize(); err != nil {
+			t.Fatalf("%+v: %v", action, err)
+		}
+	}
+	for _, action := range []AssistantAction{
+		{Type: AssistantAddDomain, Reason: "Asked"},
+		{Type: AssistantAddDomain, Reason: "Asked", Domain: "*.example.com"},
+		{Type: AssistantAddDomain, Reason: "Asked", Domain: "example.com", How: "proxied"},
+		{Type: AssistantInstallAuthentik, Reason: "Asked", Domain: "https://example.com"},
+		{Type: AssistantSetAppAccess, Reason: "Asked", How: "off"},
+		{Type: AssistantSetAppAccess, Reason: "Asked", How: "public", Groups: []string{"sales"}},
+		{Type: AssistantSetHomelab, Reason: "Asked"},
+		{Type: AssistantSetHomelab, Reason: "Asked", How: "private"},
+	} {
+		if _, err := (AssistantTurn{Actions: []AssistantAction{action}}).Normalize(); !errors.Is(err, ErrInvalidArtifact) {
+			t.Fatalf("%+v accepted: %v", action, err)
+		}
+	}
+	if !ServerCard(AssistantAddDomain) || ServerCard(AssistantDeployApp) || !AnyChat(AssistantSetAppsPage) ||
+		AnyChat(AssistantListOnAppsPage) {
+		t.Fatal("the server's cards are not told apart")
+	}
+}
+
 // A new app carries the brief the assistant gathered and what it assumed,
 // trimmed and bounded.
 func TestANewAppCarriesItsBrief(t *testing.T) {

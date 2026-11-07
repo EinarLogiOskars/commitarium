@@ -87,6 +87,9 @@ func TestTheSignInFocusCarriesTheSetup(t *testing.T) {
 		"user type to Internal",
 		"Never ask for the client secret in this chat",
 		"never ask the user for any of it",
+		"once for each of the server's domains",
+		`the "<domain> people" group in authentik's admin`,
+		"install_authentik with that domain",
 		"Memory: 7.6 GB\nHomelab: off",
 	} {
 		if !strings.Contains(instructions, want) {
@@ -133,6 +136,12 @@ func TestAChatOutsideProjectsMayFocusOnTheServer(t *testing.T) {
 		`"DNS only" (grey cloud)`,
 		"Settings → Server → Homelab",
 		"sudo commitarium-host pair",
+		// Several domains, and the cards that set the server up.
+		"needs an A record for @ too, and one for www",
+		"Whoever runs the server sees and manages every domain on it",
+		"propose add_domain with the domain and its DNS mode",
+		"comes back to you as the card's result",
+		"in a chat on serving apps or company sign-in, the server's setup cards",
 	} {
 		if !strings.Contains(instructions, want) {
 			t.Fatalf("instructions miss %q", want)
@@ -140,5 +149,27 @@ func TestAChatOutsideProjectsMayFocusOnTheServer(t *testing.T) {
 	}
 	if _, err := service.SetFocus(t.Context(), TopLevel, nil); err != nil {
 		t.Fatalf("clearing it: %v", err)
+	}
+}
+
+// A project's assistant knows the server's setup cards and that deploy_app
+// may propose the app's address, and that logins and passwords stay with
+// the user.
+func TestAProjectTurnKnowsTheServerCards(t *testing.T) {
+	service, worker := newTestService(t)
+	if _, err := service.Send(t.Context(), "prj_test", "Put it on einarlogi.is.", "msg-1"); err != nil {
+		t.Fatal(err)
+	}
+	instructions := worker.puts[0].Instructions
+	for _, want := range []string{
+		"deploy_app also proposes its address: domain",
+		"add_domain (domain, how: wildcard or each_name)",
+		"set_app_access (app: its main address",
+		"set_homelab (how: on or off)",
+		"authentik's admin account and adding people to it, and every password",
+	} {
+		if !strings.Contains(instructions, want) {
+			t.Fatalf("instructions miss %q", want)
+		}
 	}
 }
