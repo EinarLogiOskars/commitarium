@@ -118,8 +118,8 @@ Routes behind the forwarders:
 | `get_forgejo_viewer_status`, `configure_forgejo_viewer` | `GET`, `POST /v1/forgejo/viewer` |
 | Quitting and updating, no command | `POST /v1/previews/stop-all`, `/v1/profiles/shutdown` |
 
-The app's exit path stops previews, then logins, then the host, and with
-`stop_stack` first logins and the stack. If stdin closes without that, the app
+The app's exit path first stops logins and this computer's stack (whenever its
+containers run, even with a server shown), then previews, then the host. If stdin closes without that, the app
 crashed: the host stops previews and logins and leaves, and the stack stays up.
 A host that dies loses its previews and logins, which are in memory. On the
 next start it sweeps what the old one left, and the app tells any window still
@@ -558,7 +558,6 @@ type DesktopSettings = {
   notify_attention: boolean;
   notify_failures: boolean;
   notify_auto_merges: boolean;
-  exit_behavior: "keep_running" | "stop_stack";
 };
 
 type NativeNotification = {
@@ -603,9 +602,14 @@ the opaque UI-state blob. A new installation starts with
 frontend must deliberately check/request platform permission, then save
 `notifications_configured: true` and enable delivery only when permission was
 granted. Category defaults are true so they take effect after that opt-in. The
-default exit behavior keeps Compose running. With `stop_stack`, an exit request
-is prevented and Tauri emits `exit-confirmation-requested` once with an
-`ExitConfirmationRequested` payload. While that confirmation is pending,
+local stack lives only while the app is open: an exit request is prevented, and
+off the event loop Tauri checks whether this computer's Compose project has
+containers and asks the local coordinator (`GET /api/v1/attention`) for running
+work. With no stack it exits; with a stack and no local work it hides the
+window, tears the stack down and exits. Only with local work does it emit
+`exit-confirmation-requested` once with an `ExitConfirmationRequested` payload
+(`timeout_ms`, `running`: this computer's running work orders, `server_shown`).
+Interrupted turns retry when the stack next starts. While that confirmation is pending,
 additional exit requests are prevented without emitting another event.
 `confirm_exit() -> boolean` returns `true` only when it claims the pending
 request, then shuts down provider profiles, performs the fixed project-wide

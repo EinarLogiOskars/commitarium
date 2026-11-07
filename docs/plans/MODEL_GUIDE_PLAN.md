@@ -214,7 +214,7 @@ tab's settings on the right.
 
 | Tab | Contents (existing sections, regrouped) |
 | --- | --- |
-| General | Appearance, Developer mode, When you quit |
+| General | Appearance, Developer mode (When you quit was dropped: quitting always stops the local stack) |
 | Notifications | Desktop notifications and their kinds |
 | Marketplace | Account and sign-out |
 | Backup | Create and restore backups |

@@ -104,11 +104,13 @@ with the implementation and public API documentation they describe.
   appeared IDs are announced, and adopts the first snapshot after launch
   silently — the inbox already shows what was outstanding at startup.
 - Typed `load_desktop_settings` / `save_desktop_settings` commands own the
-  notification categories and `keep_running` / `stop_stack` close behavior.
+  notification categories.
   A new installation is explicitly unconfigured and disabled; after a
   deliberate platform permission check/request, save it as configured and
-  enable delivery only when granted. With `stop_stack`, Tauri prevents the
-  first exit, emits `exit-confirmation-requested`, and waits for
+  enable delivery only when granted. Quitting always stops this computer's
+  stack. Tauri prevents the first exit; with no local agent working it hides
+  the window, stops the stack and exits. Otherwise it emits
+  `exit-confirmation-requested` with the local running work and waits for
   `confirm_exit` or `cancel_exit`. Confirmation performs the fixed Compose
   shutdown before exit; cancellation resets the coordinator for a later quit.
   A 30-second unanswered confirmation proceeds automatically so a failed
