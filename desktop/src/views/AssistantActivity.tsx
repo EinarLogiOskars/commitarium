@@ -15,7 +15,9 @@ export function elapsedLabel(startedAt: string | undefined, now: number): string
  * "thinking…" before the first one comes. */
 export function activityLine(activity: AssistantActivity | undefined): string {
   const label = activity?.label?.trim();
-  const step = label ? `Mayka is ${label.charAt(0).toLowerCase()}${label.slice(1)}` : "Mayka is thinking…";
+  const step = label
+    ? `Mayka is ${label.charAt(0).toLowerCase()}${label.slice(1)}`
+    : "Mayka is thinking…";
   return activity?.retry ? `${step} · trying again` : step;
 }
 
