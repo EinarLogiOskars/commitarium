@@ -60,6 +60,18 @@ func TestChangesWakeTheAssistantOnlyForWhatMatters(t *testing.T) {
 	if events := changes(map[string]string{"fea_1": "completed"}, unchanged); len(events) != 0 {
 		t.Fatalf("an unchanged work order reported events: %+v", events)
 	}
+	// A work order that blocked before the watcher first saw it is still told.
+	blocked := map[string]work{"fea_2": {Title: "Tooltip", Reason: "Unable to verify Git HEAD", State: feature.StateImplementing,
+		RunID: "run_2", RunStatus: execution.RunStatusWaitingForUser, WaitKind: execution.RunWaitKindBlocker}}
+	if events := changes(map[string]string{"fea_1": "completed"}, blocked); len(events) != 1 || !events[0].Wake ||
+		events[0].WorkOrderID != "fea_2" {
+		t.Fatalf("a new blocked work order: events = %+v", events)
+	}
+	newRunning := map[string]work{"fea_3": {Title: "Log", State: feature.StateImplementing, RunID: "run_3",
+		RunStatus: execution.RunStatusRunning}}
+	if events := changes(map[string]string{"fea_1": "completed"}, newRunning); len(events) != 0 {
+		t.Fatalf("a new running work order reported events: %+v", events)
+	}
 }
 
 type deletedProjectStub struct {

@@ -446,8 +446,9 @@ func changes(previous map[string]string, current map[string]work) []Event {
 	events := make([]Event, 0)
 	for _, id := range ids {
 		item := current[id]
-		before, seen := previous[id]
-		if !seen || before == item.signature() {
+		// A new work order counts too: one that blocked before the first look
+		// (a lead can give up in seconds) would otherwise never be heard of.
+		if before, seen := previous[id]; seen && before == item.signature() {
 			continue
 		}
 		if event, ok := item.event(); ok {
