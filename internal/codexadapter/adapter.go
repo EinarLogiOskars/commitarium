@@ -230,7 +230,7 @@ func (adapter *Adapter) withAppServer(
 	client := newProtocolClient(process)
 	var initialized map[string]any
 	if err := client.request(operationCtx, "initialize", initializeParams{ClientInfo: clientInfo{
-		Name: "commitarium", Title: "Commitarium worker", Version: "0.12.0",
+		Name: "commitarium", Title: "Commitarium worker", Version: "0.12.1",
 	}}, &initialized); err != nil {
 		return fmt.Errorf("initialize Codex app-server for %s: %w", purpose, err)
 	}
@@ -382,7 +382,7 @@ func (adapter *Adapter) launch(
 
 	var initialized map[string]any
 	if err := client.request(operationCtx, "initialize", initializeParams{ClientInfo: clientInfo{
-		Name: "commitarium", Title: "Commitarium worker", Version: "0.12.0",
+		Name: "commitarium", Title: "Commitarium worker", Version: "0.12.1",
 	}}, &initialized); err != nil {
 		cleanupWithoutSession()
 		return nil, fmt.Errorf("initialize Codex app-server: %w", err)
