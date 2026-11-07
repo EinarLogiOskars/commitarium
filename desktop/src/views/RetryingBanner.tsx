@@ -20,7 +20,7 @@ export function RetryingBanner({ run, onChanged }: { run: Run; onChanged: () => 
   const [error, setError] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
-    const timer = window.setInterval(() => setNow(Date.now()), 5000);
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(timer);
   }, []);
   if (!run.retrying) return null;

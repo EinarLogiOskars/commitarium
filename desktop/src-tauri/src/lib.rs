@@ -19,7 +19,7 @@ mod snapshot;
 mod store;
 mod updater;
 
-use tauri::{Emitter, Manager};
+use tauri::Manager;
 
 const QUIT_MENU_ITEM: &str = "quit";
 
@@ -157,24 +157,32 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(move |app, event| match event {
-            tauri::RunEvent::ExitRequested { api, .. }
-                if desktop_services::exit_behavior(app)
-                    == desktop_services::ExitBehavior::StopStack
-                    && host::local_started(app)
-                    && !updater::is_restarting(app) =>
-            {
+            // The red button closes the main window, and quits the app. Ask
+            // before the window goes, since the quit question shows in it.
+            tauri::RunEvent::WindowEvent {
+                label,
+                event: tauri::WindowEvent::CloseRequested { api, .. },
+                ..
+            } if label == "main" && !updater::is_restarting(app) => {
+                let coordinator = app.state::<desktop_services::ExitCoordinator>();
+                match desktop_services::begin_exit_stop(&coordinator) {
+                    desktop_services::ExitRequestAction::Prompt(request_id) => {
+                        api.prevent_close();
+                        desktop_services::decide_exit(app.clone(), request_id);
+                    }
+                    desktop_services::ExitRequestAction::Wait => api.prevent_close(),
+                    desktop_services::ExitRequestAction::Allow => {}
+                }
+            }
+            tauri::RunEvent::ExitRequested { api, .. } if !updater::is_restarting(app) => {
                 let coordinator = app.state::<desktop_services::ExitCoordinator>();
                 match desktop_services::begin_exit_stop(&coordinator) {
                     desktop_services::ExitRequestAction::Prompt(request_id) => {
                         api.prevent_exit();
-                        let _ = app.emit(
-                            desktop_services::EXIT_CONFIRMATION_EVENT,
-                            desktop_services::ExitConfirmationRequested::new(),
-                        );
-                        desktop_services::schedule_exit_timeout(app.clone(), request_id);
+                        desktop_services::decide_exit(app.clone(), request_id);
                     }
                     desktop_services::ExitRequestAction::Wait => api.prevent_exit(),
-                    desktop_services::ExitRequestAction::Allow => {}
+                    desktop_services::ExitRequestAction::Allow => host::wind_down(app),
                 }
             }
             tauri::RunEvent::Exit | tauri::RunEvent::ExitRequested { .. } => {
