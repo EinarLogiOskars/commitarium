@@ -257,6 +257,17 @@ export function Agents({ onClose, focus }: { onClose: () => void; focus?: "assis
     };
   }, [refresh]);
 
+  // Usage changes as agents work, and a worker reads it from its CLI when it
+  // has none: look again now and then while the page is open.
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      getAgentUsage()
+        .then((r) => setUsage(r.agents ?? []))
+        .catch(() => undefined);
+    }, 15000);
+    return () => window.clearInterval(timer);
+  }, []);
+
   // The agents, the assistant, and the model guide each get a tab, laid out
   // like Settings. Every panel stays mounted, so a sign-in in progress keeps
   // going while another tab is open.
@@ -604,7 +615,11 @@ function ProfileRow({
           {limit.waiting} {limit.waiting === 1 ? "run waits" : "runs wait"} and continue by itself
         </p>
       )}
-      {usage?.windows?.length ? <UsageBars usage={usage} /> : null}
+      {usage?.windows?.length ? (
+        <UsageBars usage={usage} />
+      ) : s === "connected" && !signedOut ? (
+        <p className="muted note">Usage not known yet. It shows once the agent's account answers.</p>
+      ) : null}
       {error && <div className="banner banner--error">{error}</div>}
 
       {renaming !== null && (
@@ -704,7 +719,7 @@ function ProfileRow({
 }
 
 // The account's usage limits, one bar per window, as the agent last reported
-// them while working; providers only report during work, so it says when.
+// them, while working or when its worker asked; it says when.
 function UsageBars({ usage }: { usage: AgentUsage }) {
   return (
     <div className="usage-bars">

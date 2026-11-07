@@ -88,7 +88,10 @@ type runtime struct {
 	capabilities        []workerhttp.Capability
 	modelSource         workerhttp.ModelSource
 	usage               *worker.UsageTracker
-	description         string
+	// readUsage asks the provider CLI for the account's usage limits
+	// without a turn, when the agent has not reported them lately.
+	readUsage   func(context.Context) error
+	description string
 	// cliExecutable is the provider CLI whose version the worker reports,
 	// when it is the one the desktop keeps updated.
 	cliExecutable string
@@ -237,7 +240,7 @@ func run(ctx context.Context, workerConfig config) error {
 		MaxConcurrentAttempts: 0,
 		EventSource:           service,
 		ModelSource:           workerRuntime.modelSource,
-		UsageSource:           usageSource(workerRuntime.usage),
+		UsageSource:           usageSource(workerRuntime.usage, newUsageReader(workerRuntime.readUsage)),
 		ActivitySource:        service.ActiveAttempts,
 		CLIVersion:            startupCLIVersion(ctx, workerRuntime.cliExecutable),
 	}, service)
@@ -542,10 +545,18 @@ func newCodexRuntime(config codexConfig) (runtime, error) {
 			workerhttp.CapabilityForceStop,
 			workerhttp.CapabilityEventReplay,
 		},
-		description:   "Codex worker",
-		secrets:       tokens,
-		modelSource:   modelSource,
-		usage:         &codexadapter.Usage,
+		description: "Codex worker",
+		secrets:     tokens,
+		modelSource: modelSource,
+		usage:       &codexadapter.Usage,
+		readUsage: func(ctx context.Context) error {
+			return provider.ReadUsage(ctx, config.providerStatePath, []string{
+				"CODEX_HOME=" + config.providerStatePath,
+				"HOME=" + config.providerStatePath,
+				"LANG=C.UTF-8",
+				"PATH=/usr/local/bin:/usr/bin:/bin",
+			})
+		},
 		cliExecutable: updatableCLI(config.executable, defaultCodexBinary),
 	}, nil
 }
@@ -598,10 +609,13 @@ func newClaudeRuntime(config claudeConfig) (runtime, error) {
 			workerhttp.CapabilityForceStop,
 			workerhttp.CapabilityEventReplay,
 		},
-		description:   "Claude worker",
-		secrets:       tokens,
-		modelSource:   claudeModelSource(provider, baseVariables, config.availableModels),
-		usage:         &claudeadapter.Usage,
+		description: "Claude worker",
+		secrets:     tokens,
+		modelSource: claudeModelSource(provider, baseVariables, config.availableModels),
+		usage:       &claudeadapter.Usage,
+		readUsage: func(ctx context.Context) error {
+			return provider.ReadUsage(ctx, os.TempDir(), baseVariables)
+		},
 		cliExecutable: updatableCLI(config.executable, defaultClaudeBinary),
 	}, nil
 }
@@ -1139,13 +1153,17 @@ func forgejoRoleEnvironment(
 	return variables, roots, tokens, nil
 }
 
-// usageSource serves an adapter's latest usage report, when it keeps one.
-func usageSource(tracker *worker.UsageTracker) func() ([]workerhttp.UsageWindow, *time.Time) {
+// usageSource serves an adapter's latest usage report, when it keeps one,
+// and has the CLI asked again when that report is missing or old.
+func usageSource(tracker *worker.UsageTracker, reader *usageReader) func() ([]workerhttp.UsageWindow, *time.Time) {
 	if tracker == nil {
 		return nil
 	}
 	return func() ([]workerhttp.UsageWindow, *time.Time) {
 		windows, observedAt := tracker.Latest()
+		if len(windows) == 0 || observedAt == nil || time.Since(*observedAt) > usageStaleAfter {
+			reader.start()
+		}
 		reported := make([]workerhttp.UsageWindow, 0, len(windows))
 		for _, window := range windows {
 			reported = append(reported, workerhttp.UsageWindow{
@@ -1154,4 +1172,52 @@ func usageSource(tracker *worker.UsageTracker) func() ([]workerhttp.UsageWindow,
 		}
 		return reported, observedAt
 	}
+}
+
+// usageStaleAfter is how old a usage report may be before the CLI is asked
+// again, and usageReadEvery how often it is asked at most.
+const (
+	usageStaleAfter = 10 * time.Minute
+	usageReadEvery  = 2 * time.Minute
+)
+
+// usageReader asks the provider CLI for usage in the background, one read at
+// a time and at most every usageReadEvery, so a page that polls never waits.
+type usageReader struct {
+	read    func(context.Context) error
+	mu      sync.Mutex
+	running bool
+	last    time.Time
+}
+
+func newUsageReader(read func(context.Context) error) *usageReader {
+	if read == nil {
+		return nil
+	}
+	reader := &usageReader{read: read}
+	reader.start()
+	return reader
+}
+
+func (reader *usageReader) start() {
+	if reader == nil {
+		return
+	}
+	reader.mu.Lock()
+	if reader.running || (!reader.last.IsZero() && time.Since(reader.last) < usageReadEvery) {
+		reader.mu.Unlock()
+		return
+	}
+	reader.running, reader.last = true, time.Now()
+	reader.mu.Unlock()
+	go func() {
+		defer func() {
+			reader.mu.Lock()
+			reader.running = false
+			reader.mu.Unlock()
+		}()
+		if err := reader.read(context.Background()); err != nil {
+			log.Printf("read the account's usage: %v", err)
+		}
+	}()
 }

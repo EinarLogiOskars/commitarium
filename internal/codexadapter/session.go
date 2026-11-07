@@ -504,14 +504,7 @@ func (session *session) translate(
 			} `json:"rateLimits"`
 		}
 		if decodeParams(message, &params) == nil {
-			windows := make([]rateLimitWindow, 0, 2)
-			names := make([]string, 0, 2)
-			for index, window := range []*rateLimitWindow{params.RateLimits.Primary, params.RateLimits.Secondary} {
-				if window != nil {
-					windows = append(windows, *window)
-					names = append(names, []string{"Short", "Long"}[index])
-				}
-			}
+			windows, names := limitWindows(params.RateLimits.Primary, params.RateLimits.Secondary)
 			recordUsage(windows, names)
 			session.mu.Lock()
 			session.limitWindows = windows
@@ -922,6 +915,20 @@ type rateLimitWindow struct {
 // Usage is the account's usage limits as the adapter's sessions last saw
 // them, for the Agents page.
 var Usage worker.UsageTracker
+
+// limitWindows lists the reported windows, named short and long when Codex
+// gives no length.
+func limitWindows(primary, secondary *rateLimitWindow) ([]rateLimitWindow, []string) {
+	windows := make([]rateLimitWindow, 0, 2)
+	names := make([]string, 0, 2)
+	for index, window := range []*rateLimitWindow{primary, secondary} {
+		if window != nil {
+			windows = append(windows, *window)
+			names = append(names, []string{"Short", "Long"}[index])
+		}
+	}
+	return windows, names
+}
 
 func recordUsage(windows []rateLimitWindow, names []string) {
 	reported := make([]worker.UsageWindow, 0, len(windows))
