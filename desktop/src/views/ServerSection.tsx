@@ -44,6 +44,7 @@ import { Agents } from "./Agents";
 import { assistantGuidance, GUIDANCE, type AssistantGuidance } from "./setupGuidance";
 import { reloadAgents, useAgentList } from "./useAgents";
 import { appsOn, authentikHome, recordsFor, urlsOn } from "./domainRecords";
+import { HomelabWarning, LOSING_ANSWER_MS, moveBackFirst, StrandedWarning } from "./homelabSwitch";
 
 /** This app's API version: raise it with `API_VERSION` in the host. */
 const API_VERSION = 1;
@@ -1036,10 +1037,17 @@ export function ServerQuestion({ onOpenSettings }: { onOpenSettings: () => void 
 // Homelab mode (HOMELAB_PLAN.md): off, apps are served at the server's own
 // domain, for anyone on the internet; on, only the owner's devices reach
 // them, on their Tailscale network, with the steps Tailscale takes.
-// Set when Homelab is turned on here: once the server is ready, this
-// computer moves to its Tailscale address by itself. It outlives the dialog,
-// since signing in to Tailscale happens in a browser.
+// Set when Homelab is turned on here or by Mayka's card: once the server is
+// ready, this computer moves to its Tailscale address by itself while
+// Settings → Server shows. It outlives the dialog, since signing in to
+// Tailscale happens in a browser.
 let connectWhenReady = false;
+
+/** Homelab was just turned on outside Settings: connect through Tailscale
+ * once the server is ready, as turning it on in Settings does. */
+export function connectWhenHomelabReady() {
+  connectWhenReady = true;
+}
 
 /** Settings → Server → Homelab: one button each way, each asked first. */
 export function HomelabSettings({ onLeave }: { onLeave?: () => void }) {
@@ -1127,18 +1135,9 @@ export function HomelabSettings({ onLeave }: { onLeave?: () => void }) {
       // through it goes back to the address it had first, or is told what
       // losing the server means before it does.
       if (onTailscale && !anyway) {
-        const found = await readPlaces();
-        const shown = found.servers.find((s) => s.fingerprint === found.active);
-        const back = shown?.previous_address ?? null;
-        const movedBack =
-          back !== null &&
-          found.active !== null &&
-          (await moveServer(found.active, back).then(
-            () => true,
-            () => false,
-          ));
-        if (!movedBack) {
-          setStranded({ tried: back });
+        const stuck = await moveBackFirst();
+        if (stuck) {
+          setStranded(stuck);
           return;
         }
       }
@@ -1148,7 +1147,7 @@ export function HomelabSettings({ onLeave }: { onLeave?: () => void }) {
         // may never arrive, so the server is taken as switched either way.
         await Promise.race([
           setReach("internet").catch(() => undefined),
-          new Promise((done) => setTimeout(done, 8000)),
+          new Promise((done) => setTimeout(done, LOSING_ANSWER_MS)),
         ]);
         setLost(true);
         return;
@@ -1173,7 +1172,6 @@ export function HomelabSettings({ onLeave }: { onLeave?: () => void }) {
     setConfirming(false);
     setStranded(null);
   };
-  const oldLinks = overview.apps.length > 0 ? " Anyone with an old link needs the new one." : "";
 
   if (lost) {
     return (
@@ -1225,13 +1223,7 @@ export function HomelabSettings({ onLeave }: { onLeave?: () => void }) {
       {confirming && !stranded && (
         <div className="set__warning" role="alertdialog" aria-label="Confirm Homelab change">
           <p className="set__note">
-            <strong>{on ? "Turn off Homelab?" : "Turn on Homelab?"}</strong>{" "}
-            {on
-              ? `Your apps move to addresses under your own domain, for anyone on the internet. Every app gets a new address.${oldLinks}`
-              : `Your apps move to a private network that only your devices reach, through Tailscale. Every app gets a new address, and company sign-in is not offered there.${oldLinks} Next you sign in to Tailscale; once the server is ready, this computer connects through it by itself.`}
-            {on &&
-              onTailscale &&
-              " This computer first goes back to reaching the server at its home network address."}
+            <HomelabWarning on={on} apps={overview.apps.length} onTailscale={onTailscale} />
           </p>
           <div className="set__row">
             <button disabled={busy} onClick={() => void (on ? turnOff() : turnOn())}>
@@ -1250,15 +1242,7 @@ export function HomelabSettings({ onLeave }: { onLeave?: () => void }) {
           aria-label="This computer would lose the server"
         >
           <p className="set__note">
-            This computer reaches the server only through Tailscale
-            {stranded.tried
-              ? `, and it could not reach it at its home network address (${stranded.tried}) just now`
-              : ""}
-            . Turning Homelab off stops Tailscale on the server, so this computer loses the server.
-            To connect again you would need to be on the same network as the server, run{" "}
-            <code>sudo commitarium-host pair</code> on it, and paste the line it prints into
-            Commitarium.
-            {stranded.tried && " If you are away from home, turning it off from home avoids this."}
+            <StrandedWarning tried={stranded.tried} />
           </p>
           <p className="muted set__note">
             Not sure what you need? Mayka can help you find the way that fits.

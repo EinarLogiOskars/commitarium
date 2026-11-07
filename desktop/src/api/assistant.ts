@@ -65,6 +65,10 @@ export type AssistantActionType =
   | "deploy_app"
   | "set_apps_page"
   | "list_on_apps_page"
+  | "add_domain"
+  | "install_authentik"
+  | "set_app_access"
+  | "set_homelab"
   | "start_planning";
 
 export interface AssistantAction {
@@ -100,7 +104,20 @@ export interface AssistantAction {
     | "company"
     | "off"
     | "list"
-    | "hide";
+    | "hide"
+    | "on"
+    | "wildcard"
+    | "each_name";
+  /** For the server's cards (MULTI_DOMAIN_PLAN.md, M5): the domain it acts
+   * on; for deploy_app, the domain of the address it proposes, with name
+   * (empty for the domain itself) and its extra addresses. */
+  domain?: string;
+  name?: string;
+  aliases?: { domain: string; name: string }[];
+  /** For set_app_access: the app's main address, empty for this project's
+   * app, and the groups that may open it with company sign-in. */
+  app?: string;
+  groups?: string[];
   /** For answer_helper: the helper it answers; for a card from a helper's
    * result, the helper that proposed it (ADR-035). */
   helper?: string;
@@ -301,6 +318,10 @@ export const approveAssistantAction = (
     lead_model?: string;
     reviewer_agent?: string;
     reviewer_model?: string;
+    /** For a server card, applied before it is recorded: what the server
+     * answered, and whether it refused. Mayka reads it as the result. */
+    outcome?: string;
+    failed?: boolean;
   },
 ): Promise<Conversation> =>
   request(`${conversationPath(scope)}/actions/${encodeURIComponent(actionId)}/approve`, {
