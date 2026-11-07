@@ -56,28 +56,32 @@ func TestTheAssistantsActivityShowsWhileItAnswers(t *testing.T) {
 		t.Fatalf("before any step: %+v", conversation.Activity)
 	}
 	for _, step := range []struct {
-		frame         workerhttp.StreamFrame
-		label, detail string
+		frame                workerhttp.StreamFrame
+		label, detail, reply string
 	}{
-		{activityEvent("Claude started reading src/server/auth.ts.", nil), "Reading a file", "Looking at src/server/auth.ts"},
+		{activityEvent("Claude started thinking.", nil), "Thinking it through", "", ""},
+		{activityEvent("Claude started reading src/server/auth.ts.", nil), "Reading a file", "Looking at src/server/auth.ts", ""},
 		{activityEvent("Codex ran command: /bin/zsh -lc 'rg -n session src'", &workerhttp.Activity{
 			Kind: workerhttp.ActivityKindCommand, Command: "/bin/zsh -lc 'rg -n session src'"}),
-			"Searching the repository", "rg -n session src"},
-		{activityEvent("Claude finished inspecting the workspace.", nil), "Searching the repository", "rg -n session src"},
+			"Searching the repository", "rg -n session src", ""},
+		{activityEvent("Claude finished inspecting the workspace.", nil), "Searching the repository", "rg -n session src", ""},
 		{activityEvent("Codex ran command: curl -H 'Authorization: Bearer abc123' https://x", &workerhttp.Activity{
 			Kind: workerhttp.ActivityKindCommand, Command: "curl -H 'Authorization: Bearer abc123' https://x"}),
-			"Looking something up on the web", "curl -H 'Authorization: Bearer [REDACTED]' https://x"},
-		{workerhttp.StreamFrame{Preview: &workerhttp.MessagePreview{Text: "Sign-in uses"}}, "Writing its reply", ""},
+			"Looking something up on the web", "curl -H 'Authorization: Bearer [REDACTED]' https://x", ""},
+		{workerhttp.StreamFrame{Preview: &workerhttp.MessagePreview{Text: "Sign-in uses"}}, "Writing its reply", "", "Sign-in uses"},
+		{workerhttp.StreamFrame{Preview: &workerhttp.MessagePreview{Text: "Sign-in uses a cookie"}}, "Writing its reply", "", "Sign-in uses a cookie"},
+		{activityEvent("Claude started writing its reply.", nil), "Writing its reply", "", "Sign-in uses a cookie"},
 	} {
 		stream.frames <- step.frame
 		deadline := time.Now().Add(2 * time.Second)
 		for {
 			conversation, _ = service.Get(t.Context(), "prj_test")
-			if activity := conversation.Activity; activity != nil && activity.Label == step.label && activity.Detail == step.detail {
+			if activity := conversation.Activity; activity != nil && activity.Label == step.label &&
+				activity.Detail == step.detail && activity.Reply == step.reply {
 				break
 			}
 			if time.Now().After(deadline) {
-				t.Fatalf("after %+v: activity = %+v, want %q / %q", step.frame, conversation.Activity, step.label, step.detail)
+				t.Fatalf("after %+v: activity = %+v, want %q / %q / %q", step.frame, conversation.Activity, step.label, step.detail, step.reply)
 			}
 			time.Sleep(5 * time.Millisecond)
 		}

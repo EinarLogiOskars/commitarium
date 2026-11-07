@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { AssistantActivity, Conversation } from "../api/assistant";
+import { Markdown } from "./Markdown";
 
 /** How long the turn has run, as "12 s" or "3:05". */
 export function elapsedLabel(startedAt: string | undefined, now: number): string {
@@ -20,7 +21,9 @@ export function stepLabel(activity: AssistantActivity | undefined, developer: bo
 
 // What the assistant is doing while it answers (the running turn's latest
 // step) under the thinking line, with how long it has run. The step replaces
-// itself as the next one comes; once the turn ends, the line goes.
+// itself as the next one comes; once the turn ends, the line goes. While she
+// writes, the reply so far shows above it, and the finished message takes its
+// place.
 export function AssistantActivityLine({
   conversation,
   developer,
@@ -36,8 +39,16 @@ export function AssistantActivityLine({
   const activity = conversation.activity;
   const elapsed = elapsedLabel(activity?.started_at ?? conversation.turn_started_at, now);
   const step = stepLabel(activity, developer);
+  const reply = activity?.reply;
   return (
     <div className="assistant__activity" aria-live="polite">
+      {reply && (
+        <div className="msg msg--lead msg--plain assistant__draft">
+          <div className="msg__text">
+            <Markdown text={reply} />
+          </div>
+        </div>
+      )}
       <p className="muted status-line live-text">
         Mayka is thinking…
         {elapsed && <span className="assistant__elapsed"> {elapsed}</span>}

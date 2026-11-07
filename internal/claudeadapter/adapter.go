@@ -236,6 +236,11 @@ func (adapter *Adapter) commandArguments(
 		}
 		arguments = append(arguments, "--json-schema", string(encoded))
 	}
+	if worker.PreviewProseField(contract) != "" {
+		// Partial events show when Claude starts thinking and carry its reply
+		// as it is written, for the live line and the reply preview.
+		arguments = append(arguments, "--include-partial-messages")
+	}
 	arguments = append(arguments, prompt)
 	return arguments, nil
 }
