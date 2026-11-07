@@ -39,6 +39,31 @@ type Focus struct {
 	WorkOrderID string    `json:"work_order_id,omitempty"`
 	// Label is what the chip says.
 	Label string `json:"label"`
+	// Facts is what the user's server reported when the app opened a server
+	// focus (its memory, Homelab, domain, sign-in), so the assistant reads
+	// them instead of asking. The app reads them from the host, which the
+	// coordinator cannot reach.
+	Facts string `json:"facts,omitempty"`
+}
+
+// maxFocusFacts bounds a server focus's facts.
+const maxFocusFacts = 1200
+
+// cleanFacts keeps the facts' lines, without control characters, bounded.
+func cleanFacts(facts string) string {
+	var lines []string
+	for _, line := range strings.Split(facts, "\n") {
+		line = strings.Join(strings.Fields(strings.Map(func(r rune) rune {
+			if r < 0x20 || r == 0x7f {
+				return ' '
+			}
+			return r
+		}, line)), " ")
+		if line != "" {
+			lines = append(lines, line)
+		}
+	}
+	return bounded(strings.Join(lines, "\n"), maxFocusFacts)
 }
 
 // SetFocus focuses a project's chat (ctx's, or the most recently used) on
@@ -58,9 +83,9 @@ func (service *Service) SetFocus(ctx context.Context, scope string, focus *Focus
 		case FocusStack:
 			*focus = Focus{Kind: FocusStack, Label: "The stack"}
 		case FocusSignIn:
-			*focus = Focus{Kind: FocusSignIn, Label: "Company sign-in"}
+			*focus = Focus{Kind: FocusSignIn, Label: "Company sign-in", Facts: cleanFacts(focus.Facts)}
 		case FocusServing:
-			*focus = Focus{Kind: FocusServing, Label: "Serving your apps"}
+			*focus = Focus{Kind: FocusServing, Label: "Serving your apps", Facts: cleanFacts(focus.Facts)}
 		case FocusWorkOrder:
 			item, err := service.workOrder(ctx, scope, focus.WorkOrderID)
 			if err != nil {
@@ -170,9 +195,20 @@ func (service *Service) focusInstructions(ctx context.Context, scope string, foc
 			"stack Commitarium knows; otherwise design_stack, with what the app needs. For a repository that already " +
 			"has code, design_stack checks the stack the code uses."
 	case FocusSignIn:
-		return signInInstructions
+		return signInInstructions + serverFactsText(focus.Facts)
 	case FocusServing:
-		return servingInstructions
+		return servingInstructions + serverFactsText(focus.Facts)
 	}
 	return ""
+}
+
+// serverFactsText hands the assistant what the server reported, so it never
+// asks the user what Commitarium already knows.
+func serverFactsText(facts string) string {
+	if facts == "" {
+		return ""
+	}
+	return "\n\nWhat Commitarium reported about this server when the user opened this chat. Use it; never ask the " +
+		"user for any of it, and if something here may have changed since, say what you see and let them correct " +
+		"you:\n" + facts
 }

@@ -1,5 +1,6 @@
 import { developerModeOn } from "../devMode";
 import { request } from "./client";
+import { serverFacts } from "../attention/serverFacts";
 
 // The assistant (ASSISTANT_PLAN.md): one conversation at the top level
 // ("commitarium") and one per project, with actions the user approves.
@@ -209,6 +210,8 @@ export interface AssistantFocus {
   work_order_id?: string;
   /** What the chip says; the coordinator fills it in. */
   label?: string;
+  /** For a focus on the server: what it reported when the chat opened. */
+  facts?: string;
 }
 
 export type LaunchStage = "vision" | "setup" | "building";
@@ -265,13 +268,19 @@ export const retryAssistantTurn = (scope: ChatTarget): Promise<Conversation> =>
   request(`${conversationPath(scope)}/retry`, { method: "POST" });
 
 /** Focus the conversation on an item, or clear the focus with null. */
-export const setAssistantFocus = (
+export const setAssistantFocus = async (
   scope: ChatTarget,
   focus: AssistantFocus | null,
-): Promise<Conversation> =>
-  focus
-    ? request(`${conversationPath(scope)}/focus`, { method: "PUT", body: focus })
-    : request(`${conversationPath(scope)}/focus`, { method: "DELETE" });
+): Promise<Conversation> => {
+  if (!focus) return request(`${conversationPath(scope)}/focus`, { method: "DELETE" });
+  // A focus on the server carries what it reports, so Mayka need not ask. A
+  // server older than this app refuses the field, so it goes without them.
+  const facts =
+    focus.kind === "serving" || focus.kind === "sign_in" ? await serverFacts() : undefined;
+  const put = (body: AssistantFocus): Promise<Conversation> =>
+    request(`${conversationPath(scope)}/focus`, { method: "PUT", body });
+  return facts ? put({ ...focus, facts }).catch(() => put(focus)) : put(focus);
+};
 
 export const saveAssistantNotes = (scope: string, notes: string): Promise<Conversation> =>
   request(`${conversationPath(scope)}/notes`, { method: "PUT", body: { notes } });
