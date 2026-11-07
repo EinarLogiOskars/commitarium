@@ -71,7 +71,9 @@ func TestTheFocusTellsTheAssistantAWorkOrderAlreadyStarted(t *testing.T) {
 // long as the chip stays, and never takes the secret in the chat.
 func TestTheSignInFocusCarriesTheSetup(t *testing.T) {
 	service, worker := newTestService(t)
-	conversation, err := service.SetFocus(t.Context(), "prj_test", &Focus{Kind: FocusSignIn})
+	conversation, err := service.SetFocus(t.Context(), "prj_test", &Focus{
+		Kind: FocusSignIn, Facts: "Memory: 7.6 GB\x07\n\nHomelab: off",
+	})
 	if err != nil || conversation.Focus == nil || conversation.Focus.Label != "Company sign-in" {
 		t.Fatalf("focus = %+v, %v", conversation.Focus, err)
 	}
@@ -84,6 +86,8 @@ func TestTheSignInFocusCarriesTheSetup(t *testing.T) {
 		"Settings → Server → Company sign-in",
 		"user type to Internal",
 		"Never ask for the client secret in this chat",
+		"never ask the user for any of it",
+		"Memory: 7.6 GB\nHomelab: off",
 	} {
 		if !strings.Contains(instructions, want) {
 			t.Fatalf("instructions miss %q", want)
