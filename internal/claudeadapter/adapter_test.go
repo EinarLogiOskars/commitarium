@@ -267,9 +267,18 @@ func TestAdapterPublishesStructuredPlanningSubmission(t *testing.T) {
 	if err != nil {
 		t.Fatalf("start structured Claude planning turn: %v", err)
 	}
-	if _, ok := session.(worker.PreviewSession); ok {
-		t.Fatal("structured Claude session unexpectedly exposes final-message previews")
+	previewSession, ok := session.(worker.PreviewSession)
+	if !ok {
+		t.Fatal("structured Claude session does not stream its reply")
 	}
+	previews := make(chan []worker.MessagePreview, 1)
+	go func() {
+		var seen []worker.MessagePreview
+		for preview := range previewSession.Previews() {
+			seen = append(seen, preview)
+		}
+		previews <- seen
+	}()
 	events := collectEvents(session)
 	result, err := session.Wait(timeoutContext(t, 3*time.Second))
 	if err != nil || result.Summary != "Final agreed plan" {
@@ -277,13 +286,19 @@ func TestAdapterPublishesStructuredPlanningSubmission(t *testing.T) {
 	}
 	if observed := <-events; !reflect.DeepEqual(observed, []worker.Event{
 		{Type: worker.EventActivity, Text: "Claude started working."},
+		{Type: worker.EventActivity, Text: "Claude started thinking."},
 		{
 			Type: worker.EventActivity, Text: "I’ll turn the review into a concrete plan.",
 			Activity: &worker.Activity{Kind: worker.ActivityKindNarration},
 		},
+		{Type: worker.EventActivity, Text: "Claude started writing its reply."},
 		{Type: worker.EventPlanSubmitted, Text: "Final agreed plan"},
 	}) {
 		t.Fatalf("structured planning events = %+v", observed)
+	}
+	seen := <-previews
+	if len(seen) == 0 || seen[0].StreamID != "toolu_reply" || !strings.HasPrefix("Final agreed plan", seen[0].Text) {
+		t.Fatalf("reply previews = %+v", seen)
 	}
 }
 
@@ -530,7 +545,8 @@ func TestClaudeCLIHelper(t *testing.T) {
 	if (mode == "structured-plan" || mode == "structured-review" || mode == "structured-toolchain" || mode == "structured-session" || mode == "missing-structured-output") != schemaPresent {
 		os.Exit(84)
 	}
-	if slices.Contains(arguments, "--include-partial-messages") {
+	// Partial events are asked for only with a reply that has a prose field.
+	if slices.Contains(arguments, "--include-partial-messages") && !schemaPresent {
 		os.Exit(85)
 	}
 	if mode == "identity-before-init" {
@@ -621,10 +637,33 @@ func TestClaudeCLIHelper(t *testing.T) {
 			},
 		})
 	case "structured-plan":
+		partial := func(event map[string]any) {
+			helperWrite(writer, map[string]any{"type": "stream_event", "session_id": sessionID, "event": event})
+		}
+		partial(map[string]any{"type": "message_start"})
+		partial(map[string]any{"type": "content_block_start", "index": 0, "content_block": map[string]any{"type": "thinking"}})
+		partial(map[string]any{"type": "content_block_stop", "index": 0})
 		helperWrite(writer, map[string]any{
 			"type": "assistant", "session_id": sessionID,
 			"message": map[string]any{"role": "assistant", "content": []any{
+				map[string]any{"type": "thinking", "thinking": ""},
 				map[string]any{"type": "text", "text": "I’ll turn the review into a concrete plan."},
+			}},
+		})
+		partial(map[string]any{"type": "content_block_start", "index": 2, "content_block": map[string]any{
+			"type": "tool_use", "id": "toolu_reply", "name": "StructuredOutput",
+		}})
+		partial(map[string]any{"type": "content_block_delta", "index": 2, "delta": map[string]any{
+			"type": "input_json_delta", "partial_json": `{"action":"submit_plan","content":"Final agr`,
+		}})
+		partial(map[string]any{"type": "content_block_delta", "index": 2, "delta": map[string]any{
+			"type": "input_json_delta", "partial_json": `eed plan"}`,
+		}})
+		partial(map[string]any{"type": "content_block_stop", "index": 2})
+		helperWrite(writer, map[string]any{
+			"type": "assistant", "session_id": sessionID,
+			"message": map[string]any{"role": "assistant", "content": []any{
+				map[string]any{"type": "tool_use", "id": "toolu_reply", "name": "StructuredOutput", "input": map[string]any{}},
 			}},
 		})
 		helperWrite(writer, map[string]any{

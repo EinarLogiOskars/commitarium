@@ -85,14 +85,17 @@ Codex App Server supplies `item/agentMessage/delta` with `threadId`, `turnId`,
 and other narration phases never enter the preview accumulator. The item ID is
 the preview `stream_id` and is copied to the final durable event.
 
-Claude Code's `--json-schema` integration exposes structured output only on the
-terminal `result.structured_output` record, not through partial stream events.
-Commitarium therefore does not synthesize a Claude final-message preview or add
-a `stream_id` to its durable final event. Completed assistant text blocks during
-a structured turn are published as narration; only a duplicate structured JSON
-envelope is suppressed. `input_json_delta` is tool input and is never treated as
-final-response prose. This follows Anthropic's documented Agent SDK limitation:
-<https://code.claude.com/docs/en/agent-sdk/streaming-output#known-limitations>.
+Claude Code's `--json-schema` integration hands the model a `StructuredOutput`
+tool, and the terminal `result.structured_output` record stays the source of
+truth. For contracts with a prose field the adapter also passes
+`--include-partial-messages` (2026-11-07): the `input_json_delta` events of the
+`StructuredOutput` block are that reply being written, so the same extractor
+reads its prose field and the session publishes previews with the tool call's
+ID as `stream_id`. Other `input_json_delta` is tool input and is never treated
+as prose. A thinking block starting is announced as an activity ("Claude started
+thinking."), because its text stays empty. Completed assistant text blocks during
+a structured turn are still published as narration; only a duplicate structured
+JSON envelope is suppressed. The final event carries no `stream_id`.
 
 The Codex adapter coalesces updates before publication. The target cadence is
 50 ms; an unchanged or empty extracted prefix is not emitted.
@@ -122,8 +125,8 @@ The Codex adapter coalesces updates before publication. The target cadence is
 - [x] Slice 1: provider-neutral preview contract and partial-JSON prose extractor.
 - [x] Slice 2: transient frames on worker SSE, including client decoding.
 - [x] Slice 3: relay previews through ingestion and coordinator session SSE.
-- [x] Slice 4: Codex adapter emission with coalescing and an explicit Claude
-  capability fallback.
+- [x] Slice 4: Codex adapter emission with coalescing; Claude followed through
+  its `StructuredOutput` input (2026-11-07).
 - [x] Slice 5: end-to-end validation, documentation, and frontend handoff.
 
 ## Implemented backend
@@ -161,7 +164,7 @@ Verification covers:
 - Codex `item/agentMessage/delta` fixtures under `OutputSchema`, including a
   regression that narration containing an `ask` envelope emits no preview;
 - Claude standalone-text narration during structured turns, structured-envelope
-  suppression, and the absence of unsupported final-message previews;
+  suppression, and reply previews read from the `StructuredOutput` input;
 - the complete Go test suite (`go test ./...`).
 
 The provider tests use protocol-faithful local helper processes; they do not

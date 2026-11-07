@@ -4720,6 +4720,9 @@ button.danger:not(.ghost) {
     background: none;
   }
 }
+.assistant__draft {
+  opacity: 0.8;
+}
 .assistant__step {
   font-size: var(--text-sm);
   margin: 0 0 6px;

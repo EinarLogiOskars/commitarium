@@ -202,6 +202,8 @@ export interface AssistantActivity {
   started_at?: string;
   /** The automatic retry running, from 1. */
   retry?: number;
+  /** The start of her answer as she writes it, when her agent streams it. */
+  reply?: string;
 }
 
 /** What the conversation is about: a work order, the vision, or the stack. */

@@ -1,24 +1,24 @@
 import { describe, expect, it } from "vitest";
 import type { Conversation } from "../api/assistant";
-import { elapsedLabel, liveLabel, stepLabel } from "./AssistantActivity";
+import { activityLine, elapsedLabel, liveLabel, stepDetail } from "./AssistantActivity";
 
 describe("the assistant's activity line", () => {
   const reading = { label: "Reading a file", detail: "Looking at src/server/auth.ts" };
 
-  it("says the step in plain words, without paths", () => {
-    expect(stepLabel(reading, false)).toBe("Reading a file");
+  it("says what she is doing after her name", () => {
+    expect(activityLine(reading)).toBe("Mayka is reading a file");
+    expect(activityLine({ label: "Writing the reply" })).toBe("Mayka is writing the reply");
+    expect(activityLine(undefined)).toBe("Mayka is thinking…");
   });
-  it("shows what it looked at in Developer mode", () => {
-    expect(stepLabel(reading, true)).toBe("Looking at src/server/auth.ts");
-    expect(stepLabel({ label: "Writing its reply" }, true)).toBe("Writing its reply");
+  it("shows what it looked at only in Developer mode", () => {
+    expect(stepDetail(reading, true)).toBe("Looking at src/server/auth.ts");
+    expect(stepDetail(reading, false)).toBe("");
+    expect(stepDetail({ label: "Writing the reply" }, true)).toBe("");
   });
   it("says when a turn runs again", () => {
-    expect(stepLabel({ label: "Fixing its reply", retry: 1 }, false)).toBe(
-      "Fixing its reply · trying again",
+    expect(activityLine({ label: "Fixing the reply", retry: 1 })).toBe(
+      "Mayka is fixing the reply · trying again",
     );
-  });
-  it("is empty without a step", () => {
-    expect(stepLabel(undefined, true)).toBe("");
   });
   it("counts how long the turn has run", () => {
     const now = Date.parse("2026-10-28T12:03:05Z");
