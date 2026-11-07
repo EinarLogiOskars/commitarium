@@ -36,6 +36,14 @@ type session struct {
 	shutdownTimeout   time.Duration
 	events            chan worker.Event
 	done              chan struct{}
+	// previews carries the reply as Claude writes it: the prose field of its
+	// StructuredOutput call, read from partial stream events. Only the
+	// translating goroutine adds to previewBuffer and the open blocks.
+	previews      chan worker.MessagePreview
+	previewBuffer *worker.MessagePreviewAccumulator
+	// replyBlocks are the stream's open StructuredOutput blocks, by index,
+	// with their tool call ID.
+	replyBlocks map[int]string
 
 	mu            sync.Mutex
 	finished      bool
@@ -73,6 +81,9 @@ func newSession(
 		shutdownTimeout: shutdownTimeout,
 		events:          make(chan worker.Event, eventBuffer),
 		done:            make(chan struct{}),
+		previews:        make(chan worker.MessagePreview, 1),
+		previewBuffer:   worker.NewMessagePreviewAccumulator(outputContract, messagePreviewInterval),
+		replyBlocks:     map[int]string{},
 		tools:           make(map[string]pendingTool),
 	}
 }
@@ -93,6 +104,15 @@ func (session *session) Events() <-chan worker.Event {
 		return nil
 	}
 	return session.events
+}
+
+// Previews streams the reply while Claude writes it, for contracts with a
+// prose field.
+func (session *session) Previews() <-chan worker.MessagePreview {
+	if session == nil {
+		return nil
+	}
+	return session.previews
 }
 
 func (session *session) Send(ctx context.Context, command worker.Command) error {
@@ -424,7 +444,13 @@ func (usage *resultUsage) tokenUsage(billing worker.Billing, cost *float64) *wor
 }
 
 type partialStreamEvent struct {
-	Type  string `json:"type"`
+	Type         string `json:"type"`
+	Index        int    `json:"index"`
+	ContentBlock struct {
+		Type string `json:"type"`
+		ID   string `json:"id"`
+		Name string `json:"name"`
+	} `json:"content_block"`
 	Delta struct {
 		Type        string `json:"type"`
 		Text        string `json:"text"`
@@ -536,7 +562,7 @@ func (session *session) translate(raw []byte) ([]worker.Event, *worker.Result, e
 		if err := json.Unmarshal(message.Event, &partial); err != nil {
 			return nil, nil, fmt.Errorf("%w: decode stream event", ErrProtocol)
 		}
-		return nil, nil, nil
+		return session.partialEvents(partial), nil, nil
 	case "rate_limit_event":
 		// Advisory: kept to tell a failed turn's reached limit and its reset.
 		var info rateLimitInfo
@@ -605,12 +631,74 @@ func (session *session) assistantEvents(blocks []contentBlock) []worker.Event {
 			session.mu.Lock()
 			session.tools[id] = tool
 			session.mu.Unlock()
-			if tool.Command == "" && tool.Path == "" {
+			// With partial events on, the reply's start was announced as it began.
+			announced := name == structuredOutputTool && worker.PreviewProseField(session.outputContract) != ""
+			if tool.Command == "" && tool.Path == "" && !announced {
 				events = append(events, worker.Event{Type: worker.EventActivity, Text: startedToolText(name, tool.Target)})
 			}
 		}
 	}
 	return events
+}
+
+// messagePreviewInterval bounds how often the reply preview updates.
+const messagePreviewInterval = 50 * time.Millisecond
+
+// partialEvents reads Claude Code's partial stream (asked for only when the
+// contract has a prose field): a thinking block starting is announced, since
+// its text stays hidden, and the StructuredOutput call's input, which is the
+// reply, becomes previews as it is written. Everything else in it is left to
+// the completed records.
+func (session *session) partialEvents(partial partialStreamEvent) []worker.Event {
+	switch partial.Type {
+	case "message_start":
+		clear(session.replyBlocks)
+	case "content_block_start":
+		switch partial.ContentBlock.Type {
+		case "thinking", "redacted_thinking":
+			return []worker.Event{{Type: worker.EventActivity, Text: "Claude started thinking."}}
+		case "tool_use":
+			if partial.ContentBlock.Name == structuredOutputTool && strings.TrimSpace(partial.ContentBlock.ID) != "" {
+				session.replyBlocks[partial.Index] = partial.ContentBlock.ID
+				return []worker.Event{{Type: worker.EventActivity, Text: startedToolText(structuredOutputTool, "")}}
+			}
+		}
+	case "content_block_delta":
+		id, ok := session.replyBlocks[partial.Index]
+		if ok && partial.Delta.Type == "input_json_delta" {
+			session.offerPreview(id, partial.Delta.PartialJSON)
+		}
+	case "content_block_stop":
+		delete(session.replyBlocks, partial.Index)
+	}
+	return nil
+}
+
+// offerPreview keeps only the newest preview waiting: a reader that falls
+// behind skips to the latest text rather than holding up the stream.
+func (session *session) offerPreview(streamID, delta string) {
+	preview, emit := session.previewBuffer.Add(streamID, delta, time.Now().UTC())
+	if !emit {
+		return
+	}
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	if session.finished {
+		return
+	}
+	select {
+	case session.previews <- preview:
+		return
+	default:
+	}
+	select {
+	case <-session.previews:
+	default:
+	}
+	select {
+	case session.previews <- preview:
+	default:
+	}
 }
 
 func isStructuredEnvelope(contract worker.OutputContract, text string) bool {
@@ -978,9 +1066,14 @@ func (session *session) complete(result worker.Result, err error) {
 	session.result = result
 	session.waitErr = err
 	close(session.events)
+	close(session.previews)
 	close(session.done)
 	session.mu.Unlock()
 }
+
+// structuredOutputTool is the tool Claude Code gives the model for a
+// --json-schema reply: calling it is writing the reply.
+const structuredOutputTool = "StructuredOutput"
 
 // startedToolText announces a tool starting, naming its target when it has
 // one; the assistant's activity line reads these (conversations).
@@ -999,6 +1092,12 @@ func startedToolText(name, target string) string {
 		return "Claude started a web request: " + target + "."
 	}
 	switch name {
+	case structuredOutputTool:
+		return "Claude started writing its reply."
+	case "TodoWrite":
+		return "Claude updated its plan."
+	case "ToolSearch":
+		return "Claude started looking for a tool."
 	case "Edit", "Write", "NotebookEdit":
 		return "Claude started a file change."
 	case "WebSearch", "WebFetch":
