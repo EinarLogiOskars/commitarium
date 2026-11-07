@@ -516,6 +516,10 @@ func run(ctx context.Context, coordinatorConfig config) error {
 				return false
 			},
 		}
+		// A run or work order that changes wakes the watcher at once; its
+		// tick stays as the safety net.
+		executionService.OnRunChange(projectAssistant.Nudge)
+		workflowService.OnFeatureEvent(projectAssistant.Nudge)
 		assistant, err := toolchain.NewAssistant(
 			coordinatorConfig.toolchainRoot, coordinatorConfig.workspaceRoot, projectService, toolchainService,
 			func(agentID string) (workerhttp.Service, error) { return agentWorkers.Client(agentID) },

@@ -507,6 +507,11 @@ type BlockerReader interface {
 	LatestAgentMessages(ctx context.Context, runID string, limit int) ([]execution.AgentMessage, error)
 }
 
+// lastTurnReader tells what the agent did in a run's last turn.
+type lastTurnReader interface {
+	LastTurn(ctx context.Context, runID string) (execution.TurnSummary, bool, error)
+}
+
 // blockerNote describes a blocked run in full for recovery: the blocker's
 // kind, check, fingerprint, and detail, the agents' last three messages, and
 // the recoveries tried, marking those on the same failure.
@@ -524,6 +529,15 @@ func (describer StateDescriber) blockerNote(ctx context.Context, runID string) s
 		builder.WriteString(", check \"" + blocker.Check + "\"")
 	}
 	builder.WriteString(", fingerprint " + blocker.Fingerprint + "\n    Detail: " + clip(blocker.Detail, 2048))
+	if turns, ok := describer.Blockers.(lastTurnReader); ok {
+		if turn, found, err := turns.LastTurn(ctx, runID); err == nil && found {
+			builder.WriteString(fmt.Sprintf("\n    The %s's last turn: %s, %d steps (commands, edits, or notes)",
+				turn.Role, turn.Duration.Round(time.Second), turn.Steps))
+			if turn.HasTokens {
+				builder.WriteString(fmt.Sprintf(", %d tokens written", turn.OutputTokens))
+			}
+		}
+	}
 	if messages, err := describer.Blockers.LatestAgentMessages(ctx, runID, 3); err == nil && len(messages) > 0 {
 		builder.WriteString("\n    The agents' last messages:")
 		for _, message := range messages {

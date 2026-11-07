@@ -1,6 +1,9 @@
 package workflow
 
-import "sync"
+import (
+	"sync"
+	"sync/atomic"
+)
 
 const defaultSubscriberBuffer = 16
 
@@ -9,6 +12,8 @@ type eventBroker struct {
 	bufferSize int
 	nextID     uint64
 	byFeature  map[string]map[uint64]chan Event
+	// published hears of every event, whatever its work order.
+	published atomic.Pointer[func()]
 }
 
 func newEventBroker(bufferSize int) *eventBroker {
@@ -40,6 +45,9 @@ func (b *eventBroker) subscribe(featureID string) (<-chan Event, func()) {
 }
 
 func (b *eventBroker) publish(event Event) {
+	if f := b.published.Load(); f != nil {
+		defer (*f)()
+	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
