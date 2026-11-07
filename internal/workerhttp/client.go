@@ -87,7 +87,9 @@ func NewClient(config ClientConfig) (*Client, error) {
 
 	httpClient := config.HTTPClient
 	if httpClient == nil {
-		httpClient = http.DefaultClient
+		// Its own connections, so dropping them (forgetConnections) touches
+		// no other worker's.
+		httpClient = &http.Client{Transport: http.DefaultTransport.(*http.Transport).Clone()}
 	}
 	clientCopy := &http.Client{
 		Transport: httpClient.Transport,
@@ -355,9 +357,13 @@ func (client *Client) doWithTimeout(
 
 	response, err := client.httpClient.Do(request)
 	if err != nil {
+		client.forgetConnections()
 		return 0, responseMetadata{}, fmt.Errorf("%w: %w", ErrRequestFailed, err)
 	}
 	defer response.Body.Close()
+	if response.StatusCode == http.StatusUnauthorized {
+		client.forgetConnections()
+	}
 	if response.StatusCode >= http.StatusMultipleChoices && response.StatusCode < http.StatusBadRequest {
 		return response.StatusCode, responseMetadata{}, fmt.Errorf(
 			"%w: worker returned HTTP %d",
@@ -527,4 +533,12 @@ func validateClientBaseURL(value string) (string, error) {
 	}
 	parsed.Path = ""
 	return strings.TrimSuffix(parsed.String(), "/"), nil
+}
+
+// forgetConnections drops the client's idle connections. A worker that was
+// recreated answers at a new address under the same name, and a connection
+// kept from the swap can reach another container that refuses the token; the
+// next request dials again and finds the worker that is there now.
+func (client *Client) forgetConnections() {
+	client.httpClient.CloseIdleConnections()
 }
