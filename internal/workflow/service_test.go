@@ -398,3 +398,17 @@ func TestServiceRunsAFailedAcceptanceTestAgain(t *testing.T) {
 		}
 	}
 }
+
+func TestServiceTellsTheWatcherOfEveryEvent(t *testing.T) {
+	expected := validTestEvent(t)
+	service := NewService(&recordingWorkflowStore{transitionResult: expected})
+	heard := 0
+	service.OnFeatureEvent(func() { heard++ })
+	if _, err := service.TransitionFeature(t.Context(), expected.AggregateID, feature.StatePlanning,
+		expected.Actor, expected.IdempotencyKey); err != nil {
+		t.Fatalf("transition feature: %v", err)
+	}
+	if heard != 1 {
+		t.Fatalf("heard %d events, want 1", heard)
+	}
+}
