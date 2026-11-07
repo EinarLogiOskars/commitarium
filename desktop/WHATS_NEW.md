@@ -1,0 +1,5 @@
+- **Several domains per server.** Serve apps on more than one domain from the same server, each with its own apps page and company sign-in, all from one authentik.
+- **Websites at the bare domain.** An app can live at `example.com` itself, with `www.example.com` sending people there.
+- **More than one address for an app.** For example a site in Icelandic on `.is` and in English on `.com`; the app sees which address was opened.
+- **Mayka sets up the server with you.** She proposes adding a domain, setting up authentik, who can open an app, and Homelab mode as cards you approve.
+- **Clearer update notes.** This window now says what changed.

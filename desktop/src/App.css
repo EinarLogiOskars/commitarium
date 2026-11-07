@@ -309,8 +309,6 @@ progress {
   border-radius: 6px;
   background: var(--hover);
   font-size: var(--text-base);
-  white-space: pre-wrap;
-  font-family: inherit;
 }
 .update__blockers {
   list-style: none;
