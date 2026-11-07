@@ -1,16 +1,19 @@
-# Several Domains per Server: Implementation Plan (0.12.1)
+# Several Domains per Server: Implementation Plan (0.13.0)
 
-**Status:** proposal written 2026-11-07 from what was agreed on 2026-11-05 and
-2026-11-06; not started. Needs the user's go-ahead. Builds on
+**Status:** agreed 2026-11-07 (for 0.13.0), with bare domains, extra
+addresses for one app, and the answers to the open questions; building. Builds on
 [PUBLISHING_PLAN.md](PUBLISHING_PLAN.md),
 [COMPANY_SIGN_IN_PLAN.md](COMPANY_SIGN_IN_PLAN.md),
 [APPS_PAGE_PLAN.md](APPS_PAGE_PLAN.md) and [HOMELAB_PLAN.md](HOMELAB_PLAN.md).
 It also carries Mayka's approval cards for server setup. They touch the same
 settings, and her reading of server facts landed separately.
 
-One server should hold apps at several domains: say `einarlogi.is` for
-personal apps and `commitarium.com` for the landing page and docs, from the
-same VPS.
+One server should hold apps at several domains, from the same VPS:
+- `commitarium.com`: the commitarium-website project, at the bare domain
+  (and `www`).
+- `einarlogi.is`: the personal website at the bare domain, in Icelandic, and
+  personal apps on subdomains.
+- `einarlogi.com`: the same personal website, in English.
 
 ## What was decided
 
@@ -18,8 +21,17 @@ same VPS.
   wildcard record, or a record per address). Today's single domain becomes
   the first in the list.
 - **Deploying picks a name and a domain.** An empty name means the bare
-  domain, for landing pages. Names are unique per domain, so
+  domain, for websites. Names are unique per domain, so
   `notes.einarlogi.is` and `notes.commitarium.com` can both exist.
+- **A bare-domain app also answers on `www.`** and redirects it to the bare
+  address. This is on by default.
+- **An app can have extra addresses** besides its main one, on any of the
+  server's domains. They all reach the same running app. The personal website
+  lives at `einarlogi.is` with `einarlogi.com` as an extra address. It picks
+  its language from the address it was opened on (Next.js i18n `domains`, or
+  the `Host` header), so Commitarium only passes the original host through.
+  Two deployments of one project, or redirecting `.com` to `/en`, were
+  rejected: they drift apart, or change the URLs.
 - **One apps page per domain**, each with its own access and its own name
   (`apps` by default).
 - **Company sign-in per domain.** A cookie can't cross domains, so each
@@ -56,6 +68,16 @@ between them has to hold at sign-in.
   everything, as today. Anyone who needs their own admin should have their
   own server, and the plan says so in Settings next to the second domain.
 
+## DNS
+- A wildcard record (`*.<domain>`) does not cover the bare domain, so each
+  domain also needs a record for `@` once it has a bare-domain app, and one
+  for `www` when that redirect is on. The DNS check lists what is missing,
+  per address.
+- With Cloudflare, the records are **DNS only (grey cloud)**. Caddy gets
+  each address's certificate itself, and Cloudflare's proxy can stand in the
+  way of that and of the DNS check. Proxied records may be supported later.
+  Mayka gives the records to add; the user adds them at their provider.
+
 ## Data
 
 `publishing.json` today holds one `domain`, `records`, `sign_in`,
@@ -68,14 +90,18 @@ domains: [
     apps_page: AppsPage? },
   { name: "commitarium.com", records: "each_name", ... },
 ]
-apps: { <project_id>: { domain: "einarlogi.is", name: "notes", ... } }
+apps: { <project_id>: { domain: "einarlogi.is", name: "notes",
+                        www: true,                       // bare name only
+                        aliases: [{ domain: "einarlogi.com", name: "" }],
+                        ... } }
 ```
 
 - The first read of an old file moves `domain` and its settings into
   `domains[0]`. That is a few lines, not a migration path: the file is the
   server's own.
-- An app keeps one address. Moving it to another domain is a change of
-  address, done in the deploy card.
+- An app has one main address and any number of extra addresses. Moving it
+  to another domain is a change of its main address, done in the deploy
+  card. Every address is unique on the server.
 - authentik stays one install, at `auth.<first domain>`. It gets one
   application, one provider and one group per domain that uses it.
 
@@ -91,7 +117,10 @@ apps: { <project_id>: { domain: "einarlogi.is", name: "notes", ... } }
 - `/v1/publishing` returns `domains: [...]`. The old `domain` field stays
   for one release, set to the first domain, for older apps.
 
-### M2: Deploy picks a domain (app)
+### M2: Deploy picks a domain, extra addresses, www (host and app)
+- The host routes every address of an app (main, extra, and `www`) to its
+  container, passing the original `Host`; `www` redirects to the bare
+  address.
 - The deploy card gets a domain picker when there is more than one. It shows
   the address it will get, and the name field may be left empty for the
   bare domain (with a line on what that means: the domain's own website).
@@ -137,23 +166,21 @@ steps, never asks for logins), authentik's admin account, and adding people.
 ## Tests
 - Host: two domains get two site blocks and two gates; a name taken on one
   domain is free on the other; the bare name works; an old one-domain file
-  reads as `domains[0]`.
+  reads as `domains[0]`; an extra address and `www` reach the same app, with
+  the original `Host`; one address cannot be taken twice.
 - Host: each domain's authentik application is bound to its own group, and
   the two gates have different client IDs and cookie secrets.
 - App: the deploy picker and the grouped list; with one domain nothing
   changes on screen.
 - Live, on a test VPS with two test domains:
-  - deploy an app to each, and one at a bare domain
+  - deploy an app to each, and one at a bare domain with `www`
+  - one app at two domains answers with each address's `Host`
   - sign in at one domain and confirm the other domain still asks
   - a user in only one domain's group is refused at the other domain
   - approve each new card once
 
-## Open questions for the user
-1. Should the second domain's authentik live at `auth.<first domain>` for
-   everyone (proposed), or should each domain get its own `auth.<domain>`
-   address pointing at the same authentik?
-2. With one shared server, is the owner seeing every domain fine? The
-   proposal says so in Settings, and points to separate servers for anyone
-   who needs their own admin.
-3. Should the cards (M5) ship with 0.12.1, or follow in 0.12.2 once
-   multi-domain is tested?
+## Answered (2026-11-07)
+1. authentik lives at one address, `auth.<first domain>`, for every domain
+   that uses it. A public website needs no sign-in at all.
+2. The owner sees every domain. Settings says so next to the second domain.
+3. Mayka's cards (M5) ship with multi-domain in 0.13.0.
