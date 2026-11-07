@@ -1,6 +1,6 @@
 [package]
 name = "commitarium-host"
-version = "0.12.1"
+version = "0.13.0-rc.1"
 description = "Commitarium's trusted host, beside the Docker stack (ADR-040)"
 authors = ["Einar Logi Óskarsson"]
 edition = "2021"
