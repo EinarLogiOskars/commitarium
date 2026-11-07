@@ -110,17 +110,34 @@ export interface Deployment {
 
 export type Access = "private" | "public" | "company";
 
+/** An address under one of the server's domains; the empty name is the
+ * domain itself. */
+export interface AppAddress {
+  domain: string;
+  name: string;
+}
+
 export interface PublishedApp {
   project_id: string;
+  /** Its main address's domain; empty only on the private network. */
+  domain: string;
+  /** Its main address's name; empty for the domain itself (a website). */
   name: string;
   access: Access;
+  /** Its main address. */
   url: string;
+  /** Every address, its main one first. */
+  urls: string[];
+  /** For an app at a bare domain: whether www. sends people to it. */
+  www: boolean;
+  /** Its extra addresses, which reach the same running app. */
+  aliases: (AppAddress & { url: string })[];
   live: boolean;
   /** For company sign-in: the groups that may open it; none means anyone at the company. */
   groups: string[];
   /** Whether the apps page lists it. */
   listed: boolean;
-  /** With a record for each address: what is wrong with its record, when it does not point here. */
+  /** What is wrong with its records, when an address does not point here. */
   record_problem: string | null;
 }
 
@@ -150,6 +167,8 @@ export interface ConnectSignIn {
   client_secret: string;
   scopes?: string;
   groups_claim?: string;
+  /** The domain it signs people in for; the first when left out. */
+  domain?: string;
 }
 
 /** Who reaches the apps (HOMELAB_PLAN.md): anyone on the internet at the
@@ -175,12 +194,29 @@ export interface TailscaleStatus {
   https_settings: string;
 }
 
+/** One of the server's domains, with what is set up on it. */
+export interface DomainShown {
+  name: string;
+  records: Records;
+  /** Its company sign-in, when one is connected. */
+  sign_in: SignInProvider | null;
+  /** Whether that sign-in is this server's authentik. */
+  authentik: boolean;
+  /** Its apps page, when it is on. */
+  apps_page: AppsPage | null;
+}
+
 export interface PublishingOverview {
+  /** Every domain, the first one first; empty on a server without one. */
+  domains: DomainShown[];
+  /** The first domain, and below its sign-in, apps page and records, as
+   * servers before several domains had them. */
   domain: string | null;
   server_address: string | null;
   apps: PublishedApp[];
   sign_in: SignInProvider | null;
   authentik: AuthentikStatus;
+  /** The first domain's apps page; in Homelab, the one on the private network. */
   apps_page: AppsPage | null;
   reach: Reach;
   tailscale: TailscaleStatus | null;
@@ -207,42 +243,108 @@ export const deploy = (projectId: string, commitId?: string): Promise<PreviewSta
 export const stopDeployment = (projectId: string): Promise<void> =>
   hostPost("/v1/deployments/stop", { project_id: projectId });
 /** A server older than this app leaves out what it does not have yet, so
- * those parts read as off, not missing. */
-export const publishing = async (): Promise<PublishingOverview> => {
-  const found = await hostGet<Partial<PublishingOverview>>("/v1/publishing");
+ * those parts read as off, not missing. One from before several domains
+ * reads as its one domain, and every app at it. */
+export const publishing = async (): Promise<PublishingOverview> =>
+  withDefaults(await hostGet<Partial<PublishingOverview>>("/v1/publishing"));
+
+export function withDefaults(found: Partial<PublishingOverview>): PublishingOverview {
+  const domain = found.domain ?? null;
+  const records = found.records ?? "wildcard";
+  const sign_in = found.sign_in ?? null;
+  const apps_page = found.apps_page ?? null;
+  const authentik = found.authentik ?? {
+    installed: false,
+    running: false,
+    admin_url: null,
+    admin_user: "akadmin",
+    memory_total_bytes: null,
+    memory_needed_gb: 3,
+  };
+  const domains =
+    found.domains ??
+    (domain
+      ? [
+          {
+            name: domain,
+            records,
+            sign_in,
+            // Before several domains, a connected provider was authentik
+            // exactly when the server ran it.
+            authentik: sign_in !== null && authentik.installed,
+            apps_page: found.reach === "private" ? null : apps_page,
+          },
+        ]
+      : []);
+  const first = domains[0]?.name ?? "";
   return {
     ...found,
-    domain: found.domain ?? null,
+    domains,
+    domain,
     server_address: found.server_address ?? null,
-    apps: (found.apps ?? []).map((app) => ({ ...app, listed: app.listed ?? true })),
-    sign_in: found.sign_in ?? null,
-    apps_page: found.apps_page ?? null,
+    apps: (found.apps ?? []).map((app) => ({
+      ...app,
+      domain: app.domain ?? first,
+      urls: app.urls ?? (app.url ? [app.url] : []),
+      www: app.www ?? false,
+      aliases: app.aliases ?? [],
+      listed: app.listed ?? true,
+    })),
+    sign_in,
+    authentik,
+    apps_page,
     reach: found.reach ?? "internet",
     tailscale: found.tailscale ?? null,
-    records: found.records ?? "wildcard",
+    records,
     placement: found.placement ?? null,
-  } as PublishingOverview;
-};
+  };
+}
+
+/** Only the named domain, so a server from before several domains, which
+ * knows one, keeps working. */
+const onDomain = (domain?: string | null) => (domain ? { domain } : {});
+
+/** Sets the first domain, or renames it: its apps move with it. */
 export const setDomain = (domain: string, records: Records = "wildcard"): Promise<void> =>
   hostPost("/v1/publishing/domain", { domain, records });
-/** Lets go of the server's domain; refused while apps or sign-in use it. */
-export const removeDomain = (): Promise<void> => hostPost("/v1/publishing/remove-domain");
+/** Adds another domain; refused until its wildcard record points here, with
+ * one. */
+export const addDomain = (domain: string, records: Records = "wildcard"): Promise<void> =>
+  hostPost("/v1/publishing/add-domain", { domain, records });
+/** Lets go of a domain; refused, with why, while apps, the apps page,
+ * sign-in or authentik use it. */
+export const removeDomain = (domain?: string): Promise<void> =>
+  hostPost("/v1/publishing/remove-domain", onDomain(domain));
 export const setPlacement = (placement: Placement): Promise<void> =>
   hostPost("/v1/publishing/placement", { placement });
 /** Tells the Server settings that publishing changed, so each part reads it again. */
 export const PUBLISHING_CHANGED = "commitarium:publishing-changed";
+
+/** Where an app is published: each part left out stays as it is, or, for a
+ * new app, the first domain with www on. */
+export interface Placing {
+  domain?: string;
+  /** For a bare-domain app: whether www. sends people to it. */
+  www?: boolean;
+  aliases?: AppAddress[];
+}
+
 /** A private app needs a password the first time; the user chooses it. */
 export const publishApp = (
   projectId: string,
   name: string,
   access: Access,
   password?: string,
-): Promise<{ url: string }> =>
+  placing: Placing = {},
+): Promise<{ url: string; urls?: string[] }> =>
   hostPost("/v1/publishing/publish", {
     project_id: projectId,
     name,
     access,
     password: password || null,
+    ...onDomain(placing.domain),
+    ...(placing.www === undefined ? {} : { www: placing.www }),
+    ...(placing.aliases === undefined ? {} : { aliases: placing.aliases }),
   });
 export const setAppPassword = (projectId: string, password: string): Promise<void> =>
   hostPost("/v1/publishing/password", { project_id: projectId, password });
@@ -255,33 +357,41 @@ export const revealAppPassword = (projectId: string): Promise<string | null> =>
 export const unpublishApp = (projectId: string): Promise<void> =>
   hostPost("/v1/publishing/unpublish", { project_id: projectId });
 /** The server checks the provider answers before keeping it. */
-export const connectSignIn = (provider: ConnectSignIn): Promise<SignInProvider> =>
-  hostPost("/v1/publishing/sign-in", provider);
-/** Takes minutes: authentik's images, then its first start. */
-export const installAuthentik = (): Promise<SignInProvider> =>
-  hostPost("/v1/publishing/authentik/install");
+export const connectSignIn = ({ domain, ...provider }: ConnectSignIn): Promise<SignInProvider> =>
+  hostPost("/v1/publishing/sign-in", { ...provider, ...onDomain(domain) });
+/** Takes minutes: authentik's images, then its first start. On a domain
+ * other than the one it lives at, it connects that domain to it. */
+export const installAuthentik = (domain?: string): Promise<SignInProvider> =>
+  hostPost("/v1/publishing/authentik/install", onDomain(domain));
 export const authentikPassword = (): Promise<string> =>
   hostPost("/v1/publishing/authentik/password");
 /** Refused while an app still uses company sign-in. */
-export const disconnectSignIn = (): Promise<void> => hostPost("/v1/publishing/sign-in/disconnect");
+export const disconnectSignIn = (domain?: string): Promise<void> =>
+  hostPost("/v1/publishing/sign-in/disconnect", onDomain(domain));
 export const setAppGroups = (projectId: string, groups: string[]): Promise<void> =>
   hostPost("/v1/publishing/groups", { project_id: projectId, groups });
-/** Turns the apps page on with who may open it, or off with null. A password
- * page needs a password the first time. */
+/** Turns a domain's apps page on with who may open it, or off with null. A
+ * password page needs a password the first time. */
 export const setAppsPage = (
   access: Access | null,
   password?: string,
   name?: string,
+  domain?: string,
 ): Promise<void> =>
-  hostPost("/v1/publishing/apps-page", { access, password: password || null, name: name || null });
+  hostPost("/v1/publishing/apps-page", {
+    access,
+    password: password || null,
+    name: name || null,
+    ...onDomain(domain),
+  });
 /** Every app's address changes: the app asks first. */
 export const setReach = (reach: Reach): Promise<void> =>
   hostPost("/v1/publishing/reach", { reach });
 /** Rejects with why the apps page could not live at this name. */
-export const checkAppsPageName = (name: string): Promise<void> =>
-  hostPost("/v1/publishing/apps-page/check", { name });
-export const revealAppsPagePassword = (): Promise<string | null> =>
-  hostPost("/v1/publishing/apps-page/reveal");
+export const checkAppsPageName = (name: string, domain?: string): Promise<void> =>
+  hostPost("/v1/publishing/apps-page/check", { name, ...onDomain(domain) });
+export const revealAppsPagePassword = (domain?: string): Promise<string | null> =>
+  hostPost("/v1/publishing/apps-page/reveal", onDomain(domain));
 export const setListed = (projectId: string, listed: boolean): Promise<void> =>
   hostPost("/v1/publishing/listed", { project_id: projectId, listed });
 

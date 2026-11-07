@@ -95,6 +95,24 @@ func TestTheSignInFocusCarriesTheSetup(t *testing.T) {
 	}
 }
 
+// A server's facts keep several domains and their apps whole, and are cut
+// only past what any server reports.
+func TestServerFactsKeepSeveralDomains(t *testing.T) {
+	line := "Domain: einarlogi.is, DNS as one wildcard record; company sign-in authentik on this server; " +
+		"apps page on, behind company sign-in, at apps.einarlogi.is"
+	several := strings.TrimSuffix(strings.Repeat(line+"\n", 18), "\n")
+	if len(several) <= 1200 || len(several) > maxFocusFacts {
+		t.Fatalf("the test's facts are %d bytes", len(several))
+	}
+	if kept := cleanFacts(several); kept != several {
+		t.Fatalf("facts were cut to %d bytes", len(kept))
+	}
+	if kept := cleanFacts(strings.Repeat(several+"\n", 2)); len(kept) > maxFocusFacts+len("…") ||
+		!strings.HasSuffix(kept, "…") {
+		t.Fatalf("too many facts were kept: %d bytes", len(kept))
+	}
+}
+
 // A chat outside any project may be focused on the user's server, such as
 // serving their apps and their DNS, but not on a project's item.
 func TestAChatOutsideProjectsMayFocusOnTheServer(t *testing.T) {

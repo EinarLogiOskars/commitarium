@@ -46,8 +46,9 @@ type Focus struct {
 	Facts string `json:"facts,omitempty"`
 }
 
-// maxFocusFacts bounds a server focus's facts.
-const maxFocusFacts = 1200
+// maxFocusFacts bounds a server focus's facts: room for several domains,
+// each with its sign-in and apps page, and every app's addresses.
+const maxFocusFacts = 3000
 
 // cleanFacts keeps the facts' lines, without control characters, bounded.
 func cleanFacts(facts string) string {
