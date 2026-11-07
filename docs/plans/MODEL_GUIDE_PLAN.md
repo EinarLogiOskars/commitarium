@@ -77,7 +77,6 @@ is updated with releases. Draft contents:
 | `claude-fable-5-1` | Premium | Hardest design and debugging; approval first |
 | `gpt-6-astra` | Premium | OpenAI's top tier; approval first |
 | `claude-opus-5-5` | Frontier | Best planner and plan reviewer; tops Terminal-Bench 4.0 |
-| `claude-opus-4-8` | Frontier | Previous Opus; still strong, prefer Opus 5.5 |
 | `claude-sonnet-5-5` | Strong | Near Opus on implementation and review at lower cost |
 | `gpt-6.1-sol` | Strong | Good value lead and reviewer; weaker on long terminal tasks |
 | `claude-haiku-5-5` | Light | Mechanical changes only |
@@ -87,6 +86,7 @@ is updated with releases. Draft contents:
 | `claude-haiku-4-5-20251001` | Avoid | Superseded by Haiku 5.5 |
 | `gpt-6-sol` | Avoid | Superseded by 6.1 Sol at the same price |
 | `gpt-5.6-sol` | Avoid | Superseded by 6.1 Sol: stronger at agentic coding, half the price |
+| `claude-opus-4-8` | Avoid | Superseded by Opus 5.5, which is stronger and cheaper ($4/$20 against $5/$25) |
 | `gpt-6-luna` | Avoid | Gave up on agent work without trying (2026-10-31, 2026-11-07); replaced by 6.1 Terra |
 | `gpt-5.6-terra`, `gpt-5.6-luna` | Avoid | Previous generation |
 
