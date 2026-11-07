@@ -958,7 +958,7 @@ function Address({
           <span>
             {place.name.trim()
               ? `They sign in with the username ${place.name.trim().toLowerCase()}.`
-              : "They sign in with an empty username."}
+              : `They sign in with the username ${place.domain}.`}
           </span>
         </label>
       )}

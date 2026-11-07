@@ -1847,7 +1847,14 @@ fn app_route(
         ));
     }
     if let (Access::Private, Some(hash)) = (route.access, &route.password_hash) {
-        handle.push(basic_auth(&route.name, hash));
+        // A website at the bare domain has no name: people sign in as the
+        // domain itself.
+        let user = if route.name.is_empty() {
+            &route.domain
+        } else {
+            &route.name
+        };
+        handle.push(basic_auth(user, hash));
     }
     if route.listed && !page_origins.is_empty() {
         handle.insert(1, framed_by(page_origins));
