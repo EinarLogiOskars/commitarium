@@ -11,6 +11,7 @@ import {
   onExitConfirmationRequested,
   restartApp,
   type BackupUnderway,
+  type ExitConfirmationRequested,
 } from "./ipc";
 import { AppSettings } from "./views/AppSettings";
 import { ExitConfirm } from "./views/ExitConfirm";
@@ -83,7 +84,7 @@ function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [showUpdate, setShowUpdate] = useState(false);
   // Set while the native layer holds a quit, waiting for this answer.
-  const [exitPrompt, setExitPrompt] = useState<{ timeoutMs: number } | null>(null);
+  const [exitPrompt, setExitPrompt] = useState<ExitConfirmationRequested | null>(null);
   // A work order to open once the workspace for `projectId` is mounted, or in
   // Developer mode the chat shell. The nonce lets the same item be re-opened
   // after the user navigates away.
@@ -141,7 +142,6 @@ function App() {
 
   // Only poll from inside the workspace: the launcher has nowhere to show it.
   const attention = useAttention(entered && reachable);
-  const refreshAttention = attention.refresh;
   // Signed desktop updates: check once the stack is usable; the install flow
   // uses the live `running` count to know when a restart is safe.
   const update = useDesktopUpdate(entered && reachable, attention.running.length);
@@ -200,17 +200,16 @@ function App() {
   }, [checkHealth]);
 
   // Registered regardless of which screen is showing: a quit can arrive at any
-  // point, including while the stack is still coming up. The snapshot is
-  // re-read on the spot, so the dialog never claims nothing is running on the
-  // strength of a poll from 45 seconds ago.
+  // point, including while the stack is still coming up. The app asks only
+  // when agents work on this computer, and sends that list itself, read on
+  // the spot from this computer's coordinator even while a server is shown.
   useEffect(() => {
     const listener = onExitConfirmationRequested((payload) => {
-      refreshAttention();
-      setExitPrompt({ timeoutMs: payload.timeout_ms });
+      setExitPrompt(payload);
       void exitPromptShown();
     });
     return () => void listener.then((unlisten) => unlisten());
-  }, [refreshAttention]);
+  }, []);
 
   // Boot only reaches "ready" once the coordinator answers, so go straight into
   // the workspace — seeding `reachable` to avoid a transient "unreachable" flash
@@ -225,8 +224,9 @@ function App() {
 
   const exitDialog = exitPrompt && (
     <ExitConfirm
-      running={attention.running}
-      timeoutMs={exitPrompt.timeoutMs}
+      running={exitPrompt.running}
+      serverShown={exitPrompt.server_shown}
+      timeoutMs={exitPrompt.timeout_ms}
       onResolved={() => setExitPrompt(null)}
     />
   );

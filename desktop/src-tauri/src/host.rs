@@ -387,13 +387,10 @@ pub(crate) fn wind_down(app: &AppHandle) {
     host.stop();
 }
 
-/// The first half of quitting with "stop the stack": logins, then the stack.
-/// Stopping the stack needs nothing of the host's, so that still happens with
-/// the host gone, by a plain Docker call.
+/// The first half of quitting: logins, then the stack. Stopping the stack
+/// needs nothing of the host's, so that still happens with the host gone (or
+/// never started, when the app opened on a server), by a plain Docker call.
 pub(crate) fn stop_logins_and_stack(app: &AppHandle) {
-    if !local_started(app) {
-        return;
-    }
     let stopped = app
         .state::<Host>()
         .local_running()
@@ -403,9 +400,59 @@ pub(crate) fn stop_logins_and_stack(app: &AppHandle) {
                 post_if_running(&connection, "/v1/stack/down").await.is_ok()
             })
         });
-    if !stopped {
+    if !stopped && local_stack_up() {
         let _ = docker::stack_down_blocking();
     }
+}
+
+/// Whether any of this computer's Commitarium containers run, whichever place
+/// is shown: a stack left up from an earlier session counts too. No Docker
+/// means no stack.
+pub(crate) fn local_stack_up() -> bool {
+    docker::docker_command()
+        .args([
+            "ps",
+            "--quiet",
+            "--filter",
+            &format!("label=com.docker.compose.project={}", docker::PROJECT_NAME),
+        ])
+        .output()
+        .is_ok_and(|out| out.status.success() && !out.stdout.trim_ascii().is_empty())
+}
+
+/// What agents are doing on this computer's coordinator right now. A
+/// coordinator that does not answer has nothing worth asking about.
+pub(crate) fn local_running_work() -> Vec<Value> {
+    let (sent, received) = mpsc::channel();
+    thread::spawn(move || {
+        let work = tauri::async_runtime::block_on(async {
+            let client = reqwest::Client::builder()
+                .no_proxy()
+                .timeout(Duration::from_secs(3))
+                .build()
+                .ok()?;
+            let answer: Value = client
+                .get("http://127.0.0.1:8080/api/v1/attention")
+                .send()
+                .await
+                .ok()?
+                .error_for_status()
+                .ok()?
+                .json()
+                .await
+                .ok()?;
+            answer.get("running")?.as_array().cloned()
+        });
+        let _ = sent.send(work.unwrap_or_default());
+    });
+    received
+        .recv_timeout(Duration::from_secs(4))
+        .unwrap_or_default()
+}
+
+/// Whether the window shows a server rather than this computer.
+pub(crate) fn server_shown(app: &AppHandle) -> bool {
+    app.state::<Host>().remote().is_some()
 }
 
 /// Windows cannot replace a running file, so the host goes before the
