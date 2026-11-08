@@ -309,8 +309,6 @@ progress {
   border-radius: 6px;
   background: var(--hover);
   font-size: var(--text-base);
-  white-space: pre-wrap;
-  font-family: inherit;
 }
 .update__blockers {
   list-style: none;
@@ -3571,6 +3569,20 @@ button.danger:not(.ghost) {
   flex: 1;
   font-size: var(--text-sm);
 }
+/* One domain in Settings → Server: its row, its records and its apps. */
+.domain-block {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.domain-apps {
+  margin: 0;
+  padding-left: 4px;
+  list-style: none;
+  display: grid;
+  gap: 2px;
+  font-size: var(--text-sm);
+}
 .domain-form {
   display: flex;
   flex-direction: column;
@@ -6320,6 +6332,21 @@ select:focus {
 .deploy-address__name input {
   min-width: 0;
   flex: 1;
+}
+.deploy-address label.set__row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+/* An app's extra addresses, each a name, a domain and Remove. */
+.deploy-aliases {
+  display: grid;
+  gap: 4px;
+  justify-items: start;
+}
+.deploy-aliases .deploy-address__name {
+  width: 100%;
+  gap: 6px;
 }
 .deploy-page {
   display: grid;

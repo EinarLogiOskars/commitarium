@@ -17,9 +17,11 @@ import {
   stopDeployment,
   unpublishApp,
   type Access,
+  type AppAddress,
   type AppsPage,
   type Deploy,
   type Deployment,
+  type DomainShown,
   type PublishedApp,
 } from "../ipc";
 
@@ -39,9 +41,11 @@ function useDeployment(projectId: string) {
   // Where addresses go: the domain, or on the private network the
   // Tailscale name once it is ready (HOMELAB_PLAN.md).
   const [domain, setDomain] = useState<string | null>(null);
+  // The server's domains, each with its sign-in and apps page.
+  const [domains, setDomains] = useState<DomainShown[]>([]);
   const [privateNet, setPrivateNet] = useState(false);
-  const [companySignIn, setCompanySignIn] = useState(false);
-  const [appsPage, setAppsPageShown] = useState<AppsPage | null>(null);
+  // On the private network: its apps page, the one there is.
+  const [tailnetAppsPage, setTailnetAppsPage] = useState<AppsPage | null>(null);
   const [versions, setVersions] = useState<Version[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -62,10 +66,10 @@ function useDeployment(projectId: string) {
           ? overview.tailscale?.state === "ready"
             ? overview.tailscale.name
             : null
-          : overview.domain,
+          : (overview.domains[0]?.name ?? null),
       );
-      setCompanySignIn(overview.sign_in !== null);
-      setAppsPageShown(overview.apps_page);
+      setDomains(onTailnet ? [] : overview.domains);
+      setTailnetAppsPage(onTailnet ? overview.apps_page : null);
       setReadError(null);
     } catch (e) {
       setReadError(String(e));
@@ -136,9 +140,9 @@ function useDeployment(projectId: string) {
     deployment,
     published,
     domain,
+    domains,
     privateNet,
-    companySignIn,
-    appsPage,
+    tailnetAppsPage,
     versions,
     busy,
     error: error ?? readError,
@@ -258,9 +262,9 @@ export function DeploymentPage({ projectId, name }: { projectId: string; name: s
     deployment,
     published,
     domain,
+    domains,
     privateNet,
-    companySignIn,
-    appsPage,
+    tailnetAppsPage,
     versions,
     busy,
     error,
@@ -290,14 +294,18 @@ export function DeploymentPage({ projectId, name }: { projectId: string; name: s
           </dd>
           {published && (
             <>
-              <dt>Address</dt>
+              <dt>{published.urls.length > 1 ? "Addresses" : "Address"}</dt>
               <dd>
-                <button
-                  className="shell-card__link"
-                  onClick={() => void openExternal(published.url)}
-                >
-                  {published.url.replace("https://", "")} ↗
-                </button>
+                {(published.urls.length > 0 ? published.urls : [published.url]).map(
+                  (url, index) => (
+                    <span key={url}>
+                      {index > 0 && ", "}
+                      <button className="shell-card__link" onClick={() => void openExternal(url)}>
+                        {url.replace("https://", "")} ↗
+                      </button>
+                    </span>
+                  ),
+                )}
                 <span className="muted">
                   {" "}
                   ·{" "}
@@ -351,9 +359,9 @@ export function DeploymentPage({ projectId, name }: { projectId: string; name: s
           projectId={projectId}
           name={name}
           domain={domain}
+          domains={domains}
           privateNet={privateNet}
-          companySignIn={companySignIn}
-          appsPage={appsPage}
+          tailnetAppsPage={tailnetAppsPage}
           published={published}
           busy={busy}
           act={act}
@@ -379,13 +387,187 @@ const STATE_TONE: Record<string, string> = {
   none: "muted",
 };
 
+/** Where an app is published: its main address, www for a bare domain, and
+ * its extra addresses (MULTI_DOMAIN_PLAN.md, M2). */
+export interface Place {
+  domain: string;
+  name: string;
+  www: boolean;
+  aliases: AppAddress[];
+}
+
+/** The host an address answers at: the empty name is the domain itself. */
+export const hostOf = ({ domain, name }: AppAddress) => (name ? `${name}.${domain}` : domain);
+
+/** What changed between where an app is and where it would be, for its
+ * Change it button; nothing when they are the same. */
+export function placeChanged(published: PublishedApp, place: Place): boolean {
+  const aliases = (list: AppAddress[]) => list.map(hostOf).join(" ");
+  return (
+    place.domain !== published.domain ||
+    place.name.trim().toLowerCase() !== published.name ||
+    (place.name.trim() === "" && place.www !== published.www) ||
+    aliases(place.aliases) !== aliases(published.aliases)
+  );
+}
+
+// The address fields: a domain picker when the server has more than one,
+// the name (empty for the domain itself, on the internet), www for a bare
+// name, and extra addresses. On the private network only the name.
+function AddressFields({
+  place,
+  onChange,
+  domains,
+  privateNet,
+  suffix,
+  label,
+}: {
+  place: Place;
+  onChange: (place: Place) => void;
+  domains: string[];
+  privateNet: boolean;
+  /** Shown after the name on the private network, where there is no domain. */
+  suffix: React.ReactNode;
+  label: string;
+}) {
+  const several = domains.length > 1;
+  const bare = !privateNet && place.name.trim() === "";
+  const pick = (value: string, change: (domain: string) => void) => (
+    <select aria-label="Domain" value={value} onChange={(e) => change(e.target.value)}>
+      {domains.map((domain) => (
+        <option key={domain} value={domain}>
+          {domain}
+        </option>
+      ))}
+    </select>
+  );
+  return (
+    <>
+      <label className="muted">
+        {label}
+        <span className="deploy-address__name">
+          <input
+            aria-label={privateNet ? "Name" : "Address name"}
+            placeholder={privateNet ? undefined : "empty for the domain itself"}
+            value={place.name}
+            autoCapitalize="off"
+            autoCorrect="off"
+            spellCheck={false}
+            onChange={(e) => onChange({ ...place, name: e.target.value })}
+          />
+          {privateNet ? (
+            suffix
+          ) : several ? (
+            <>
+              <span className="muted">.</span>
+              {pick(place.domain, (domain) => onChange({ ...place, domain }))}
+            </>
+          ) : (
+            <span className="muted">.{place.domain}</span>
+          )}
+        </span>
+      </label>
+      {bare && (
+        <>
+          <p className="muted shell-card__text">
+            With no name, it is {place.domain} itself: the domain&apos;s own website.
+          </p>
+          <label className="set__row">
+            <input
+              type="checkbox"
+              checked={place.www}
+              onChange={(e) => onChange({ ...place, www: e.target.checked })}
+            />
+            <span>www.{place.domain} sends people here too</span>
+          </label>
+        </>
+      )}
+      {!privateNet && (
+        <div className="deploy-aliases">
+          {place.aliases.length > 0 && (
+            <p className="muted shell-card__text">
+              Extra addresses: the app is reached at all of them, and can pick its language from the
+              address it was opened on.
+            </p>
+          )}
+          {place.aliases.map((alias, index) => {
+            const change = (next: AppAddress) =>
+              onChange({
+                ...place,
+                aliases: place.aliases.map((old, at) => (at === index ? next : old)),
+              });
+            return (
+              <span className="deploy-address__name" key={index}>
+                <input
+                  aria-label="Extra address name"
+                  placeholder="empty for the domain itself"
+                  value={alias.name}
+                  autoCapitalize="off"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  onChange={(e) => change({ ...alias, name: e.target.value })}
+                />
+                {several ? (
+                  <>
+                    <span className="muted">.</span>
+                    {pick(alias.domain, (domain) => change({ ...alias, domain }))}
+                  </>
+                ) : (
+                  <span className="muted">.{alias.domain}</span>
+                )}
+                <button
+                  className="shell-card__link"
+                  onClick={() =>
+                    onChange({ ...place, aliases: place.aliases.filter((_, at) => at !== index) })
+                  }
+                >
+                  Remove
+                </button>
+              </span>
+            );
+          })}
+          <button
+            className="shell-card__link"
+            onClick={() =>
+              onChange({
+                ...place,
+                // Another domain first: the usual extra address is the same
+                // website at a second domain.
+                aliases: [
+                  ...place.aliases,
+                  { domain: domains.find((d) => d !== place.domain) ?? place.domain, name: "" },
+                ],
+              })
+            }
+          >
+            Add an extra address
+          </button>
+        </div>
+      )}
+    </>
+  );
+}
+
+/** The address fields' answer, as the host takes it: names trimmed, and
+ * www only for a bare name. */
+function placing(place: Place) {
+  return {
+    domain: place.domain,
+    www: place.name.trim() === "" ? place.www : undefined,
+    aliases: place.aliases.map((alias) => ({
+      domain: alias.domain,
+      name: alias.name.trim().toLowerCase(),
+    })),
+  };
+}
+
 function Address({
   projectId,
   name,
   domain,
+  domains,
   privateNet,
-  companySignIn,
-  appsPage,
+  tailnetAppsPage,
   published,
   busy,
   act,
@@ -393,58 +575,76 @@ function Address({
 }: {
   projectId: string;
   name: string;
+  /** Where addresses go: the first domain, or the Tailscale name. */
   domain: string | null;
+  /** The server's domains, with each one's sign-in and apps page. */
+  domains: DomainShown[];
   /** Only the owner's devices reach the apps, on their Tailscale network:
    * apps get ports of the Tailscale name, not names under a domain. */
   privateNet: boolean;
-  /** Whether the server has a company sign-in provider connected. */
-  companySignIn: boolean;
-  appsPage: AppsPage | null;
+  tailnetAppsPage: AppsPage | null;
   published: PublishedApp | null;
   busy: boolean;
   act: (work: () => Promise<unknown>) => Promise<void>;
   onStop: () => void;
 }) {
-  const [address, setAddress] = useState(published?.name ?? slug(name));
+  const fresh = (): Place =>
+    published
+      ? {
+          domain: published.domain || (domain ?? ""),
+          name: published.name,
+          www: published.www,
+          aliases: published.aliases.map((alias) => ({ domain: alias.domain, name: alias.name })),
+        }
+      : { domain: domain ?? "", name: slug(name), www: true, aliases: [] };
+  const [place, setPlace] = useState<Place>(fresh);
   const [access, setAccess] = useState<Access>(published?.access ?? "private");
   const [password, setPassword] = useState("");
   const [changing, setChanging] = useState(false);
   const [renaming, setRenaming] = useState(false);
-  const [newName, setNewName] = useState("");
   const [changed, setChanged] = useState(false);
   const [shownPassword, setShownPassword] = useState<string | null | undefined>(undefined);
   const [editingGroups, setEditingGroups] = useState(false);
   const [groups, setGroups] = useState("");
   const empty = password === "";
+  const names = domains.map((item) => item.name);
+  // A cookie cannot cross domains: company sign-in is per domain, so it is
+  // the one at the app's main address that counts.
+  const at = (name: string) => domains.find((item) => item.name === name);
+  const companySignIn = (name: string) => !privateNet && at(name)?.sign_in != null;
+  const appsPage = privateNet ? tailnetAppsPage : (at(published?.domain ?? "")?.apps_page ?? null);
   // Company sign-in chosen before a provider is connected: say where to.
   const [needsSignIn, setNeedsSignIn] = useState(false);
   // Company sign-in needs a domain on the internet: not on a private network.
-  const companyOption = privateNet ? null : (
-    <option value="company">
-      {companySignIn ? "Company sign-in" : "Company sign-in (set up first)"}
-    </option>
-  );
-  const setUpSignIn = needsSignIn && !companySignIn && (
-    <>
-      <p className="muted shell-card__text">
-        Company sign-in lets people open it with their work account, such as Microsoft or Google. It
-        is connected once for this server, in Settings → Server.
-      </p>
-      <div className="row deploy-links">
-        <button
-          className="shell-card__link"
-          onClick={() =>
-            openAssistantOn(
-              { kind: "sign_in" },
-              `Help me set up company sign-in for this app. The server's domain is ${domain}.`,
-            )
-          }
-        >
-          Set it up with Mayka
-        </button>
-      </div>
-    </>
-  );
+  const companyOption = (name: string) =>
+    privateNet ? null : (
+      <option value="company">
+        {companySignIn(name) ? "Company sign-in" : "Company sign-in (set up first)"}
+      </option>
+    );
+  const setUpSignIn = (name: string) =>
+    needsSignIn &&
+    !companySignIn(name) && (
+      <>
+        <p className="muted shell-card__text">
+          Company sign-in lets people open it with their work account, such as Microsoft or Google.
+          It is connected once for each domain, in Settings → Server.
+        </p>
+        <div className="row deploy-links">
+          <button
+            className="shell-card__link"
+            onClick={() =>
+              openAssistantOn(
+                { kind: "sign_in" },
+                `Help me set up company sign-in for this app, at ${name}.`,
+              )
+            }
+          >
+            Set it up with Mayka
+          </button>
+        </div>
+      </>
+    );
 
   const stop = (
     <button className="shell-card__link" disabled={busy} onClick={onStop}>
@@ -460,13 +660,17 @@ function Address({
         <p className="muted shell-card__text">
           {privateNet
             ? "It gets an address once Tailscale is set up, in Settings → Server."
-            : "It has no address yet. In Settings → Server, set your domain, or turn on Homelab mode for a server at home."}
+            : "It has no address yet. In Settings → Server, add your domain, or turn on Homelab mode for a server at home."}
         </p>
         <div className="row deploy-links">{stop}</div>
       </>
     );
   }
+  // A name is needed on the private network; on the internet, empty is the
+  // domain itself.
+  const named = privateNet ? place.name.trim() !== "" : true;
   if (published) {
+    const signIn = companySignIn(published.domain);
     // A password set while the app is open to anyone also makes it private.
     const save = () =>
       void act(async () => {
@@ -477,8 +681,8 @@ function Address({
         setPassword("");
       });
     const choose = (next: Access) => {
-      setNeedsSignIn(next === "company" && !companySignIn);
-      if (next === "company" && !companySignIn) return;
+      setNeedsSignIn(next === "company" && !signIn);
+      if (next === "company" && !signIn) return;
       void act(() =>
         setAppAccess(projectId, next).catch((e) => {
           // Never had a password: ask for one, then make it private.
@@ -498,6 +702,7 @@ function Address({
         );
         setEditingGroups(false);
       });
+    const moves = placeChanged(published, place);
     return (
       <>
         <label className="muted deploy-access">
@@ -509,10 +714,10 @@ function Address({
           >
             <option value="public">Anyone, no password</option>
             <option value="private">Only with a password</option>
-            {companyOption}
+            {companyOption(published.domain)}
           </select>
         </label>
-        {setUpSignIn}
+        {setUpSignIn(published.domain)}
         {published.access === "company" && (
           <p className="muted shell-card__text">
             People sign in with their company account.{" "}
@@ -556,7 +761,7 @@ function Address({
           </label>
         ) : (
           <AppsPageOffer
-            domain={domain}
+            domain={privateNet ? domain : published.domain || domain}
             privateNet={privateNet}
             access={published.access}
             busy={busy}
@@ -584,34 +789,32 @@ function Address({
         )}
         {renaming && (
           <div className="deploy-address">
-            <label className="muted">
-              New address
-              <span className="deploy-address__name">
-                <input
-                  autoFocus
-                  value={newName}
-                  autoCapitalize="off"
-                  autoCorrect="off"
-                  spellCheck={false}
-                  onChange={(e) => setNewName(e.target.value)}
-                />
-                {suffix}
-              </span>
-            </label>
-            {newName.trim() && newName.trim().toLowerCase() !== published.name && (
+            <AddressFields
+              place={place}
+              onChange={setPlace}
+              domains={names}
+              privateNet={privateNet}
+              suffix={suffix}
+              label="New address"
+            />
+            {moves && (
               <p className="sync-card__error">
-                {published.url.replace("https://", "")} stops working once you change it. Anyone
-                with the old link needs the new one.
+                {published.url.replace("https://", "")} stops working once you change it, unless it
+                stays one of its addresses. Anyone with an old link needs the new one.
               </p>
             )}
             <div className="row deploy-actions">
               <button
-                disabled={
-                  busy || !newName.trim() || newName.trim().toLowerCase() === published.name
-                }
+                disabled={busy || !named || !moves}
                 onClick={() =>
                   void act(async () => {
-                    await publishApp(projectId, newName, published.access);
+                    await publishApp(
+                      projectId,
+                      place.name,
+                      published.access,
+                      undefined,
+                      privateNet ? {} : placing(place),
+                    );
                     setRenaming(false);
                   })
                 }
@@ -689,7 +892,7 @@ function Address({
               className="shell-card__link"
               disabled={busy}
               onClick={() => {
-                setNewName(published.name);
+                setPlace(fresh());
                 setRenaming(true);
               }}
             >
@@ -709,6 +912,7 @@ function Address({
       </>
     );
   }
+  const signIn = companySignIn(place.domain);
   return (
     <div className="deploy-address">
       <p className="muted shell-card__text">
@@ -716,35 +920,30 @@ function Address({
           ? "Put it online on your private network: it gets its own address there, for your devices with Tailscale."
           : "Give it an address so people can open it:"}
       </p>
-      <label className="muted">
-        {privateNet ? "Name" : "Address"}
-        <span className="deploy-address__name">
-          <input
-            value={address}
-            autoCapitalize="off"
-            autoCorrect="off"
-            spellCheck={false}
-            onChange={(e) => setAddress(e.target.value)}
-          />
-          {suffix}
-        </span>
-      </label>
+      <AddressFields
+        place={place}
+        onChange={setPlace}
+        domains={names}
+        privateNet={privateNet}
+        suffix={suffix}
+        label={privateNet ? "Name" : "Address"}
+      />
       <label className="muted deploy-access">
         Who can open it
         <select
           value={access}
           onChange={(e) => {
             const next = e.target.value as Access;
-            setNeedsSignIn(next === "company" && !companySignIn);
+            setNeedsSignIn(next === "company" && !signIn);
             setAccess(next);
           }}
         >
           <option value="private">Only with a password</option>
           <option value="public">Anyone, no password</option>
-          {companyOption}
+          {companyOption(place.domain)}
         </select>
       </label>
-      {setUpSignIn}
+      {setUpSignIn(place.domain)}
       {access === "private" && (
         <label className="muted">
           Password, to share with the people you want
@@ -756,19 +955,26 @@ function Address({
             value={password}
             onChange={(e) => setPassword(e.target.value)}
           />
-          <span>They sign in with the username {address.trim().toLowerCase() || "…"}.</span>
+          <span>
+            {place.name.trim()
+              ? `They sign in with the username ${place.name.trim().toLowerCase()}.`
+              : `They sign in with the username ${place.domain}.`}
+          </span>
         </label>
       )}
       <button
         disabled={
-          busy ||
-          !address.trim() ||
-          (access === "private" && empty) ||
-          (access === "company" && !companySignIn)
+          busy || !named || (access === "private" && empty) || (access === "company" && !signIn)
         }
         onClick={() =>
           void act(() =>
-            publishApp(projectId, address, access, access === "private" ? password : undefined),
+            publishApp(
+              projectId,
+              place.name,
+              access,
+              access === "private" ? password : undefined,
+              privateNet ? {} : placing(place),
+            ),
           )
         }
       >
@@ -779,7 +985,7 @@ function Address({
   );
 }
 
-/** Whether this device was asked about the apps page for this server. */
+/** Whether this device was asked about the apps page for this domain. */
 const offerKey = (domain: string) => `commitarium:apps-page-offer:${domain}`;
 
 function asked(domain: string): boolean {
@@ -814,11 +1020,13 @@ function AppsPageOffer({
   useEffect(() => {
     if (hidden) return;
     let live = true;
-    checkAppsPageName("apps").catch((e) => live && setTaken(String(e)));
+    checkAppsPageName("apps", privateNet ? undefined : domain).catch(
+      (e) => live && setTaken(String(e)),
+    );
     return () => {
       live = false;
     };
-  }, [hidden]);
+  }, [hidden, domain, privateNet]);
   if (hidden) return null;
   const dismiss = () => {
     try {
@@ -876,7 +1084,12 @@ function AppsPageOffer({
           disabled={busy || !name.trim() || (access === "private" && !password)}
           onClick={() =>
             void act(async () => {
-              await setAppsPage(access, access === "private" ? password : undefined, name);
+              await setAppsPage(
+                access,
+                access === "private" ? password : undefined,
+                name,
+                privateNet ? undefined : domain,
+              );
               dismiss();
             })
           }

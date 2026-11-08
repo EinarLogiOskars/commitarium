@@ -1,8 +1,10 @@
-//! The apps page (APPS_PAGE_PLAN.md, A1): one address, `apps.<domain>`, that
-//! lists a server's apps and opens them in a frame. The host serves it on a
-//! loopback port of its own, apart from its API, and Caddy puts it behind the
-//! password or company sign-in the owner chose. It only reads: the listed
-//! apps for whoever is asking, and the page that shows them.
+//! The apps page (APPS_PAGE_PLAN.md, A1): one address per domain,
+//! `apps.<domain>`, that lists the apps there and opens them in a frame. The
+//! host serves every domain's page on a loopback port of its own, apart from
+//! its API, and Caddy puts each behind the password or company sign-in the
+//! owner chose. Caddy passes the address the page was opened on, which says
+//! whose page it is. It only reads: the listed apps for whoever is asking,
+//! and the page that shows them.
 
 use crate::deployments::Deployments;
 use crate::publishing::Publishing;
@@ -42,6 +44,12 @@ fn answer(request: Request, publishing: &Publishing, deployments: &Deployments) 
         .iter()
         .find(|header| header.field.equiv("X-Commitarium-Groups"))
         .map(|header| header.value.as_str().to_string());
+    // Which domain's page: the address it was opened on.
+    let host = request
+        .headers()
+        .iter()
+        .find(|header| header.field.equiv("Host"))
+        .map(|header| header.value.as_str().to_string());
     let path = request.url().split('?').next().unwrap_or("/").to_string();
     let response = if path == "/api/session" {
         // Reaching here means Caddy let the request through: behind company
@@ -49,9 +57,11 @@ fn answer(request: Request, publishing: &Publishing, deployments: &Deployments) 
         // here; the page sees the gate's redirect instead (A2).
         json(200, r#"{"signed_in":true}"#)
     } else if path == "/api/apps" {
-        match publishing.catalog(deployments, groups.as_deref()) {
+        match publishing.catalog(deployments, groups.as_deref(), host.as_deref()) {
             Ok(Some(apps)) => {
-                let sign_out = publishing.apps_page_sign_out().unwrap_or_default();
+                let sign_out = publishing
+                    .apps_page_sign_out(host.as_deref())
+                    .unwrap_or_default();
                 json(
                     200,
                     &serde_json::json!({ "apps": apps, "sign_out": sign_out }).to_string(),
@@ -64,7 +74,7 @@ fn answer(request: Request, publishing: &Publishing, deployments: &Deployments) 
             }
         }
     } else {
-        // Every other path is the page: `/<name>` opens that app in it.
+        // Every other path is the page: `/<address>` opens that app in it.
         Response::from_string(PAGE)
             .with_header(header("Content-Type", "text/html; charset=utf-8"))
             .with_header(header("Content-Security-Policy", "frame-ancestors 'none'"))

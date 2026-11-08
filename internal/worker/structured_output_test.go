@@ -489,3 +489,30 @@ func TestOnlyATurnOutsidePlanningSuggestsPlanMode(t *testing.T) {
 		t.Fatalf("resolved = %+v err=%v", resolved, err)
 	}
 }
+
+// Mayka's server cards are in the turn's schema, with the address fields
+// they carry, and a turn proposing one resolves.
+func TestATurnMayProposeServerCards(t *testing.T) {
+	schema := OutputJSONSchema(OutputContractAssistantTurn).(map[string]any)
+	actions := schema["properties"].(map[string]any)["actions"].(map[string]any)
+	action := actions["items"].(map[string]any)
+	types := action["properties"].(map[string]any)["type"].(map[string]any)["enum"].([]string)
+	for _, kind := range []string{"add_domain", "install_authentik", "set_app_access", "set_homelab"} {
+		if !slices.Contains(types, kind) {
+			t.Fatalf("the schema lacks %s", kind)
+		}
+	}
+	for _, field := range []string{"domain", "name", "aliases", "app", "groups"} {
+		if !slices.Contains(action["required"].([]string), field) {
+			t.Fatalf("the schema does not ask for %s", field)
+		}
+	}
+	resolved, err := ResolveStructuredOutput(OutputContractAssistantTurn, []byte(`{"message":"Add it.","actions":[
+		{"type":"add_domain","reason":"Asked","domain":"commitarium.com","how":"wildcard"},
+		{"type":"deploy_app","reason":"Asked","domain":"einarlogi.is","name":"","aliases":[{"domain":"einarlogi.com","name":""}]}],
+		"notes":""}`))
+	if err != nil || len(resolved.AssistantTurn.Actions) != 2 ||
+		resolved.AssistantTurn.Actions[1].Aliases[0].Domain != "einarlogi.com" {
+		t.Fatalf("resolved = %+v err=%v", resolved, err)
+	}
+}

@@ -1,0 +1,6 @@
+- **Several domains per server.** Serve apps on more than one domain from the same server, each with its own apps page and company sign-in, all from one authentik.
+- **Websites at the bare domain.** An app can live at `example.com` itself, with `www.example.com` sending people there.
+- **More than one address for an app.** For example a site in Icelandic on `.is` and in English on `.com`; the app sees which address was opened.
+- **Mayka sets up the server with you.** Ask her to add a domain, set up authentik, change who can open an app, or move the apps page, and it's done. Removing things and Homelab mode still wait for your OK.
+- **Mayka knows your server in every chat.** Your domains, apps and their addresses, so she never has to ask. When a change fails, she tells you right away what to do next.
+- **Clearer update notes.** This window now says what changed.

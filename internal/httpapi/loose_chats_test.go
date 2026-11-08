@@ -432,3 +432,38 @@ func TestAPlannedProjectThatDidNotStartStartsOnRetry(t *testing.T) {
 		t.Fatalf("the assistant was woken with %q", woken)
 	}
 }
+
+// Mayka's server cards work in a chat outside any project, such as one on
+// serving apps: the app applies each through the host first, and what the
+// host answered becomes the card's result, failed when it refused. A deploy
+// still needs its project.
+func TestServerCardsRecordWhatTheHostAnswered(t *testing.T) {
+	loose := newLooseChats(t,
+		featureartifact.AssistantAction{Type: featureartifact.AssistantAddDomain, Reason: "Asked", Domain: "commitarium.com"},
+		featureartifact.AssistantAction{Type: featureartifact.AssistantSetHomelab, Reason: "Asked", How: "on"},
+		featureartifact.AssistantAction{Type: featureartifact.AssistantDeployApp, Reason: "Asked"},
+	)
+	chat := loose.talk(t, "Add commitarium.com to my server.")
+	_, conversation, _ := loose.call(t, http.MethodGet, "/api/v1/assistant/conversations/commitarium/chats/"+chat, "")
+	if len(conversation.Actions) != 3 {
+		t.Fatalf("actions = %+v", conversation.Actions)
+	}
+	approve := func(id, body string) (int, conversations.Conversation, string) {
+		return loose.call(t, http.MethodPost,
+			"/api/v1/assistant/conversations/commitarium/chats/"+chat+"/actions/"+id+"/approve", body)
+	}
+	code, refused, body := approve(conversation.Actions[0].ID,
+		`{"outcome":"*.commitarium.com does not point at this server yet.","failed":true}`)
+	if code != http.StatusOK || refused.Actions[0].Status != conversations.ActionFailed ||
+		refused.Actions[0].Result != "Adding commitarium.com. The server refused: *.commitarium.com does not point at this server yet." {
+		t.Fatalf("status %d: %s", code, body)
+	}
+	code, applied, body := approve(conversation.Actions[1].ID, `{"outcome":"Homelab is on."}`)
+	if code != http.StatusOK || applied.Actions[1].Status != conversations.ActionApplied ||
+		applied.Actions[1].Result != "Turning Homelab on. Homelab is on." {
+		t.Fatalf("status %d: %s", code, body)
+	}
+	if code, _, body := approve(conversation.Actions[2].ID, `{}`); code != http.StatusConflict {
+		t.Fatalf("a deploy outside a project: status %d: %s", code, body)
+	}
+}

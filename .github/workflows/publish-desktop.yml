@@ -75,6 +75,19 @@ jobs:
         working-directory: desktop
         run: pnpm install --frozen-lockfile
 
+      # The release's own notes, written in the release PR: the updater shows
+      # this part, before the download page's installer notes.
+      - name: Read what's new
+        id: whats_new
+        shell: bash
+        run: |
+          {
+            echo 'text<<WHATS_NEW_END'
+            cat desktop/WHATS_NEW.md
+            echo
+            echo 'WHATS_NEW_END'
+          } >> "$GITHUB_OUTPUT"
+
       - name: Build and upload installer
         uses: tauri-apps/tauri-action@v1
         env:
@@ -90,6 +103,9 @@ jobs:
           tagName: v__VERSION__
           releaseName: Commitarium v__VERSION__
           releaseBody: |
+            ${{ steps.whats_new.outputs.text }}
+
+            <!-- installer -->
             Download the installer for your operating system below.
 
             Docker Desktop (with Docker Compose) is required. Commitarium will guide you through setup on first launch.

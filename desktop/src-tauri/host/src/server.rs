@@ -299,6 +299,21 @@ fn with_body<B: DeserializeOwned, T: Serialize>(
     }
 }
 
+/// Runs `work` with the request's body, or the body's defaults when there is
+/// none: for requests that once had no body, so older clients still work.
+fn with_optional_body<B: DeserializeOwned + Default, T: Serialize>(
+    body: &[u8],
+    work: impl FnOnce(B) -> Result<T, String>,
+) -> Reply {
+    if body.iter().all(u8::is_ascii_whitespace) {
+        return respond_with(work(B::default()));
+    }
+    match serde_json::from_slice::<Option<B>>(body) {
+        Ok(body) => respond_with(work(body.unwrap_or_default())),
+        Err(_) => failure(400, "the request body is not valid"),
+    }
+}
+
 fn respond_to_get(path: &str, shared: &Shared) -> Reply {
     match path {
         "/v1/version" => json(
@@ -373,6 +388,13 @@ struct SetDomain {
     records: crate::publishing::Records,
 }
 
+/// Which of the server's domains; the first when left out.
+#[derive(Default, Deserialize)]
+struct DomainRequest {
+    #[serde(default)]
+    domain: Option<String>,
+}
+
 #[derive(Deserialize)]
 struct SetPlacement {
     placement: crate::publishing::Placement,
@@ -387,6 +409,10 @@ struct Publish {
     /// A private app's password, when set or changed.
     #[serde(default)]
     password: Option<String>,
+    /// Its domain, `www` and extra addresses; each kept as it was when left
+    /// out.
+    #[serde(flatten)]
+    placing: crate::publishing::Placing,
 }
 
 #[derive(Deserialize)]
@@ -403,11 +429,16 @@ struct SetAppsPage {
     /// Its address name; `None` keeps the one it has, or `apps`.
     #[serde(default)]
     name: Option<String>,
+    /// Whose page; the first domain's when left out.
+    #[serde(default)]
+    domain: Option<String>,
 }
 
 #[derive(Deserialize)]
 struct AppsPageName {
     name: String,
+    #[serde(default)]
+    domain: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -572,11 +603,14 @@ fn respond_to_post(path: &str, body: &[u8], shared: &Shared) -> Reply {
             shared.on_a_server()?;
             shared.publishing.set_domain(&set.domain, set.records)
         }),
-        "/v1/publishing/remove-domain" => respond_with(
-            shared
-                .on_a_server()
-                .and_then(|()| shared.publishing.remove_domain()),
-        ),
+        "/v1/publishing/add-domain" => with_body(body, |set: SetDomain| {
+            shared.on_a_server()?;
+            shared.publishing.add_domain(&set.domain, set.records)
+        }),
+        "/v1/publishing/remove-domain" => with_optional_body(body, |asked: DomainRequest| {
+            shared.on_a_server()?;
+            shared.publishing.remove_domain(asked.domain.as_deref())
+        }),
         "/v1/publishing/placement" => with_body(body, |set: SetPlacement| {
             shared.on_a_server()?;
             shared.publishing.set_placement(set.placement)
@@ -588,6 +622,7 @@ fn respond_to_post(path: &str, body: &[u8], shared: &Shared) -> Reply {
                 &publish.name,
                 publish.access,
                 publish.password.as_deref(),
+                publish.placing,
             )
         }),
         "/v1/publishing/password" => with_body(body, |set: SetPassword| {
@@ -608,21 +643,21 @@ fn respond_to_post(path: &str, body: &[u8], shared: &Shared) -> Reply {
             shared.on_a_server()?;
             shared.publishing.connect_sign_in(asked)
         }),
-        "/v1/publishing/authentik/install" => respond_with(
-            shared
-                .on_a_server()
-                .and_then(|()| shared.publishing.install_authentik()),
-        ),
+        "/v1/publishing/authentik/install" => with_optional_body(body, |asked: DomainRequest| {
+            shared.on_a_server()?;
+            shared.publishing.install_authentik(asked.domain.as_deref())
+        }),
         "/v1/publishing/authentik/password" => respond_with(
             shared
                 .on_a_server()
                 .and_then(|()| shared.publishing.authentik_password()),
         ),
-        "/v1/publishing/sign-in/disconnect" => respond_with(
+        "/v1/publishing/sign-in/disconnect" => with_optional_body(body, |asked: DomainRequest| {
+            shared.on_a_server()?;
             shared
-                .on_a_server()
-                .and_then(|()| shared.publishing.disconnect_sign_in()),
-        ),
+                .publishing
+                .disconnect_sign_in(asked.domain.as_deref())
+        }),
         "/v1/publishing/reveal" => with_body(body, |asked: ProjectRequest| {
             shared.on_a_server()?;
             shared.publishing.app_password(&asked.project_id)
@@ -630,6 +665,7 @@ fn respond_to_post(path: &str, body: &[u8], shared: &Shared) -> Reply {
         "/v1/publishing/apps-page" => with_body(body, |set: SetAppsPage| {
             shared.on_a_server()?;
             shared.publishing.set_apps_page(
+                set.domain.as_deref(),
                 set.access,
                 set.password.as_deref(),
                 set.name.as_deref(),
@@ -637,13 +673,16 @@ fn respond_to_post(path: &str, body: &[u8], shared: &Shared) -> Reply {
         }),
         "/v1/publishing/apps-page/check" => with_body(body, |asked: AppsPageName| {
             shared.on_a_server()?;
-            shared.publishing.check_apps_page_name(&asked.name)
-        }),
-        "/v1/publishing/apps-page/reveal" => respond_with(
             shared
-                .on_a_server()
-                .and_then(|()| shared.publishing.apps_page_password()),
-        ),
+                .publishing
+                .check_apps_page_name(asked.domain.as_deref(), &asked.name)
+        }),
+        "/v1/publishing/apps-page/reveal" => with_optional_body(body, |asked: DomainRequest| {
+            shared.on_a_server()?;
+            shared
+                .publishing
+                .apps_page_password(asked.domain.as_deref())
+        }),
         "/v1/publishing/reach" => with_body(body, |set: SetReach| {
             shared.on_a_server()?;
             shared.publishing.set_reach(set.reach)

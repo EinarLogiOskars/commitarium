@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/EinarLogiOskars/commitarium/internal/conversations"
 	"github.com/EinarLogiOskars/commitarium/internal/documents"
@@ -214,6 +215,21 @@ type conversationMessageRequest struct {
 	// Attachments name the files attached to it, among the scope's
 	// documents (POST /api/v1/attachments/{scope}).
 	Attachments []string `json:"attachments,omitempty"`
+	// ServerFacts is what the server the app is connected to reports about
+	// itself (domains, apps and their addresses, sign-in), which the
+	// coordinator cannot read from the host: Mayka knows it in every chat.
+	ServerFacts string `json:"server_facts,omitempty"`
+}
+
+// serverFactsSetter keeps what the user's server last reported.
+type serverFactsSetter interface {
+	SetServerFacts(facts string)
+}
+
+func (api *API) keepServerFacts(facts string) {
+	if setter, ok := api.conversations.(serverFactsSetter); ok && facts != "" {
+		setter.SetServerFacts(facts)
+	}
 }
 
 // attachedSender sends a message carrying files.
@@ -236,6 +252,7 @@ func (api *API) sendConversationHandler(w http.ResponseWriter, r *http.Request) 
 	if !decodeSingleJSON(w, r, &body) {
 		return
 	}
+	api.keepServerFacts(body.ServerFacts)
 	if setter, ok := api.conversations.(developerModeSetter); ok && body.DeveloperMode != nil {
 		if err := setter.SetDeveloperMode(r.Context(), r.PathValue("scope"), *body.DeveloperMode); err != nil {
 			writeConversationError(w, err)
@@ -350,7 +367,19 @@ type approveActionRequest struct {
 	LeadModel     string `json:"lead_model,omitempty"`
 	ReviewerAgent string `json:"reviewer_agent,omitempty"`
 	ReviewerModel string `json:"reviewer_model,omitempty"`
+	// Outcome, for a server card, is what the server's host answered when
+	// the user's app applied it, and Failed says it refused: the card's
+	// result, for Mayka to read (MULTI_DOMAIN_PLAN.md, M5).
+	Outcome string `json:"outcome,omitempty"`
+	Failed  bool   `json:"failed,omitempty"`
+	// ServerFacts is what the server reported, read by the app after it
+	// applied the card (see conversationMessageRequest).
+	ServerFacts string `json:"server_facts,omitempty"`
 }
+
+// maxOutcomeBytes bounds what a server card's result keeps of the host's
+// answer.
+const maxOutcomeBytes = 2000
 
 // approveConversationActionHandler runs one action the assistant proposed,
 // through the same paths as the app's own buttons.
@@ -360,6 +389,7 @@ func (api *API) approveConversationActionHandler(w http.ResponseWriter, r *http.
 	if !decodeSingleJSON(w, r, &body) {
 		return
 	}
+	api.keepServerFacts(body.ServerFacts)
 	action, err := api.conversations.Action(r.Context(), scope, actionID)
 	if err != nil {
 		writeConversationError(w, err)
@@ -381,9 +411,11 @@ func (api *API) approveConversationActionHandler(w http.ResponseWriter, r *http.
 		return
 	}
 	// At the top level the assistant only creates apps and projects to plan;
-	// everything else acts in a project, except research, which needs none.
+	// everything else acts in a project, except research, which needs none,
+	// and the server's cards, which act on the server.
 	topLevel := action.Type == featureartifact.AssistantCreateApp || action.Type == featureartifact.AssistantPlanProject
-	if action.Type != featureartifact.AssistantResearch && (scope == conversations.TopLevel) != topLevel {
+	if action.Type != featureartifact.AssistantResearch && !featureartifact.AnyChat(action.Type) &&
+		(scope == conversations.TopLevel) != topLevel {
 		writeError(w, http.StatusConflict, "action_needs_project", "this action runs in a project's conversation, and a new app at the top level")
 		return
 	}
@@ -464,6 +496,7 @@ func (api *API) approveConversationActionHandler(w http.ResponseWriter, r *http.
 	}
 	var result string
 	var ok bool
+	status := conversations.ActionApplied
 	// The work order the action touched, for the app to open; a new one's ID
 	// is known only once it exists.
 	workOrderID := action.WorkOrderID
@@ -505,17 +538,15 @@ func (api *API) approveConversationActionHandler(w http.ResponseWriter, r *http.
 		result, ok = api.applyRecoverWorkOrder(w, r, scope, action)
 	case featureartifact.AssistantSetUpPreview:
 		result, workOrderID, ok = api.applySetUpPreview(w, r, scope, action)
-	case featureartifact.AssistantDeployApp:
-		// The server's host deploys; the app that approved this asks it to.
-		result, ok = "Deploying the latest version for visitors.", true
-	case featureartifact.AssistantSetAppsPage:
-		// The server's host changes it; the app that approved this asks it to.
-		result, ok = appsPageResult(action.How), true
-	case featureartifact.AssistantListOnAppsPage:
-		if action.How == "hide" {
-			result, ok = "Hiding this app on the apps page.", true
-		} else {
-			result, ok = "Listing this app on the apps page.", true
+	case featureartifact.AssistantDeployApp, featureartifact.AssistantSetAppsPage,
+		featureartifact.AssistantListOnAppsPage, featureartifact.AssistantAddDomain,
+		featureartifact.AssistantInstallAuthentik, featureartifact.AssistantSetAppAccess,
+		featureartifact.AssistantSetHomelab:
+		// The user's app applied it through the server's host before this,
+		// and says what the host answered; Commitarium only records it.
+		result, ok = serverCardResult(action.AssistantAction, body.Outcome, body.Failed), true
+		if body.Failed {
+			status = conversations.ActionFailed
 		}
 	case featureartifact.AssistantWriteVision:
 		result, helper, ok = api.applyWriteVision(w, r, scope, action)
@@ -564,7 +595,7 @@ func (api *API) approveConversationActionHandler(w http.ResponseWriter, r *http.
 	if len(chosen) > 0 {
 		result += " The user chose " + strings.Join(chosen, " and ") + "."
 	}
-	conversation, err := api.conversations.Resolve(r.Context(), scope, actionID, conversations.ActionApplied, result, conversations.Created{WorkOrderID: workOrderID, ProjectID: projectID, Helper: helper})
+	conversation, err := api.conversations.Resolve(r.Context(), scope, actionID, status, result, conversations.Created{WorkOrderID: workOrderID, ProjectID: projectID, Helper: helper})
 	if err != nil {
 		writeConversationError(w, err)
 		return
@@ -1022,6 +1053,51 @@ func (api *API) applyAddVisionItem(
 }
 
 // appsPageResult says what an approved apps page card changes.
+// serverCardResult is a server card's result: what the host answered, in
+// a line, after what was asked, or what was asked when it said nothing.
+func serverCardResult(action featureartifact.AssistantAction, outcome string, failed bool) string {
+	asked := ""
+	switch action.Type {
+	case featureartifact.AssistantAddDomain:
+		asked = "Adding " + action.Domain + "."
+	case featureartifact.AssistantInstallAuthentik:
+		asked = "Setting up authentik."
+		if action.Domain != "" {
+			asked = "Setting up authentik for " + action.Domain + "."
+		}
+	case featureartifact.AssistantSetAppAccess:
+		asked = "Changing who may open the app."
+	case featureartifact.AssistantSetHomelab:
+		asked = "Turning Homelab " + action.How + "."
+	case featureartifact.AssistantDeployApp:
+		asked = "Deploying the latest version for visitors."
+	case featureartifact.AssistantSetAppsPage:
+		asked = appsPageResult(action.How)
+	case featureartifact.AssistantListOnAppsPage:
+		asked = "Listing this app on the apps page."
+		if action.How == "hide" {
+			asked = "Hiding this app on the apps page."
+		}
+	}
+	outcome = strings.Join(strings.Fields(outcome), " ")
+	if len(outcome) > maxOutcomeBytes {
+		cut := maxOutcomeBytes
+		for cut > 0 && !utf8.RuneStart(outcome[cut]) {
+			cut--
+		}
+		outcome = outcome[:cut] + "…"
+	}
+	switch {
+	case failed && outcome != "":
+		return asked + " The server refused: " + outcome
+	case failed:
+		return asked + " The server refused."
+	case outcome != "":
+		return asked + " " + outcome
+	}
+	return asked
+}
+
 func appsPageResult(how string) string {
 	switch how {
 	case "off":

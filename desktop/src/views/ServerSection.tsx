@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useState } from "react";
 import { connectedServer, TAILSCALE_HINT, throughTailscale } from "../connection";
 import {
   authentikPassword,
@@ -13,6 +13,7 @@ import {
   pairedDevices,
   places as readPlaces,
   publishing as readPublishing,
+  addDomain,
   setDomain,
   removeDomain,
   setPlacement,
@@ -42,6 +43,8 @@ import { getAssistantSettings, type AssistantSettings } from "../api/assistant";
 import { Agents } from "./Agents";
 import { assistantGuidance, GUIDANCE, type AssistantGuidance } from "./setupGuidance";
 import { reloadAgents, useAgentList } from "./useAgents";
+import { appsOn, authentikHome, recordsFor, urlsOn } from "./domainRecords";
+import { HomelabWarning, LOSING_ANSWER_MS, moveBackFirst, StrandedWarning } from "./homelabSwitch";
 
 /** This app's API version: raise it with `API_VERSION` in the host. */
 const API_VERSION = 1;
@@ -164,10 +167,6 @@ export function ServerSection({ running, onLeave }: { running: boolean; onLeave?
   );
 }
 
-// The server's base domain, under which deployed apps get their addresses
-// (PUBLISHING_PLAN.md), and how its DNS points here: one wildcard record,
-// checked before the domain is kept, or a record for each address, each
-// checked as it is used.
 /** A ? that explains on hover, focus or click. */
 function Hint({ label, children }: { label: string; children: React.ReactNode }) {
   const [open, setOpen] = useState(false);
@@ -195,8 +194,30 @@ const RECORDS_LABEL: Record<Records, string> = {
   each_name: "A record per app",
 };
 
-// The domains apps are served on. A server holds one for now; the list,
-// adding and removing are already shaped for several (MULTI_DOMAIN, 0.12.1).
+/** Reads publishing now and whenever it changes in Settings. */
+function usePublishing(): PublishingOverview | null {
+  const [overview, setOverview] = useState<PublishingOverview | null>(null);
+  const refresh = useCallback(() => {
+    void readPublishing()
+      .then(setOverview)
+      .catch(() => undefined);
+  }, []);
+  useFresh(refresh);
+  return overview;
+}
+
+/** A link that opens an address in the browser, shown without https://. */
+function Opens({ url }: { url: string }) {
+  return (
+    <button className="shell-card__link" onClick={() => void openExternal(url)}>
+      {url.replace("https://", "")} ↗
+    </button>
+  );
+}
+
+// The domains apps are served on (MULTI_DOMAIN_PLAN.md): each with its DNS
+// mode, the records it needs, and the apps that live there. The first one is
+// set and renamed as the server's one domain was; more are added beside it.
 function DomainSection({ onLeave }: { onLeave?: () => void }) {
   const [overview, setOverview] = useState<PublishingOverview | null>(null);
   // The domain being added or edited (`editing`: the one it was), if the form is open.
@@ -232,14 +253,22 @@ function DomainSection({ onLeave }: { onLeave?: () => void }) {
 
   // On a private network there is no domain: the Tailscale name stands in.
   if (!overview || overview.reach === "private") return null;
-  const domains = overview.domain ? [{ domain: overview.domain, records: overview.records }] : [];
-  const full = domains.length >= 1;
+  const domains = overview.domains;
+  const first = domains[0]?.name ?? null;
   const address = overview.server_address ?? "this server's address";
   const shown = form?.domain.trim().replace(/^\*\./, "") || "example.com";
-  // With a record for each address: the apps whose address has none yet.
-  const missing = overview.apps.filter((app) => app.record_problem?.includes("does not point"));
+  const home = authentikHome(overview.authentik.admin_url, domains);
+  // The first domain is set (and renamed) as the one domain always was, so a
+  // server from before several domains takes it; the others are added.
   const save = () =>
-    form && void run(() => setDomain(form.domain, form.records)).then((ok) => ok && setForm(null));
+    form &&
+    void run(() =>
+      form.editing !== null || domains.length === 0
+        ? setDomain(form.domain, form.records)
+        : addDomain(form.domain, form.records),
+    ).then((ok) => ok && setForm(null));
+  const several =
+    domains.length > 1 || (form !== null && form.editing === null && domains.length > 0);
 
   return (
     <section className="set__section">
@@ -247,42 +276,98 @@ function DomainSection({ onLeave }: { onLeave?: () => void }) {
         Domains
         <Hint label="About domains">
           A domain you own, such as example.com. Each app you deploy gets an address under it, like
-          app.example.com. You need access to its DNS settings. No domain? Buy one from any
-          registrar, or use Homelab for a server at home.
+          app.example.com, or the domain itself for a website. You need access to its DNS settings.
+          No domain? Buy one from any registrar, or use Homelab for a server at home.
         </Hint>
       </h3>
       {domains.length === 0 && !form && <p className="muted set__note">No domain yet.</p>}
-      {domains.map((item) => (
-        <div className="set__row domain-row" key={item.domain}>
-          <span className="domain-row__name">{item.domain}</span>
-          <span className="muted domain-row__records">{RECORDS_LABEL[item.records]}</span>
-          <button
-            className="ghost"
-            disabled={busy || form !== null}
-            onClick={() => setForm({ ...item, editing: item.domain })}
-          >
-            Edit
-          </button>
-          <button
-            className="ghost"
-            disabled={busy || form !== null}
-            onClick={() => void run(removeDomain)}
-          >
-            Remove
-          </button>
-        </div>
-      ))}
-      {missing.length > 0 && !form && (
-        <div className="set__note">
-          <p>Add these A records at your DNS provider, so each app opens at its address:</p>
-          <ul className="domain-missing">
-            {missing.map((app) => (
-              <li key={app.project_id}>
-                <code>{app.url.replace(/^https:\/\//, "")}</code> → <code>{address}</code>
-              </li>
-            ))}
-          </ul>
-        </div>
+      {domains.map((item) => {
+        const apps = appsOn(item.name, overview.apps);
+        const records = recordsFor(item, apps, home === item.name);
+        // With a record for each address: the apps whose address has none yet.
+        const missing = apps.filter((app) => app.record_problem?.includes("does not point"));
+        return (
+          <div className="domain-block" key={item.name}>
+            <div className="set__row domain-row">
+              <span className="domain-row__name">{item.name}</span>
+              <span className="muted domain-row__records">{RECORDS_LABEL[item.records]}</span>
+              {item.name === first && (
+                <button
+                  className="ghost"
+                  disabled={busy || form !== null}
+                  onClick={() =>
+                    setForm({ domain: item.name, records: item.records, editing: item.name })
+                  }
+                >
+                  Edit
+                </button>
+              )}
+              <button
+                className="ghost"
+                disabled={busy || form !== null}
+                onClick={() => void run(() => removeDomain(item.name))}
+              >
+                Remove
+              </button>
+            </div>
+            {records.length > 0 && (
+              <p className="muted set__note">
+                DNS: an A record for{" "}
+                {records.map((name, index) => (
+                  <span key={name}>
+                    {index > 0 && (index === records.length - 1 ? " and " : ", ")}
+                    <code>{name}</code>
+                  </span>
+                ))}
+                , each with the value <code>{address}</code>.
+                {records.includes("@") &&
+                  item.records === "wildcard" &&
+                  " A wildcard does not cover the domain itself, so its website needs @ too."}
+              </p>
+            )}
+            {missing.length > 0 && !form && (
+              <div className="set__note">
+                <p>Missing at your DNS provider, so these do not open yet:</p>
+                <ul className="domain-missing">
+                  {missing.map((app) => (
+                    <li key={app.project_id}>{app.record_problem}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {apps.length > 0 && (
+              <ul className="domain-apps">
+                {apps.map((app) => (
+                  <li key={app.project_id}>
+                    <span
+                      className={`dot dot--${app.live ? "ok" : "muted"}`}
+                      aria-label={app.live ? "Live" : "Not running"}
+                    />{" "}
+                    {urlsOn(item.name, app).map((url, index) => (
+                      <span key={url}>
+                        {index > 0 && ", "}
+                        <Opens url={url} />
+                      </span>
+                    ))}
+                    {!app.live && <span className="muted"> · not running</span>}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        );
+      })}
+      {domains.length > 0 && (
+        <p className="muted set__note">
+          With Cloudflare, set each record to DNS only (grey cloud), not proxied: Commitarium gets
+          each address&apos;s certificate itself, and the proxy stands in its way.
+        </p>
+      )}
+      {several && (
+        <p className="muted set__note">
+          Whoever runs this server sees and manages every domain on it. Anyone who needs their own
+          admin should have their own server.
+        </p>
       )}
       {form ? (
         <div className="domain-form">
@@ -302,7 +387,8 @@ function DomainSection({ onLeave }: { onLeave?: () => void }) {
             <span>Wildcard record (recommended)</span>
             <Hint label="About a wildcard record">
               At your DNS provider, add an A record for <code>*.{shown}</code> with the value{" "}
-              <code>{address}</code>, once. Every app then works with no more DNS changes.
+              <code>{address}</code>, once. Every app then works with no more DNS changes. A website
+              at <code>{shown}</code> itself also needs a record for <code>@</code>.
             </Hint>
           </label>
           <label className="set__row">
@@ -343,8 +429,7 @@ function DomainSection({ onLeave }: { onLeave?: () => void }) {
       ) : (
         <div className="set__row">
           <button
-            disabled={busy || full}
-            title={full ? "One domain per server for now" : undefined}
+            disabled={busy}
             onClick={() => setForm({ domain: "", records: "wildcard", editing: null })}
           >
             Add domain
@@ -352,28 +437,67 @@ function DomainSection({ onLeave }: { onLeave?: () => void }) {
         </div>
       )}
       {error && <p className="set__note">{error}</p>}
-      <p className="muted set__note">
-        Not sure how to set this up at your DNS provider?{" "}
-        <AskMayka
-          link
-          onLeave={onLeave}
-          message={
-            `Help me point ${form?.domain.trim() ? `my domain ${shown}` : (overview.domain ?? "my domain")} ` +
-            `at this server (${address}), with ` +
-            `${(form?.records ?? overview.records) === "wildcard" ? "one wildcard record" : "a record per app"}.`
-          }
-        />{" "}
-        to walk you through it.
-      </p>
+      {/* Help with the DNS while there is some to set up: a new domain, or a
+          record that does not point here yet. */}
+      {(form !== null ||
+        domains.length === 0 ||
+        overview.apps.some((app) => app.record_problem)) && (
+        <p className="muted set__note">
+          Not sure how to set this up at your DNS provider?{" "}
+          <AskMayka
+            link
+            onLeave={onLeave}
+            message={
+              `Help me point ${form?.domain.trim() ? `my domain ${shown}` : (first ?? "my domain")} ` +
+              `at this server (${address}), with ` +
+              `${(form?.records ?? domains[0]?.records ?? "wildcard") === "wildcard" ? "one wildcard record" : "a record per app"}.`
+            }
+          />{" "}
+          to walk you through it.
+        </p>
+      )}
     </section>
   );
 }
 
 const NO_PROVIDER: ConnectSignIn = { issuer: "", client_id: "", client_secret: "" };
 
-// Company sign-in for deployed apps (COMPANY_SIGN_IN_PLAN.md): the company's
-// provider, connected once for the server. Nothing of it runs until then.
-function SignInSection({ onLeave }: { onLeave?: () => void }) {
+/** One block per domain, or, on the private network, one without. */
+function PerDomain({
+  children,
+  privateToo,
+}: {
+  children: (domain: string | undefined, several: boolean) => React.ReactNode;
+  /** Shown once on the private network too, for no domain. */
+  privateToo?: boolean;
+}) {
+  const overview = usePublishing();
+  if (!overview) return null;
+  if (overview.reach === "private") return privateToo ? <>{children(undefined, false)}</> : null;
+  const several = overview.domains.length > 1;
+  return (
+    <>
+      {overview.domains.map((domain) => (
+        <Fragment key={domain.name}>{children(domain.name, several)}</Fragment>
+      ))}
+    </>
+  );
+}
+
+// Company sign-in for deployed apps (COMPANY_SIGN_IN_PLAN.md): a domain's
+// provider, connected once for that domain (a cookie cannot cross domains).
+// One authentik on the server can serve every domain. Nothing of it runs
+// until then.
+function SignInSection({
+  domain,
+  several,
+  onLeave,
+}: {
+  domain: string;
+  /** The server has more than one domain: each block says whose it is. */
+  several: boolean;
+  onLeave?: () => void;
+}) {
   const [overview, setOverview] = useState<PublishingOverview | null>(null);
   const [asked, setAsked] = useState<ConnectSignIn>(NO_PROVIDER);
   const [editing, setEditing] = useState(false);
@@ -404,21 +528,32 @@ function SignInSection({ onLeave }: { onLeave?: () => void }) {
     }
   };
 
-  if (!overview?.domain || overview.reach === "private") return null;
-  const provider = overview.sign_in;
+  const entry = overview?.domains.find((item) => item.name === domain);
+  if (!overview || !entry || overview.reach === "private") return null;
+  const provider = entry.sign_in;
   const authentik = overview.authentik;
   const memory = authentik.memory_total_bytes;
   const memoryGb = memory === null ? null : Math.round(memory / 1024 ** 3);
+  const isFirst = overview.domains[0]?.name === domain;
+  const home = authentikHome(authentik.admin_url, overview.domains);
+  // Once two domains use authentik, each lets in only its own group.
+  const authentikDomains = overview.domains.filter((item) => item.authentik).length;
   const install = () => {
     setInstalling(true);
-    void run(installAuthentik).finally(() => setInstalling(false));
+    void run(() => installAuthentik(domain)).finally(() => setInstalling(false));
   };
-  const redirect = provider?.redirect_url ?? `https://sign-in.${overview.domain}/oauth2/callback`;
+  const redirect = provider?.redirect_url ?? `https://sign-in.${domain}/oauth2/callback`;
+  const group = (
+    <p className="muted set__note">
+      Only people in the <strong>{domain} people</strong> group in authentik&apos;s admin can sign
+      in at {domain}. Add them there yourself: people and passwords stay out of the chat.
+    </p>
+  );
   const signOut = provider?.sign_out_url && (
     <p className="muted set__note">
       Sign out of every app: <code>{provider.sign_out_url}</code>
       <Hint label="About signing out">
-        Ends the company sign-in session for every app on this server. The apps page links it; ask
+        Ends the company sign-in session for every app at {domain}. The apps page links it; ask
         Mayka to add a Sign out link to an app.
       </Hint>
     </p>
@@ -432,7 +567,7 @@ function SignInSection({ onLeave }: { onLeave?: () => void }) {
       setAsked((current) => ({ ...current, [key]: e.target.value })),
   });
   const connect = () =>
-    void run(() => connectSignIn(asked)).then((done) => {
+    void run(() => connectSignIn({ ...asked, domain })).then((done) => {
       if (!done) return;
       setEditing(false);
       setAsked(NO_PROVIDER);
@@ -440,13 +575,16 @@ function SignInSection({ onLeave }: { onLeave?: () => void }) {
 
   return (
     <section className="set__section">
-      <h3 className="set__heading">Company sign-in</h3>
-      {provider && authentik.installed ? (
+      <h3 className="set__heading">
+        {several ? `Company sign-in · ${domain}` : "Company sign-in"}
+      </h3>
+      {provider && entry.authentik ? (
         <>
           <p className="set__note">
             Apps can let people sign in with their company account, through authentik on this server
             {authentik.running ? "" : " (starting)"}. Add people and groups in its admin page.
           </p>
+          {authentikDomains > 1 && group}
           {authentik.admin_url && (
             <p className="muted set__note">
               Admin page:{" "}
@@ -479,8 +617,12 @@ function SignInSection({ onLeave }: { onLeave?: () => void }) {
             <button
               className="ghost"
               disabled={busy}
-              title="Stops authentik; its people and groups stay for setting it up again"
-              onClick={() => void run(disconnectSignIn)}
+              title={
+                authentikDomains > 1
+                  ? `Stops sign-in at ${domain}; authentik keeps serving the other domains`
+                  : "Stops authentik; its people and groups stay for setting it up again"
+              }
+              onClick={() => void run(() => disconnectSignIn(domain))}
             >
               Disconnect
             </button>
@@ -509,7 +651,11 @@ function SignInSection({ onLeave }: { onLeave?: () => void }) {
             >
               Change
             </button>
-            <button className="ghost" disabled={busy} onClick={() => void run(disconnectSignIn)}>
+            <button
+              className="ghost"
+              disabled={busy}
+              onClick={() => void run(() => disconnectSignIn(domain))}
+            >
               Disconnect
             </button>
           </div>
@@ -523,7 +669,7 @@ function SignInSection({ onLeave }: { onLeave?: () => void }) {
               onClick={() => {
                 startChatOn(
                   { kind: "sign_in" },
-                  `Help me set up company sign-in for this server. Its domain is ${overview.domain}.`,
+                  `Help me set up company sign-in for this server, at ${domain}.`,
                 );
                 onLeave?.();
               }}
@@ -581,7 +727,20 @@ function SignInSection({ onLeave }: { onLeave?: () => void }) {
               </button>
             )}
           </div>
-          {!provider && (
+          {!provider && authentik.installed && (
+            <>
+              <h4 className="set__heading">No provider? Use this server&apos;s authentik</h4>
+              <p className="muted set__note">
+                authentik already runs on this server{home ? `, at auth.${home}` : ""}. It can sign
+                people in at {domain} too, with its own application in authentik.
+              </p>
+              {group}
+              <button disabled={busy} onClick={install}>
+                {installing ? "Connecting authentik…" : "Use this server's authentik"}
+              </button>
+            </>
+          )}
+          {!provider && !authentik.installed && isFirst && (
             <>
               <h4 className="set__heading">No provider? Set up authentik here</h4>
               <p className="muted set__note">
@@ -592,6 +751,7 @@ function SignInSection({ onLeave }: { onLeave?: () => void }) {
                 gives your apps room to grow.
                 {memoryGb !== null && ` This server has ${memoryGb} GB.`} A small team may prefer
                 Pocket ID, which is lighter and which Mayka can help you set up.
+                {several && " Your other domains can use it too, once it runs."}
               </p>
               {memoryGb !== null && memoryGb < 8 && (
                 <p className="set__note">
@@ -672,7 +832,7 @@ function WhereSection({
   const fresh =
     overview !== null &&
     overview.placement === null &&
-    !overview.domain &&
+    overview.domains.length === 0 &&
     overview.reach !== "private";
   if (fresh && !asking) setAsking(true);
   if (!overview || !(fresh || asking)) return null;
@@ -749,7 +909,7 @@ function WhereSection({
           <p className="set__note">
             Recommended: <strong>your own domain</strong>. Your apps get addresses such as
             app.yourcompany.com, for anyone on the internet, each open, behind a password, or behind
-            company sign-in. Set it {where("Domain")}: it explains the DNS record to add.
+            company sign-in. Set it {where("Domains")}: it explains the DNS record to add.
           </p>
           <div className="set__actions">
             {toSettings}
@@ -883,10 +1043,17 @@ export function ServerQuestion({ onOpenSettings }: { onOpenSettings: () => void 
 // Homelab mode (HOMELAB_PLAN.md): off, apps are served at the server's own
 // domain, for anyone on the internet; on, only the owner's devices reach
 // them, on their Tailscale network, with the steps Tailscale takes.
-// Set when Homelab is turned on here: once the server is ready, this
-// computer moves to its Tailscale address by itself. It outlives the dialog,
-// since signing in to Tailscale happens in a browser.
+// Set when Homelab is turned on here or by Mayka's card: once the server is
+// ready, this computer moves to its Tailscale address by itself while
+// Settings → Server shows. It outlives the dialog, since signing in to
+// Tailscale happens in a browser.
 let connectWhenReady = false;
+
+/** Homelab was just turned on outside Settings: connect through Tailscale
+ * once the server is ready, as turning it on in Settings does. */
+export function connectWhenHomelabReady() {
+  connectWhenReady = true;
+}
 
 /** Settings → Server → Homelab: one button each way, each asked first. */
 export function HomelabSettings({ onLeave }: { onLeave?: () => void }) {
@@ -974,18 +1141,9 @@ export function HomelabSettings({ onLeave }: { onLeave?: () => void }) {
       // through it goes back to the address it had first, or is told what
       // losing the server means before it does.
       if (onTailscale && !anyway) {
-        const found = await readPlaces();
-        const shown = found.servers.find((s) => s.fingerprint === found.active);
-        const back = shown?.previous_address ?? null;
-        const movedBack =
-          back !== null &&
-          found.active !== null &&
-          (await moveServer(found.active, back).then(
-            () => true,
-            () => false,
-          ));
-        if (!movedBack) {
-          setStranded({ tried: back });
+        const stuck = await moveBackFirst();
+        if (stuck) {
+          setStranded(stuck);
           return;
         }
       }
@@ -995,7 +1153,7 @@ export function HomelabSettings({ onLeave }: { onLeave?: () => void }) {
         // may never arrive, so the server is taken as switched either way.
         await Promise.race([
           setReach("internet").catch(() => undefined),
-          new Promise((done) => setTimeout(done, 8000)),
+          new Promise((done) => setTimeout(done, LOSING_ANSWER_MS)),
         ]);
         setLost(true);
         return;
@@ -1020,7 +1178,6 @@ export function HomelabSettings({ onLeave }: { onLeave?: () => void }) {
     setConfirming(false);
     setStranded(null);
   };
-  const oldLinks = overview.apps.length > 0 ? " Anyone with an old link needs the new one." : "";
 
   if (lost) {
     return (
@@ -1072,13 +1229,7 @@ export function HomelabSettings({ onLeave }: { onLeave?: () => void }) {
       {confirming && !stranded && (
         <div className="set__warning" role="alertdialog" aria-label="Confirm Homelab change">
           <p className="set__note">
-            <strong>{on ? "Turn off Homelab?" : "Turn on Homelab?"}</strong>{" "}
-            {on
-              ? `Your apps move to addresses under your own domain, for anyone on the internet. Every app gets a new address.${oldLinks}`
-              : `Your apps move to a private network that only your devices reach, through Tailscale. Every app gets a new address, and company sign-in is not offered there.${oldLinks} Next you sign in to Tailscale; once the server is ready, this computer connects through it by itself.`}
-            {on &&
-              onTailscale &&
-              " This computer first goes back to reaching the server at its home network address."}
+            <HomelabWarning on={on} apps={overview.apps.length} onTailscale={onTailscale} />
           </p>
           <div className="set__row">
             <button disabled={busy} onClick={() => void (on ? turnOff() : turnOn())}>
@@ -1097,15 +1248,7 @@ export function HomelabSettings({ onLeave }: { onLeave?: () => void }) {
           aria-label="This computer would lose the server"
         >
           <p className="set__note">
-            This computer reaches the server only through Tailscale
-            {stranded.tried
-              ? `, and it could not reach it at its home network address (${stranded.tried}) just now`
-              : ""}
-            . Turning Homelab off stops Tailscale on the server, so this computer loses the server.
-            To connect again you would need to be on the same network as the server, run{" "}
-            <code>sudo commitarium-host pair</code> on it, and paste the line it prints into
-            Commitarium.
-            {stranded.tried && " If you are away from home, turning it off from home avoids this."}
+            <StrandedWarning tried={stranded.tried} />
           </p>
           <p className="muted set__note">
             Not sure what you need? Mayka can help you find the way that fits.
@@ -1222,9 +1365,10 @@ const ACCESS_CHOICES: { value: Access; label: string }[] = [
   { value: "company", label: "Company sign-in" },
 ];
 
-// The apps page (APPS_PAGE_PLAN.md): apps.<domain> lists this server's apps
-// and opens them, for the people who use them. Off until turned on.
-function AppsPageSection() {
+// The apps page (APPS_PAGE_PLAN.md): apps.<domain> lists the apps at that
+// domain and opens them, for the people who use them; one per domain, or on
+// the private network one at the Tailscale name. Off until turned on.
+function AppsPageSection({ domain, several }: { domain?: string; several: boolean }) {
   const [overview, setOverview] = useState<PublishingOverview | null>(null);
   const [access, setAccess] = useState<Access>("private");
   const [password, setPassword] = useState("");
@@ -1238,11 +1382,13 @@ function AppsPageSection() {
     void readPublishing()
       .then((found) => {
         setOverview(found);
-        setName(found.apps_page?.name ?? "apps");
-        setAccess(found.apps_page?.access ?? (found.sign_in ? "company" : "private"));
+        const entry = found.domains.find((item) => item.name === domain);
+        const page = domain ? (entry?.apps_page ?? null) : found.apps_page;
+        setName(page?.name ?? "apps");
+        setAccess(page?.access ?? (entry?.sign_in ? "company" : "private"));
       })
       .catch((e) => setError(String(e)));
-  }, []);
+  }, [domain]);
   useFresh(refresh);
 
   const run = async (work: () => Promise<unknown>) => {
@@ -1261,16 +1407,17 @@ function AppsPageSection() {
   };
 
   const onTailnet = overview?.reach === "private";
-  if (!overview?.domain && !onTailnet) return null;
-  if (!overview) return null;
-  const page = overview.apps_page;
+  const entry = overview?.domains.find((item) => item.name === domain);
+  if (!overview || (!entry && !onTailnet)) return null;
+  const page = onTailnet ? overview.apps_page : (entry?.apps_page ?? null);
+  // Its page lists only the apps whose main address is at its domain.
+  const listed = onTailnet ? overview.apps : overview.apps.filter((app) => app.domain === domain);
   const shownName = name.trim().toLowerCase() || "apps";
   // On the private network the page has the Tailscale name to itself.
   const renamed = !onTailnet && page !== null && shownName !== page.name;
   const choices = ACCESS_CHOICES.filter(
     (choice) =>
-      choice.value !== "company" ||
-      (!onTailnet && (overview.sign_in || page?.access === "company")),
+      choice.value !== "company" || (!onTailnet && (entry?.sign_in || page?.access === "company")),
   );
   // A password page needs one the first time; after that it keeps its own.
   const choose = (next: Access) => {
@@ -1278,12 +1425,12 @@ function AppsPageSection() {
     if (!page) return;
     if (next === "private") {
       // It keeps the password it had; without one, ask for it.
-      void setAppsPage("private")
+      void setAppsPage("private", undefined, undefined, domain)
         .then(refresh)
         .catch(() => setAskPassword(true));
       return;
     }
-    void run(() => setAppsPage(next));
+    void run(() => setAppsPage(next, undefined, undefined, domain));
   };
   const passwordField = (
     <div className="set__row">
@@ -1299,7 +1446,7 @@ function AppsPageSection() {
       {page && (
         <button
           disabled={busy || !password}
-          onClick={() => void run(() => setAppsPage("private", password))}
+          onClick={() => void run(() => setAppsPage("private", password, undefined, domain))}
         >
           Save
         </button>
@@ -1309,10 +1456,11 @@ function AppsPageSection() {
 
   return (
     <section className="set__section">
-      <h3 className="set__heading">Apps page</h3>
+      <h3 className="set__heading">{several ? `Apps page · ${domain}` : "Apps page"}</h3>
       <p className="muted set__note">
-        One address that lists this server&apos;s apps and opens them, in any browser and on a
-        phone. People use the apps there; nothing of Commitarium is shown.
+        One address that lists {several ? `the apps at ${domain}` : "this server's apps"} and opens
+        them, in any browser and on a phone. People use the apps there; nothing of Commitarium is
+        shown.
       </p>
       <label className="muted" hidden={onTailnet}>
         Address
@@ -1325,7 +1473,7 @@ function AppsPageSection() {
             spellCheck={false}
             onChange={(e) => setName(e.target.value)}
           />
-          <span className="muted">.{overview.domain}</span>
+          <span className="muted">.{domain}</span>
         </span>
       </label>
       {renamed && (
@@ -1337,7 +1485,7 @@ function AppsPageSection() {
           <div className="set__row">
             <button
               disabled={busy || !name.trim()}
-              onClick={() => void run(() => setAppsPage(page.access, undefined, name))}
+              onClick={() => void run(() => setAppsPage(page.access, undefined, name, domain))}
             >
               Change address
             </button>
@@ -1385,7 +1533,7 @@ function AppsPageSection() {
             disabled={busy}
             onClick={() =>
               shownPassword === undefined
-                ? void revealAppsPagePassword().then(setShownPassword)
+                ? void revealAppsPagePassword(domain).then(setShownPassword)
                 : setShownPassword(undefined)
             }
           >
@@ -1397,10 +1545,10 @@ function AppsPageSection() {
           {shownPassword !== undefined && <code>{shownPassword ?? "not kept"}</code>}
         </div>
       )}
-      {page && overview.apps.length > 0 && (
+      {page && listed.length > 0 && (
         <>
           <h4 className="set__heading">Listed there</h4>
-          {overview.apps.map((app) => (
+          {listed.map((app) => (
             <label key={app.project_id} className="set__row">
               <input
                 type="checkbox"
@@ -1409,7 +1557,7 @@ function AppsPageSection() {
                 onChange={(e) => void run(() => setListed(app.project_id, e.target.checked))}
               />
               <span>
-                {app.name}
+                {app.name || app.url.replace("https://", "")}
                 {!app.live && <span className="muted"> · not running</span>}
               </span>
             </label>
@@ -1421,14 +1569,14 @@ function AppsPageSection() {
           <button
             className="ghost"
             disabled={busy}
-            onClick={() => void run(() => setAppsPage(null))}
+            onClick={() => void run(() => setAppsPage(null, undefined, undefined, domain))}
           >
             Turn off
           </button>
         ) : (
           <button
             disabled={busy || !name.trim() || (access === "private" && !password)}
-            onClick={() => void run(() => setAppsPage(access, password, name))}
+            onClick={() => void run(() => setAppsPage(access, password, name, domain))}
           >
             Turn on
           </button>
@@ -1601,8 +1749,14 @@ function ConnectedServer({
 
       <WhereSection onLeave={onLeave} />
       <DomainSection onLeave={onLeave} />
-      <SignInSection onLeave={onLeave} />
-      <AppsPageSection />
+      <PerDomain>
+        {(domain, several) =>
+          domain && <SignInSection domain={domain} several={several} onLeave={onLeave} />
+        }
+      </PerDomain>
+      <PerDomain privateToo>
+        {(domain, several) => <AppsPageSection domain={domain} several={several} />}
+      </PerDomain>
 
       <section className="set__section">
         <h3 className="set__heading">Devices</h3>

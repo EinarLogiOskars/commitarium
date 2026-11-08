@@ -94,8 +94,11 @@
   const notes = { private: "Password", company: "Company sign-in" };
   let apps = [];
 
-  const title = (name) => {
-    const words = name.replace(/-/g, " ");
+  // An app at the domain itself has no name of its own: its address is.
+  const hostOf = (app) => new URL(app.url).host;
+  const title = (app) => {
+    if (!app.name) return hostOf(app);
+    const words = app.name.replace(/-/g, " ");
     return words.charAt(0).toUpperCase() + words.slice(1);
   };
 
@@ -142,12 +145,13 @@
     document.getElementById("app").src = app.url;
     document.getElementById("outside").href = app.url;
     document.getElementById("frame").classList.add("open");
-    document.title = title(app.name);
+    document.title = title(app);
   }
 
+  // Each app opens at /<its address>, which a bare domain has too.
   async function route() {
-    const name = decodeURIComponent(location.pathname.slice(1));
-    const app = apps.find((candidate) => candidate.name === name);
+    const address = decodeURIComponent(location.pathname.slice(1));
+    const app = apps.find((candidate) => hostOf(candidate) === address);
     if (!app || !app.live) return showList();
     if (!(await signedIn())) {
       if (!justTried()) return signInAgain();
@@ -169,21 +173,21 @@
     for (const app of apps) {
       const link = document.createElement("a");
       link.className = "app";
-      link.href = "/" + encodeURIComponent(app.name);
+      link.href = "/" + encodeURIComponent(hostOf(app));
       if (!app.live) link.setAttribute("aria-disabled", "true");
       const tile = document.createElement("span");
       tile.className = "tile";
-      tile.textContent = app.name.charAt(0).toUpperCase();
+      tile.textContent = title(app).charAt(0).toUpperCase();
       const text = document.createElement("span");
       text.style.minWidth = "0";
       const name = document.createElement("div");
       name.className = "name";
-      name.textContent = title(app.name);
+      name.textContent = title(app);
       const note = document.createElement("div");
       note.className = "note";
       if (!app.live) note.textContent = "Not running";
       else if (notes[app.access]) note.innerHTML = lock + " " + notes[app.access];
-      else note.textContent = new URL(app.url).host;
+      else note.textContent = hostOf(app);
       text.append(name, note);
       link.append(tile, text);
       link.addEventListener("click", (event) => {

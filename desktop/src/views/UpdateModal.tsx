@@ -1,5 +1,7 @@
 import type { DesktopUpdate } from "../update/useDesktopUpdate";
 import type { DesktopUpdateProgress } from "../ipc";
+import { releaseDate, whatsNew } from "../update/updateNotes";
+import { Markdown } from "./Markdown";
 
 // The signed-update flow surface. Driven entirely by useDesktopUpdate; the user
 // only ever triggers the two fixed native commands (install, re-check).
@@ -32,9 +34,16 @@ export function UpdateModal({ u, onClose }: { u: DesktopUpdate; onClose: () => v
             <p className="muted">
               Version <strong>{u.update.version}</strong> is available
               {u.currentVersion ? ` — you're on ${u.currentVersion}` : ""}
-              {u.update.published_at ? ` · ${formatDate(u.update.published_at)}` : ""}.
+              {u.update.published_at && releaseDate(u.update.published_at)
+                ? ` · ${releaseDate(u.update.published_at)}`
+                : ""}
+              .
             </p>
-            {u.update.notes && <pre className="update__notes">{u.update.notes}</pre>}
+            {whatsNew(u.update.notes) && (
+              <div className="update__notes">
+                <Markdown text={whatsNew(u.update.notes)} />
+              </div>
+            )}
             <p className="muted set__note">
               Installing verifies the signature, then restarts the app. Agents that are mid-turn
               will block the restart until they reach a safe point.
@@ -162,9 +171,4 @@ function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
   return `${(n / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-function formatDate(iso: string): string {
-  const d = new Date(iso);
-  return isNaN(d.getTime()) ? iso : d.toLocaleDateString();
 }

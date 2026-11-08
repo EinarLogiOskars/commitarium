@@ -807,7 +807,7 @@ func ResolveStructuredOutput(
 // which Commitarium applies at once (ONE_CONVERSATION_PLAN.md phase 2).
 func assistantTurnSchema(planning bool) map[string]any {
 	text := map[string]any{"type": "string"}
-	types := []string{"create_work_order", "start_work_order", "change_models", "add_vision_item", "start_autopilot", "continue_work_order", "recover_work_order", "close_work_order", "create_app", "plan_project", "set_up_preview", "set_apps_page", "list_on_apps_page", "write_vision", "set_up_stack", "answer_helper", "write_brief", "design_stack", "research", "build_plan", "deploy_app"}
+	types := []string{"create_work_order", "start_work_order", "change_models", "add_vision_item", "start_autopilot", "continue_work_order", "recover_work_order", "close_work_order", "create_app", "plan_project", "set_up_preview", "set_apps_page", "list_on_apps_page", "write_vision", "set_up_stack", "answer_helper", "write_brief", "design_stack", "research", "build_plan", "deploy_app", "add_domain", "install_authentik", "set_app_access", "set_homelab"}
 	if !planning {
 		// Plan mode is suggested only in a chat that is not planning.
 		types = append(types, "start_planning")
@@ -832,7 +832,7 @@ func assistantTurnSchema(planning bool) map[string]any {
 			"reviewer_effort":      map[string]any{"type": "string", "description": "The reviewer's reasoning effort for code review; empty is the model's default."},
 			"work_order_id":        text,
 			"when":                 map[string]any{"type": "string", "enum": []string{"", "now", "next_turn"}},
-			"how":                  map[string]any{"type": "string", "enum": []string{"", "recheck", "continue", "message", "fresh_conversation", "back_to_ready", "public", "private", "company", "off", "list", "hide"}, "description": "For recover_work_order: how to recover the blocked work order. For set_apps_page: public, private, company, or off. For list_on_apps_page: list or hide. Otherwise empty."},
+			"how":                  map[string]any{"type": "string", "enum": []string{"", "recheck", "continue", "message", "fresh_conversation", "back_to_ready", "public", "private", "company", "off", "list", "hide", "on", "wildcard", "each_name"}, "description": "For recover_work_order: how to recover the blocked work order. For set_apps_page: public, private, company, or off. For list_on_apps_page: list or hide. For set_app_access: public, private, or company. For add_domain: wildcard or each_name. For set_homelab: on or off. Otherwise empty."},
 			"guidance":             map[string]any{"type": "string", "description": "For continue_work_order: what to tell the work order's agents; empty retries as is. For answer_helper: your answer to the helper's question."},
 			"priority":             map[string]any{"type": "integer", "description": "For add_vision_item: the priority level, 0 for P0 through 9 for P9; any level the vision has or a new one. For start_autopilot: the priority to finish. Otherwise 0."},
 			"after":                map[string]any{"type": "string", "description": "For create_work_order and start_work_order: the work order ID, or the exact title of another of your actions, that this one must wait for because it needs that one's code or result, or both rewrite the same thing wholesale; it starts once that one merges. Touching the same files is no reason. Otherwise empty."},
@@ -841,13 +841,20 @@ func assistantTurnSchema(planning bool) map[string]any {
 			"app_brief":            map[string]any{"type": "string", "description": "For create_app and plan_project: everything you gathered with the user, in full, for whoever plans it next. Otherwise empty."},
 			"assumptions":          map[string]any{"type": "array", "items": text, "description": "For create_app and plan_project: each thing you assumed where the user did not say, in a short line. Otherwise empty."},
 			"attachments":          map[string]any{"type": "array", "items": text, "description": "For create_work_order: the files the user attached that its agents need, such as screenshots of what to change, by file name (screenshot-2026-10-28-1612.png, as in the user's Attached line); the lead sees them with the work order. Otherwise empty."},
+			"domain":               map[string]any{"type": "string", "description": "For add_domain: the domain to add, such as example.com. For install_authentik and set_apps_page: the domain it is for; empty is the first. For deploy_app: the domain of the address you propose; empty keeps the app's address as it is. Otherwise empty."},
+			"name":                 map[string]any{"type": "string", "description": "For deploy_app with a domain: the address's name under it, such as notes; empty is the domain itself, for a website. Otherwise empty."},
+			"aliases": map[string]any{"type": "array", "description": "For deploy_app with a domain: the app's extra addresses, which reach the same app, each a domain and a name (empty for the domain itself). Otherwise empty.",
+				"items": objectSchema(map[string]any{"domain": text, "name": text}, []string{"domain", "name"})},
+			"app":    map[string]any{"type": "string", "description": "For set_app_access: the app's main address, such as notes.example.com, as the server's facts list it; empty is this project's app. Otherwise empty."},
+			"groups": map[string]any{"type": "array", "items": text, "description": "For set_app_access with company: the groups that may open it; empty is anyone at the company. Otherwise empty."},
+			"asked":  map[string]any{"type": "boolean", "description": "For deploy_app, add_domain, install_authentik, set_app_access, set_apps_page and list_on_apps_page: true when the user's latest message asked for exactly this change and you guessed nothing it needs (such as an address, a domain or groups they did not give and the facts do not settle); the app then applies it at once. Otherwise false."},
 		},
 		[]string{
 			"type", "reason", "title", "description", "vision_item_id", "steps",
 			"lead_agent", "lead_model", "reviewer_agent", "reviewer_model",
 			"lead_plan_model", "lead_plan_effort", "lead_effort", "reviewer_plan_model", "reviewer_plan_effort", "reviewer_effort",
 			"work_order_id", "when", "how", "priority", "guidance", "after", "helper", "brief", "app_brief", "assumptions",
-			"attachments",
+			"attachments", "domain", "name", "aliases", "app", "groups", "asked",
 		},
 	)
 	properties := map[string]any{

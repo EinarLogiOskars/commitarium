@@ -78,17 +78,41 @@ const (
 	// AssistantDeployApp deploys the app's latest merged version on the
 	// server, for visitors (PUBLISHING_PLAN.md). Commitarium records it and
 	// the user's app runs the deploy once they approve it, so it is always a
-	// card, never autopilot's.
+	// card, never autopilot's. Domain, when set, proposes its address too:
+	// Name under Domain (empty for the domain itself) and Aliases, its extra
+	// addresses (MULTI_DOMAIN_PLAN.md).
 	AssistantDeployApp AssistantActionType = "deploy_app"
 	// AssistantSetAppsPage turns the server's apps page on with who may open
 	// it (How: public, private or company) or off (How: off), as the user
 	// asked (APPS_PAGE_PLAN.md, A4). The user's app makes the change once they
 	// approve it, so it is always a card. A password is never chosen here:
 	// private keeps the page's password, or sends the user to Settings.
+	// Domain names whose page; empty is the first domain's.
 	AssistantSetAppsPage AssistantActionType = "set_apps_page"
 	// AssistantListOnAppsPage lists this app on the apps page (How: list) or
 	// hides it there (How: hide). Always a card.
 	AssistantListOnAppsPage AssistantActionType = "list_on_apps_page"
+	// The server's setup cards (MULTI_DOMAIN_PLAN.md, M5): the user's app
+	// makes each change through the host once they approve it, as Settings
+	// does, and tells Commitarium what the host answered, which becomes the
+	// card's result. Always cards; Mayka gets no new access.
+	//
+	// AssistantAddDomain adds Domain to the server, with one wildcard record
+	// (How: wildcard, or empty) or a record for each address (How:
+	// each_name). The host checks its DNS on the way.
+	AssistantAddDomain AssistantActionType = "add_domain"
+	// AssistantInstallAuthentik sets authentik up on the server for Domain
+	// (empty: the first), or connects Domain to the authentik already there.
+	AssistantInstallAuthentik AssistantActionType = "install_authentik"
+	// AssistantSetAppAccess sets who may open a deployed app (How: public,
+	// private or company), with Groups for company. App names it by its main
+	// address; empty is this project's app. A password is never chosen
+	// here: private keeps the app's own, or sends the user to its page.
+	AssistantSetAppAccess AssistantActionType = "set_app_access"
+	// AssistantSetHomelab turns Homelab mode on or off (How). Off warns, in
+	// the card and before anything happens, when this computer would lose
+	// the server.
+	AssistantSetHomelab AssistantActionType = "set_homelab"
 	// AssistantWriteVision has Commitarium write the project's vision on the
 	// assistant's agent from Description: what the project is for, in the
 	// user's words (ADR-020), where the assistant builds everything.
@@ -239,6 +263,75 @@ type AssistantAction struct {
 	// draft, or its revision) with its slices as a numbered checklist;
 	// empty keeps it (PLAN_MODE_PLAN.md PM6).
 	PlanDocument string `json:"plan_document,omitempty"`
+	// Domain, Name and Aliases, for the server's cards: the domain a card
+	// acts on, and for deploy_app the address it proposes (the empty Name is
+	// the domain itself) with its extra addresses.
+	Domain  string       `json:"domain,omitempty"`
+	Name    string       `json:"name,omitempty"`
+	Aliases []AppAddress `json:"aliases,omitempty"`
+	// App, for set_app_access, is the app's main address, such as
+	// notes.example.com; empty is this project's app. Groups are who may
+	// open it with company sign-in; none is anyone at the company.
+	App    string   `json:"app,omitempty"`
+	Groups []string `json:"groups,omitempty"`
+	// Asked, for a card the user's app applies (AppliedByTheApp), says the
+	// user's own message asked for exactly this change, with nothing Mayka
+	// had to guess: the app then applies it at once, without asking again,
+	// unless it removes, stops, hides or moves something, or turns Homelab.
+	Asked bool `json:"asked,omitempty"`
+}
+
+// AppAddress is an address under one of the server's domains: Name is empty
+// for the domain itself.
+type AppAddress struct {
+	Domain string `json:"domain"`
+	Name   string `json:"name"`
+}
+
+const (
+	maxDomainBytes  = 253
+	maxNameBytes    = 63
+	maxAppAliases   = 10
+	maxAccessGroups = 20
+)
+
+// AppliedByTheApp reports a card the user's app applies through the
+// server's host before it is recorded, with what the host answered as its
+// result: the server cards, deploying, and the apps page's.
+func AppliedByTheApp(kind AssistantActionType) bool {
+	switch kind {
+	case AssistantDeployApp, AssistantSetAppsPage, AssistantListOnAppsPage:
+		return true
+	}
+	return ServerCard(kind)
+}
+
+// ServerCard reports a card the user's app applies through the server's
+// host before it is recorded, with what the host answered as its result.
+func ServerCard(kind AssistantActionType) bool {
+	switch kind {
+	case AssistantAddDomain, AssistantInstallAuthentik, AssistantSetAppAccess, AssistantSetHomelab:
+		return true
+	}
+	return false
+}
+
+// AnyChat reports a card about the user's server, which a chat outside any
+// project may carry too, such as one on serving apps.
+func AnyChat(kind AssistantActionType) bool {
+	return ServerCard(kind) || kind == AssistantSetAppsPage
+}
+
+// validDomain checks a domain's shape loosely: the host checks it for real.
+func validDomain(domain string) bool {
+	return domain != "" && len(domain) <= maxDomainBytes && strings.Contains(domain, ".") &&
+		!strings.ContainsAny(domain, " /:@*")
+}
+
+// validName checks an address name's shape loosely; empty is the domain
+// itself.
+func validName(name string) bool {
+	return len(name) <= maxNameBytes && !strings.ContainsAny(name, " ./:@*")
 }
 
 // PhaseChoices are the action's planning models and efforts (ADR-031); nil
@@ -301,13 +394,22 @@ func (turn AssistantTurn) Normalize() (AssistantTurn, error) {
 			&action.LeadPlanModel, &action.LeadPlanEffort, &action.LeadEffort,
 			&action.ReviewerPlanModel, &action.ReviewerPlanEffort, &action.ReviewerEffort,
 			&action.WorkOrderID, &action.When, &action.How, &action.Guidance, &action.After, &action.Helper,
-			&action.AppBrief, &action.Frameworks, &action.PlanStep, &action.PlanDocument,
+			&action.AppBrief, &action.Frameworks, &action.PlanStep, &action.PlanDocument, &action.App,
 		} {
 			*field = strings.TrimSpace(*field)
 		}
+		// Addresses are lower case, as the host keeps them.
+		for _, field := range []*string{&action.Domain, &action.Name} {
+			*field = strings.ToLower(strings.TrimSpace(*field))
+		}
+		for index := range action.Aliases {
+			alias := &action.Aliases[index]
+			alias.Domain = strings.ToLower(strings.TrimSpace(alias.Domain))
+			alias.Name = strings.ToLower(strings.TrimSpace(alias.Name))
+		}
 		for _, list := range []*[]string{
 			&action.Assumptions, &action.Decisions, &action.OpenQuestions, &action.StackPresets, &action.Attachments,
-			&action.PlanCovered,
+			&action.PlanCovered, &action.Groups,
 		} {
 			kept := (*list)[:0:0]
 			for _, line := range *list {
@@ -457,11 +559,60 @@ func (action AssistantAction) validate() error {
 			return fmt.Errorf("how must be recheck, continue, message, fresh_conversation, or back_to_ready")
 		}
 	case AssistantDeployApp:
+		if action.Domain == "" && (action.Name != "" || len(action.Aliases) > 0) {
+			return fmt.Errorf("an address needs its domain")
+		}
+		if action.Domain != "" && (!validDomain(action.Domain) || !validName(action.Name)) {
+			return fmt.Errorf("the address is a name (or empty, for the domain itself) under a domain")
+		}
+		if len(action.Aliases) > maxAppAliases {
+			return fmt.Errorf("an app has at most %d extra addresses", maxAppAliases)
+		}
+		for _, alias := range action.Aliases {
+			if !validDomain(alias.Domain) || !validName(alias.Name) {
+				return fmt.Errorf("each extra address is a name (or empty, for the domain itself) under a domain")
+			}
+		}
 	case AssistantSetAppsPage:
 		switch action.How {
 		case "public", "private", "company", "off":
 		default:
 			return fmt.Errorf("how must be public, private, company, or off")
+		}
+		if action.Domain != "" && !validDomain(action.Domain) {
+			return fmt.Errorf("the domain is a name such as example.com")
+		}
+	case AssistantAddDomain:
+		if !validDomain(action.Domain) {
+			return fmt.Errorf("adding a domain needs it, such as example.com")
+		}
+		if action.How != "" && action.How != "wildcard" && action.How != "each_name" {
+			return fmt.Errorf("how must be wildcard or each_name")
+		}
+	case AssistantInstallAuthentik:
+		if action.Domain != "" && !validDomain(action.Domain) {
+			return fmt.Errorf("the domain is a name such as example.com")
+		}
+	case AssistantSetAppAccess:
+		switch action.How {
+		case "public", "private", "company":
+		default:
+			return fmt.Errorf("how must be public, private, or company")
+		}
+		if len(action.App) > maxDomainBytes || strings.ContainsAny(action.App, " /") {
+			return fmt.Errorf("the app is named by its main address, such as notes.example.com")
+		}
+		if len(action.Groups) > maxAccessGroups || (len(action.Groups) > 0 && action.How != "company") {
+			return fmt.Errorf("groups are for company sign-in, at most %d", maxAccessGroups)
+		}
+		for _, group := range action.Groups {
+			if len(group) > 100 {
+				return fmt.Errorf("a group's name is too long")
+			}
+		}
+	case AssistantSetHomelab:
+		if action.How != "on" && action.How != "off" {
+			return fmt.Errorf("how must be on or off")
 		}
 	case AssistantListOnAppsPage:
 		if action.How != "list" && action.How != "hide" {
