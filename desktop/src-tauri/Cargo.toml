@@ -1,6 +1,6 @@
 [package]
 name = "commitarium"
-version = "0.12.1"
+version = "0.13.0"
 description = "Commitarium desktop workspace"
 authors = ["Einar Logi Óskarsson"]
 edition = "2021"
