@@ -121,6 +121,7 @@ export interface AssistantAction {
   /** The user asked for exactly this change: a card the app applies goes
    * ahead by itself, unless it removes, stops or moves something. */
   asked?: boolean;
+  updated_at?: string;
   /** For answer_helper: the helper it answers; for a card from a helper's
    * result, the helper that proposed it (ADR-035). */
   helper?: string;

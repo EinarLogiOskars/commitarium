@@ -775,12 +775,11 @@ func (service *Service) Resolve(ctx context.Context, scope, actionID string, sta
 			stored.Goal.follow(action.VisionItemID, action.WorkOrderID)
 		}
 		woken := false
-		if status == ActionFailed && featureartifact.AppliedByTheApp(action.Type) {
-			// The card shows what the server answered; Mayka explains it at
-			// once, with the next step, rather than at the user's next message.
-			stored.PendingEvents = append(stored.PendingEvents, "Your card \""+cardTitle(*action)+
-				"\" did not go through. "+action.Result+" Tell the user in a line or two what this means and the "+
-				"one thing to do next; propose the card again only once that is done.")
+		if event := settledCardsEvent(stored.Actions, *action); event != "" {
+			// What the app applied is reported back to Mayka at once, so she
+			// tells the user it is done (or what went wrong) and proposes
+			// what follows, rather than leaving it until the user's next message.
+			stored.PendingEvents = append(stored.PendingEvents, event)
 			woken = true
 		}
 		stored.UpdatedAt = action.UpdatedAt
@@ -793,6 +792,51 @@ func (service *Service) Resolve(ctx context.Context, scope, actionID string, sta
 		return stored.Conversation, nil
 	}
 	return Conversation{}, ErrNotFound
+}
+
+// settledCardsEvent is what Mayka hears once a card the app applies has
+// settled. A failed card is told at once. The cards the user asked for
+// outright, which the app applies by itself, are told together once the last
+// of one reply's has settled; a card the user approved by hand says how it
+// went on the card and needs no word from Mayka unless it failed.
+func settledCardsEvent(actions []Action, settled Action) string {
+	if !featureartifact.AppliedByTheApp(settled.Type) || settled.Status == ActionDismissed {
+		return ""
+	}
+	if !settled.Asked {
+		if settled.Status != ActionFailed {
+			return ""
+		}
+		return "Your card \"" + cardTitle(settled) + "\" did not go through. " + settled.Result +
+			" Tell the user in a line or two what this means and the one thing to do next; propose the card " +
+			"again only once that is done."
+	}
+	var lines []string
+	failed := false
+	for _, action := range actions {
+		if action.MessageID != settled.MessageID || !action.Asked || !featureartifact.AppliedByTheApp(action.Type) {
+			continue
+		}
+		switch action.Status {
+		case ActionProposed:
+			return "" // the rest of the reply's changes are still being applied
+		case ActionApplied:
+			lines = append(lines, "- \""+cardTitle(action)+"\" went through. "+action.Result)
+		case ActionFailed:
+			failed = true
+			lines = append(lines, "- \""+cardTitle(action)+"\" did not go through. "+action.Result)
+		}
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	next := "Tell the user in a line or two that it is done and what they can do with it now. If a step " +
+		"should follow that is yours to take, propose it as a card rather than only mentioning it."
+	if failed {
+		next = "Tell the user in a line or two what is done and what failed, what that means, and the one " +
+			"thing to do next; propose a failed card again only once that is done."
+	}
+	return "The changes the user asked for were applied:\n" + strings.Join(lines, "\n") + "\n" + next
 }
 
 // cardTitle names a card for Mayka: its title, or its kind.

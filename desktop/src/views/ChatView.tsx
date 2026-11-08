@@ -1,4 +1,6 @@
 import { SCREENSHOT_PROMPT, captureScreenshot, nextPaint } from "./screenshot";
+import { WorkingList } from "./WorkingList";
+import { workingOn } from "./workingOn";
 import { BuildForMeCard, FIRST_LOOK_NOTE } from "./BuildForMeCard";
 import { AttachmentChips, SentAttachments, useAttachments } from "./Attachments";
 import { ComposerBox } from "./Composer";
@@ -67,6 +69,7 @@ import {
   appsPageQuestion,
   deployAddress,
   SERVER_CARDS,
+  applyingHere,
   ServerCard,
   serverCardQuestion,
 } from "./serverCards";
@@ -1019,6 +1022,10 @@ export function ChatView({
             </button>
           </div>
         )}
+        <WorkingList
+          items={workingOn(conversation, SERVER_CARDS, applyingHere)}
+          writing={conversation?.status === "running"}
+        />
         {attachments.problem && <p className="note composer__problem">{attachments.problem}</p>}
         <AttachmentChips
           items={attachments.items}
