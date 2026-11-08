@@ -114,6 +114,9 @@ type Message struct {
 	Text string `json:"text"`
 	// Attachments name the scope's documents the user attached to it.
 	Attachments []string `json:"attachments,omitempty"`
+	// Outputs name the files a helper made, on the event that hands them
+	// back (task.go).
+	Outputs []string `json:"outputs,omitempty"`
 	// Questions are what an assistant's reply asks the user as cards
 	// (questions.go).
 	Questions  []Question `json:"questions,omitempty"`
@@ -337,6 +340,8 @@ type Config struct {
 	// Attachments, when set, holds the files attached to messages
 	// (attachments.go).
 	Attachments Attachments
+	// Outputs, when set, keeps what general helpers make (task.go).
+	Outputs Outputs
 }
 
 // ChatUsage is one assistant turn's usage.

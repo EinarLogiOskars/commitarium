@@ -28,6 +28,7 @@ const (
 	agentRoleVision      = "vision_writer"
 	agentRoleStack       = "stack_designer"
 	agentRoleResearch    = "research"
+	agentRoleHelper      = "helper"
 )
 
 // Agent states: working has a turn in flight; idle waits on the other agent
@@ -49,7 +50,7 @@ type agentAtWork struct {
 	Model     string `json:"model,omitempty"`
 	// Role is lead or reviewer for runs, session for a work session's agent,
 	// or the helper's job: brief_writer, vision_writer, stack_designer,
-	// research.
+	// research, helper (a general helper, HELPERS_PLAN.md).
 	Role           string `json:"role"`
 	WorkOrderID    string `json:"work_order_id,omitempty"`
 	WorkOrderTitle string `json:"work_order_title,omitempty"`
@@ -294,11 +295,14 @@ func (api *API) helperAgent(ctx context.Context, projectID string, helper conver
 			status = string(session.Status)
 		}
 		agent.Role, agent.Agent, agent.Model = agentRoleStack, session.Agent, session.Model
-	case conversations.HelperResearch:
-		// Research asks nothing: it works until it reports back, and the
-		// assistant's watcher marks it done then. It runs on the
-		// assistant's own agent and model.
+	case conversations.HelperResearch, conversations.HelperTask:
+		// Research and general helpers ask nothing: they work until they
+		// report back, and the assistant's watcher marks them done then.
+		// They run on the assistant's own agent and model.
 		agent.Role, status = agentRoleResearch, "running"
+		if helper.Kind == conversations.HelperTask {
+			agent.Role = agentRoleHelper
+		}
 		if settings, err := api.conversations.Settings(ctx); err == nil && settings.Agent == helper.Agent {
 			agent.Model = settings.Model
 		}

@@ -30,6 +30,7 @@ import (
 	"github.com/EinarLogiOskars/commitarium/internal/modelcatalog"
 	"github.com/EinarLogiOskars/commitarium/internal/modelguide"
 	"github.com/EinarLogiOskars/commitarium/internal/orchestration"
+	"github.com/EinarLogiOskars/commitarium/internal/outputs"
 	"github.com/EinarLogiOskars/commitarium/internal/previewcheck"
 	"github.com/EinarLogiOskars/commitarium/internal/project"
 	"github.com/EinarLogiOskars/commitarium/internal/projectdeletion"
@@ -272,6 +273,10 @@ func run(ctx context.Context, coordinatorConfig config) error {
 	if err != nil {
 		return fmt.Errorf("create project documents: %w", err)
 	}
+	outputStore, err := outputs.NewStore(filepath.Join(coordinatorConfig.toolchainRoot, "outputs"))
+	if err != nil {
+		return fmt.Errorf("set up helper outputs: %w", err)
+	}
 	// A work order that is a slice of a written plan finds the plan in its
 	// checkouts (PLAN_MODE_PLAN.md PM6); the visions come later, with the
 	// real agents.
@@ -455,7 +460,7 @@ func run(ctx context.Context, coordinatorConfig config) error {
 			Checkouts: checkoutManager, Branches: forgejoClient,
 			Visions: visions, Features: featureService,
 			Guide: modelGuide, Models: models, ChatUsage: executionStore,
-			SignIns: agentSignIns, Attachments: documentStore,
+			SignIns: agentSignIns, Attachments: documentStore, Outputs: outputStore,
 			// A run at its round limit is the assistant's to recover too.
 			Blocked: func(ctx context.Context, workOrderID string) bool {
 				run, blocked := blockedRun(ctx, executionService, workOrderID)
@@ -672,7 +677,7 @@ func run(ctx context.Context, coordinatorConfig config) error {
 	if projectConversations != nil {
 		projectDeletionService.WithConversations(projectConversations)
 	}
-	projectDeletionService.WithDocuments(documentStore)
+	projectDeletionService.WithDocuments(documentStore).WithOutputs(outputStore)
 	var marketplaceService httpapi.MarketplaceService
 	var releaseService httpapi.ReleaseService
 	var installService httpapi.InstallService
@@ -733,6 +738,7 @@ func run(ctx context.Context, coordinatorConfig config) error {
 		previewCheckService,
 		modelGuide,
 		documentStore,
+		outputStore,
 	)
 
 	if assistantWatcher != nil {

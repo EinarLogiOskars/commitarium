@@ -66,13 +66,19 @@ type Service struct {
 	repositories RepositoryCleaner
 	// conversations forgets the project's assistant conversation, and
 	// documents the files attached to it.
-	conversations, documents ToolchainCleaner
-	mu                       sync.Mutex
+	conversations, documents, outputs ToolchainCleaner
+	mu                                sync.Mutex
 }
 
 // WithDocuments makes deletion remove the project's documents too.
 func (service *Service) WithDocuments(documents ToolchainCleaner) *Service {
 	service.documents = documents
+	return service
+}
+
+// WithOutputs makes deletion remove what the project's helpers made too.
+func (service *Service) WithOutputs(outputs ToolchainCleaner) *Service {
+	service.outputs = outputs
 	return service
 }
 
@@ -163,6 +169,11 @@ func (service *Service) Delete(
 	if service.documents != nil {
 		if err := service.documents.DeleteProject(ctx, projectID); err != nil {
 			return Result{}, fmt.Errorf("%w: remove the project's documents: %v", ErrUnavailable, err)
+		}
+	}
+	if service.outputs != nil {
+		if err := service.outputs.DeleteProject(ctx, projectID); err != nil {
+			return Result{}, fmt.Errorf("%w: remove the project's outputs: %v", ErrUnavailable, err)
 		}
 	}
 	if deletion.Repository != nil {

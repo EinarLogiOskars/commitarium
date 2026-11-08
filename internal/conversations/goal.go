@@ -438,7 +438,8 @@ func (service *Service) autopilotChat(ctx context.Context, scope, chat string, l
 			inGoal = builds
 		case featureartifact.AssistantWriteBrief, featureartifact.AssistantAcceptBrief:
 			inGoal, target = builds, action.WorkOrderID
-		case featureartifact.AssistantAnswerHelper, featureartifact.AssistantResearch, featureartifact.AssistantUpdatePlan:
+		case featureartifact.AssistantAnswerHelper, featureartifact.AssistantResearch, featureartifact.AssistantDelegate,
+			featureartifact.AssistantUpdatePlan:
 			// Answering a helper the assistant started, or researching a
 			// question, changes nothing in the project, and updating the plan
 			// only fills in what the user watches being planned: each is sent
@@ -989,6 +990,7 @@ func (stored *record) addEvent(text string, at time.Time) {
 // talks to a helper, or updates the plan being written.
 func sentAtOnce(kind featureartifact.AssistantActionType) bool {
 	return kind == featureartifact.AssistantAnswerHelper || kind == featureartifact.AssistantResearch ||
+		kind == featureartifact.AssistantDelegate ||
 		kind == featureartifact.AssistantUpdatePlan
 }
 

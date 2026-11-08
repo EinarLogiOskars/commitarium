@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"slices"
+	"strings"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -71,6 +72,8 @@ type HelperState struct {
 	Turn   int
 	Text   string
 	Agent  string
+	// Outputs name the files a general helper made (task.go).
+	Outputs []string
 }
 
 // HelperReader reads a helper's state through its service.
@@ -85,6 +88,8 @@ func (helper Helper) Name() string {
 		return "the vision writer"
 	case HelperResearch:
 		return fmt.Sprintf("the research on “%s”", helper.Title)
+	case HelperTask:
+		return fmt.Sprintf("the helper on “%s”", helper.Title)
 	default:
 		return "the stack designer"
 	}
@@ -99,6 +104,8 @@ func (helper Helper) restart() string {
 		return "write_vision"
 	case HelperResearch:
 		return "research, on the same question"
+	case HelperTask:
+		return "delegate, with the same brief"
 	default:
 		return "design_stack"
 	}
@@ -158,6 +165,8 @@ func (watcher Watcher) followHelpers(ctx context.Context, scope string) {
 			continue
 		case helper.Kind == HelperResearch:
 			state, err = watcher.Service.readResearch(ctx, helper)
+		case helper.Kind == HelperTask:
+			state, err = watcher.Service.readTask(ctx, scope, helper)
 		case watcher.Helpers == nil:
 			continue
 		default:
@@ -243,6 +252,10 @@ func (service *Service) helpersChangedIn(ctx context.Context, scope, chat string
 					"If only the user can answer, ask them in your message, and answer the helper on your next turn.",
 				capitalized(name), helper.ID, state.Text, helper.ID))
 		case HelperProposes:
+			if helper.Kind == HelperTask {
+				stored.delivered(helper, state.Text, state.Outputs, now)
+				continue
+			}
 			if helper.Kind == HelperResearch {
 				stored.found(helper, state.Text, now)
 				service.noteResearch(ctx, scope, helper.Title, state.Text)
@@ -261,6 +274,10 @@ func (service *Service) helpersChangedIn(ctx context.Context, scope, chat string
 				text += " " + state.Text
 			}
 			stored.addEvent(text, now)
+			if len(state.Outputs) > 0 {
+				stored.Messages[len(stored.Messages)-1].Outputs = state.Outputs
+				text += " It left these files: " + strings.Join(state.Outputs, ", ") + "."
+			}
 			stored.PendingEvents = append(stored.PendingEvents,
 				text+" Start it again if it is still needed, or tell the user plainly what is wrong.")
 		}

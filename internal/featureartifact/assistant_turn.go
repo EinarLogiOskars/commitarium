@@ -142,6 +142,11 @@ const (
 	// question of fact, on the web (ADR-035); Title names it in a few
 	// words. Its findings and sources come back to the assistant.
 	AssistantResearch AssistantActionType = "research"
+	// AssistantDelegate briefs a general helper (HELPERS_PLAN.md): Title
+	// names the task in a few words and Description is the full brief. It
+	// may search the web and writes files, which come back to the assistant
+	// with its summary.
+	AssistantDelegate AssistantActionType = "delegate"
 	// AssistantUpdatePlan updates the vision being planned (planning mode):
 	// Description is the goal, and Decisions, OpenQuestions, PlanItems,
 	// StackPresets, and Frameworks the plan's other sections. Like research,
@@ -638,6 +643,11 @@ func (action AssistantAction) validate() error {
 	case AssistantDesignStack:
 		if len(action.Description) > MaxGoalBytes {
 			return fmt.Errorf("the stack's description is too long")
+		}
+	case AssistantDelegate:
+		if action.Title == "" || len(action.Title) > MaxStepTextBytes ||
+			action.Description == "" || len(action.Description) > MaxGoalBytes {
+			return fmt.Errorf("delegate needs a short title and the brief in description")
 		}
 	case AssistantResearch:
 		if action.Title == "" || len(action.Title) > MaxStepTextBytes ||
