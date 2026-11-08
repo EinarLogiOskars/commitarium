@@ -6,10 +6,13 @@ export function Overlay({
   title,
   onClose,
   children,
+  wide = false,
 }: {
   title: string;
   onClose: () => void;
   children: ReactNode;
+  /** Most of the window, for a document to read. */
+  wide?: boolean;
 }) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -26,7 +29,12 @@ export function Overlay({
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className="modal__card overlay" role="dialog" aria-modal="true" aria-label={title}>
+      <div
+        className={`modal__card overlay ${wide ? "overlay--wide" : ""}`}
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+      >
         <div className="overlay__head">
           <h2>{title}</h2>
           <button className="ghost overlay__close" onClick={onClose} aria-label="Close">

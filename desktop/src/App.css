@@ -7508,3 +7508,101 @@ button.shell-agent:hover {
 .working__item--failed {
   color: var(--bad);
 }
+
+/* What Mayka's helpers make (Outputs.tsx): chips under the line that hands
+   them back, the Outputs card, and the viewer. */
+.modal__card.overlay--wide {
+  max-width: min(1100px, 92vw);
+  height: 88vh;
+  max-height: 88vh;
+}
+.output-chip {
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+  font-size: var(--text-sm);
+}
+.output-chip:hover {
+  border-color: var(--border-strong);
+}
+.output-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.output-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 5px 6px;
+  border: none;
+  border-radius: var(--radius-m);
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-size: var(--text-sm);
+  text-align: left;
+  cursor: pointer;
+}
+.output-row:hover {
+  background: var(--hover);
+}
+.output-row__name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.output-row__when {
+  flex: none;
+}
+.output-viewer__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.output-viewer__body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
+}
+.output-viewer__frame {
+  flex: 1;
+  width: 100%;
+  min-height: 60vh;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-m);
+  background: #fff;
+}
+.output-viewer__page {
+  max-width: 46em;
+}
+.output-viewer__image {
+  max-width: 100%;
+  align-self: flex-start;
+}
+.output-viewer__text {
+  margin: 0;
+  white-space: pre-wrap;
+  font-family: var(--font-mono, monospace);
+  font-size: var(--text-sm);
+}
+.output-viewer__table table {
+  border-collapse: collapse;
+  font-size: var(--text-sm);
+}
+.output-viewer__table th,
+.output-viewer__table td {
+  border: 1px solid var(--border);
+  padding: 4px 8px;
+  text-align: left;
+  vertical-align: top;
+}

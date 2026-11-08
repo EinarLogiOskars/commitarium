@@ -37,9 +37,11 @@ PDF export.
   (no project yet). Opening a file shows the viewer.
 - **Viewer and PDF export.** Markdown renders as a page; HTML renders in a
   sandboxed frame (no scripts reaching the app); images, text and CSV show
-  as they are; PDF opens in the frame. **Export PDF** prints the rendered
-  page through the system print dialog, where macOS and Windows both offer
-  Save as PDF. **Save** writes the file as it is.
+  as they are; PDF opens in the frame. **Export PDF** renders the page in a
+  print window of its own (a custom scheme, scripts off, no commands
+  granted) and opens the system print dialog there, where macOS and Windows
+  both offer Save as PDF. **Save** writes the file as it is; **Delete**
+  removes it, after a native confirm.
 - **Helpers show in the Agents card.** A delegated helper appears there while
   it works, like the brief writer does. Loose chats get the Agents card while
   a helper works there.
@@ -50,8 +52,8 @@ PDF export.
   labels, and a helper she briefs to test the app gets them as a file in its
   directory. They are test values for the user's own app, not real logins.
 - **Limits, kept simple.** 20 MB a file, 200 files a scope; the oldest go
-  first, as with loose-chat attachments. Deleting a file is a right-click on
-  the card. Delete removes the project's outputs with it.
+  first, as with loose-chat attachments. Deleting a file is in its viewer.
+  Deleting a project removes its outputs with it.
 
 ## Steps
 

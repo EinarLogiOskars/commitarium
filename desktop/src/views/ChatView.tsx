@@ -3,6 +3,8 @@ import { WorkingList } from "./WorkingList";
 import { workingOn } from "./workingOn";
 import { BuildForMeCard, FIRST_LOOK_NOTE } from "./BuildForMeCard";
 import { AttachmentChips, SentAttachments, useAttachments } from "./Attachments";
+import { OutputChips } from "./Outputs";
+import { OUTPUTS_CHANGED } from "../api/outputs";
 import { ComposerBox } from "./Composer";
 import {
   useCallback,
@@ -203,6 +205,11 @@ export function ChatView({
   const shown = useRef(targetKey);
   shown.current = targetKey;
   const [conversation, setConversationState] = useState<Conversation | null>(null);
+  // A helper's files just came back: the Outputs card reads again.
+  const handedBack = conversation?.messages.filter((m) => m.outputs?.length).length ?? 0;
+  useEffect(() => {
+    if (handedBack > 0) window.dispatchEvent(new Event(OUTPUTS_CHANGED));
+  }, [handedBack]);
   // Work autopilot changed reloads the project's lists, as the user's own
   // approvals do.
   const autoApplied = useRef<number | null>(null);
@@ -748,6 +755,16 @@ export function ChatView({
                   }
                 />
               )}
+            </div>
+          ),
+        });
+      } else if (message.outputs?.length) {
+        // A helper's files stay under its line, to open from the chat.
+        chatEntries.push({
+          block: (
+            <div key={message.id}>
+              <QuietText line={eventLine(message.text)} />
+              <OutputChips owner={scope} names={message.outputs} />
             </div>
           ),
         });

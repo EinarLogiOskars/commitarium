@@ -22,6 +22,9 @@ export interface AssistantMessage {
   text: string;
   /** The files attached to it, among the scope's documents. */
   attachments?: string[];
+  /** The files a helper made, on the event that hands them back
+   * (HELPERS_PLAN.md). */
+  outputs?: string[];
   /** The assistant's questions with suggested answers (ADR-039), each
    * answered once. */
   questions?: AssistantQuestion[];

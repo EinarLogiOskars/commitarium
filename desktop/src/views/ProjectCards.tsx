@@ -1,6 +1,6 @@
 import { connectedServer } from "../connection";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { getAgentsAtWork } from "../api/projects";
+import { getAgentsAtWork, getLooseAgentsAtWork } from "../api/projects";
 import { ApiError } from "../api/client";
 import { listFeatures } from "../api/features";
 import { getProjectToolchain } from "../api/toolchains";
@@ -25,6 +25,7 @@ import { CompactProjectSync } from "./ProjectSyncCard";
 import { DeployCard } from "./DeployCard";
 import { GitRemote } from "./GitRemote";
 import { Overlay } from "./Overlay";
+import { OutputsCard } from "./Outputs";
 import { PlanOverlay } from "./PlanPage";
 import { PlanInsights } from "./PlanInsights";
 import { StopPlanDialog } from "./StopPlanDialog";
@@ -100,6 +101,7 @@ export function ProjectCards({
         onGraph={() => open("graph")}
       />
       <AgentsCard agents={agents} onOpen={openOrder} />
+      <OutputsCard owner={projectId} />
       {hasRepo && (
         <PreviewCard
           projectId={projectId}
@@ -386,10 +388,10 @@ function OrderRow({ row, onOpen }: { row: WorkRow; onOpen: (featureId: string) =
 
 // The agents at work in the project, read again every few seconds and
 // whenever the assistant changes work. null until the first read.
-function useAgentsAtWork(projectId: string): AgentAtWork[] | null {
+function useAgentsAtWork(projectId: string | null): AgentAtWork[] | null {
   const [agents, setAgents] = useState<AgentAtWork[] | null>(null);
   const load = useCallback(() => {
-    getAgentsAtWork(projectId)
+    (projectId ? getAgentsAtWork(projectId) : getLooseAgentsAtWork())
       .then((r) => setAgents(r.agents ?? []))
       // An older coordinator has no such route: the card says nobody works.
       .catch((e) => {
@@ -406,6 +408,14 @@ function useAgentsAtWork(projectId: string): AgentAtWork[] | null {
     };
   }, [load]);
   return agents;
+}
+
+/** The helpers at work for the chats outside any project
+ * (HELPERS_PLAN.md): the Agents card, shown only while there are any. */
+export function LooseAgentsCard() {
+  const agents = useAgentsAtWork(null);
+  if (!agents?.length) return null;
+  return <AgentsCard agents={agents} onOpen={() => undefined} />;
 }
 
 // A small card per agent at work, two to a row, pulsing while the agent
