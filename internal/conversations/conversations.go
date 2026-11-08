@@ -20,6 +20,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/EinarLogiOskars/commitarium/internal/agent"
@@ -372,6 +373,28 @@ type Service struct {
 	// chatLocks are held by each chat's work (chats.go).
 	locksMu   sync.Mutex
 	chatLocks map[string]*sync.Mutex
+	// serverFacts is what the user's server last reported through their
+	// app, in memory only: the app sends it with every message.
+	serverFacts atomic.Pointer[string]
+}
+
+// SetServerFacts keeps what the user's server last reported about itself,
+// for every chat's next turn.
+func (service *Service) SetServerFacts(facts string) {
+	facts = cleanFacts(facts)
+	if facts == "" {
+		return
+	}
+	service.serverFacts.Store(&facts)
+}
+
+// currentServerFacts is what the server last reported, or else what it
+// reported when a chat opened on it.
+func (service *Service) currentServerFacts(opened string) string {
+	if facts := service.serverFacts.Load(); facts != nil {
+		return *facts
+	}
+	return opened
 }
 
 var scopePattern = regexp.MustCompile(`^(commitarium|prj_[A-Za-z0-9]{1,64})$`)
@@ -751,10 +774,33 @@ func (service *Service) Resolve(ctx context.Context, scope, actionID string, sta
 			// once rather than at the next look at the vision.
 			stored.Goal.follow(action.VisionItemID, action.WorkOrderID)
 		}
+		woken := false
+		if status == ActionFailed && featureartifact.AppliedByTheApp(action.Type) {
+			// The card shows what the server answered; Mayka explains it at
+			// once, with the next step, rather than at the user's next message.
+			stored.PendingEvents = append(stored.PendingEvents, "Your card \""+cardTitle(*action)+
+				"\" did not go through. "+action.Result+" Tell the user in a line or two what this means and the "+
+				"one thing to do next; propose the card again only once that is done.")
+			woken = true
+		}
 		stored.UpdatedAt = action.UpdatedAt
-		return stored.Conversation, service.write(stored)
+		if err := service.write(stored); err != nil {
+			return Conversation{}, err
+		}
+		if woken {
+			service.nudgeWatcher()
+		}
+		return stored.Conversation, nil
 	}
 	return Conversation{}, ErrNotFound
+}
+
+// cardTitle names a card for Mayka: its title, or its kind.
+func cardTitle(action Action) string {
+	if title := strings.TrimSpace(action.Title); title != "" {
+		return title
+	}
+	return strings.ReplaceAll(string(action.Type), "_", " ")
 }
 
 // RecordStart records how what follows an applied create_app or

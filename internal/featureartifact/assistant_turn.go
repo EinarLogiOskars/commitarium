@@ -274,6 +274,11 @@ type AssistantAction struct {
 	// open it with company sign-in; none is anyone at the company.
 	App    string   `json:"app,omitempty"`
 	Groups []string `json:"groups,omitempty"`
+	// Asked, for a card the user's app applies (AppliedByTheApp), says the
+	// user's own message asked for exactly this change, with nothing Mayka
+	// had to guess: the app then applies it at once, without asking again,
+	// unless it removes, stops, hides or moves something, or turns Homelab.
+	Asked bool `json:"asked,omitempty"`
 }
 
 // AppAddress is an address under one of the server's domains: Name is empty
@@ -289,6 +294,17 @@ const (
 	maxAppAliases   = 10
 	maxAccessGroups = 20
 )
+
+// AppliedByTheApp reports a card the user's app applies through the
+// server's host before it is recorded, with what the host answered as its
+// result: the server cards, deploying, and the apps page's.
+func AppliedByTheApp(kind AssistantActionType) bool {
+	switch kind {
+	case AssistantDeployApp, AssistantSetAppsPage, AssistantListOnAppsPage:
+		return true
+	}
+	return ServerCard(kind)
+}
 
 // ServerCard reports a card the user's app applies through the server's
 // host before it is recorded, with what the host answered as its result.

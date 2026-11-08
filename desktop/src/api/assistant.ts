@@ -118,6 +118,9 @@ export interface AssistantAction {
    * app, and the groups that may open it with company sign-in. */
   app?: string;
   groups?: string[];
+  /** The user asked for exactly this change: a card the app applies goes
+   * ahead by itself, unless it removes, stops or moves something. */
+  asked?: boolean;
   /** For answer_helper: the helper it answers; for a card from a helper's
    * result, the helper that proposed it (ADR-035). */
   helper?: string;
@@ -266,21 +269,41 @@ export const saveAssistantSettings = (settings: AssistantSettings): Promise<Assi
 export const getConversation = (scope: ChatTarget): Promise<Conversation> =>
   request(conversationPath(scope));
 
-export const sendToAssistant = (
+/** The scope a chat target is in. */
+const scopeOf = (target: ChatTarget) => (typeof target === "string" ? target : target.scope);
+
+/** What the connected server reports, for Mayka; nothing on this computer. */
+const factsFor = async (target: ChatTarget) => {
+  const facts = await serverFacts(scopeOf(target));
+  return facts ? { server_facts: facts } : {};
+};
+
+/** A server older than this app refuses the facts it does not know: the
+ * request goes again without them. */
+const olderServer = (e: unknown) => String(e).includes("unknown fields");
+
+export const sendToAssistant = async (
   scope: ChatTarget,
   message: string,
   key: string,
   attachments: string[] = [],
-): Promise<Conversation> =>
-  request(`${conversationPath(scope)}/messages`, {
-    method: "POST",
-    body: {
-      message,
-      developer_mode: developerModeOn(),
-      ...(attachments.length ? { attachments } : {}),
-    },
-    idempotencyKey: key,
-  });
+): Promise<Conversation> => {
+  const send = (facts: { server_facts?: string }) =>
+    request<Conversation>(`${conversationPath(scope)}/messages`, {
+      method: "POST",
+      body: {
+        message,
+        developer_mode: developerModeOn(),
+        ...(attachments.length ? { attachments } : {}),
+        ...facts,
+      },
+      idempotencyKey: key,
+    });
+  const facts = await factsFor(scope);
+  return send(facts).catch((e) =>
+    facts.server_facts && olderServer(e) ? send({}) : Promise.reject(e),
+  );
+};
 
 /** Runs again the turn whose automatic retries ran out. */
 export const retryAssistantTurn = (scope: ChatTarget): Promise<Conversation> =>
@@ -295,7 +318,9 @@ export const setAssistantFocus = async (
   // A focus on the server carries what it reports, so Mayka need not ask. A
   // server older than this app refuses the field, so it goes without them.
   const facts =
-    focus.kind === "serving" || focus.kind === "sign_in" ? await serverFacts() : undefined;
+    focus.kind === "serving" || focus.kind === "sign_in"
+      ? await serverFacts(scopeOf(scope))
+      : undefined;
   const put = (body: AssistantFocus): Promise<Conversation> =>
     request(`${conversationPath(scope)}/focus`, { method: "PUT", body });
   return facts ? put({ ...focus, facts }).catch(() => put(focus)) : put(focus);
@@ -322,12 +347,20 @@ export const approveAssistantAction = (
      * answered, and whether it refused. Mayka reads it as the result. */
     outcome?: string;
     failed?: boolean;
+    /** For a server card: what the server reports after it, for Mayka. */
+    server_facts?: string;
   },
-): Promise<Conversation> =>
-  request(`${conversationPath(scope)}/actions/${encodeURIComponent(actionId)}/approve`, {
-    method: "POST",
-    body: options,
+): Promise<Conversation> => {
+  const approve = (body: typeof options) =>
+    request<Conversation>(
+      `${conversationPath(scope)}/actions/${encodeURIComponent(actionId)}/approve`,
+      { method: "POST", body },
+    );
+  return approve(options).catch((e) => {
+    if (!options.server_facts || !olderServer(e)) throw e;
+    return approve({ ...options, server_facts: undefined });
   });
+};
 
 export const dismissAssistantAction = (
   scope: ChatTarget,

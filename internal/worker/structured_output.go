@@ -847,13 +847,14 @@ func assistantTurnSchema(planning bool) map[string]any {
 				"items": objectSchema(map[string]any{"domain": text, "name": text}, []string{"domain", "name"})},
 			"app":    map[string]any{"type": "string", "description": "For set_app_access: the app's main address, such as notes.example.com, as the server's facts list it; empty is this project's app. Otherwise empty."},
 			"groups": map[string]any{"type": "array", "items": text, "description": "For set_app_access with company: the groups that may open it; empty is anyone at the company. Otherwise empty."},
+			"asked":  map[string]any{"type": "boolean", "description": "For deploy_app, add_domain, install_authentik, set_app_access, set_apps_page and list_on_apps_page: true when the user's latest message asked for exactly this change and you guessed nothing it needs (such as an address, a domain or groups they did not give and the facts do not settle); the app then applies it at once. Otherwise false."},
 		},
 		[]string{
 			"type", "reason", "title", "description", "vision_item_id", "steps",
 			"lead_agent", "lead_model", "reviewer_agent", "reviewer_model",
 			"lead_plan_model", "lead_plan_effort", "lead_effort", "reviewer_plan_model", "reviewer_plan_effort", "reviewer_effort",
 			"work_order_id", "when", "how", "priority", "guidance", "after", "helper", "brief", "app_brief", "assumptions",
-			"attachments", "domain", "name", "aliases", "app", "groups",
+			"attachments", "domain", "name", "aliases", "app", "groups", "asked",
 		},
 	)
 	properties := map[string]any{

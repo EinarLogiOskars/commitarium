@@ -8,10 +8,10 @@ import {
 } from "../ipc";
 import { authentikHome } from "../views/domainRecords";
 
-// What the server reports about itself, in short lines for Mayka when a chat
-// opens on serving apps or company sign-in, so she reads it instead of asking
-// (the coordinator cannot reach the host). Nothing here is a secret: the host
-// never shows one.
+// What the server reports about itself, in short lines for Mayka with every
+// message while the app is connected to a server, so she reads it instead of
+// asking (the coordinator cannot reach the host). Nothing here is a secret:
+// the host never shows one.
 
 const ACCESS: Record<Access, string> = {
   public: "open to anyone",
@@ -23,8 +23,17 @@ const gb = (bytes: number) => `${(bytes / 1024 ** 3).toFixed(1)} GB`;
 
 const host = (url: string) => url.replace(/^https:\/\//, "").replace(/\/$/, "");
 
+/** Whether a domain's records check out, from its apps' addresses. */
+function dnsChecked(domain: DomainShown, apps: PublishedApp[]): string {
+  const here = apps.filter((app) => app.domain === domain.name);
+  if (here.length === 0) return "not checked yet (no app there)";
+  return here.some((app) => app.record_problem)
+    ? "a record is missing (see the apps)"
+    : "its records point here";
+}
+
 /** A domain in one line: its DNS, its company sign-in and its apps page. */
-function describeDomain(domain: DomainShown): string {
+function describeDomain(domain: DomainShown, apps: PublishedApp[]): string {
   const dns = domain.records === "wildcard" ? "one wildcard record" : "a record for each address";
   const signIn = domain.sign_in
     ? domain.authentik
@@ -34,21 +43,24 @@ function describeDomain(domain: DomainShown): string {
   const page = domain.apps_page
     ? `on, ${ACCESS[domain.apps_page.access]}, at ${host(domain.apps_page.url)}`
     : "off";
-  return `Domain: ${domain.name}, DNS as ${dns}; company sign-in ${signIn}; apps page ${page}`;
+  return `Domain: ${domain.name}, DNS as ${dns}, ${dnsChecked(domain, apps)}; company sign-in ${signIn}; apps page ${page}`;
 }
 
-/** An app by its addresses, main first: "site.is (and www) + site.com". */
-function describeApp(app: PublishedApp): string {
+/** An app by its addresses, main first: "site.is (and www) + site.com",
+ * marked when it is the project the chat is in. */
+function describeApp(app: PublishedApp, project?: string): string {
   const urls = app.urls.length > 0 ? app.urls : app.url ? [app.url] : [];
   const where = urls.map(host).join(" + ") || app.name;
   const www = app.www && (app.name === "" || app.aliases.some((alias) => alias.name === ""));
   const groups = app.access === "company" && app.groups.length > 0;
   return `${where}${www ? " (and www)" : ""} (${ACCESS[app.access]}${
     groups ? `, groups ${app.groups.join(", ")}` : ""
-  }${app.live ? "" : ", stopped"})`;
+  }${app.live ? "" : ", stopped"}${app.record_problem ? `, DNS: ${app.record_problem}` : ""}${
+    app.project_id === project ? ", this project's app" : ""
+  })`;
 }
 
-export function describeServer(o: PublishingOverview): string {
+export function describeServer(o: PublishingOverview, project?: string): string {
   const lines: string[] = [];
   if (o.placement) {
     const where = { home: "at home", cloud: "in the cloud", other: "somewhere else" }[o.placement];
@@ -65,7 +77,7 @@ export function describeServer(o: PublishingOverview): string {
   } else {
     lines.push("Homelab: off");
     if (o.domains.length === 0) lines.push("Domain: not set yet");
-    for (const domain of o.domains) lines.push(describeDomain(domain));
+    for (const domain of o.domains) lines.push(describeDomain(domain, o.apps));
   }
   if (o.server_address) lines.push(`Public IP address: ${o.server_address}`);
   const memory = o.authentik.memory_total_bytes;
@@ -88,17 +100,18 @@ export function describeServer(o: PublishingOverview): string {
   lines.push(
     o.apps.length === 0
       ? "Deployed apps: none"
-      : `Deployed apps: ${o.apps.map(describeApp).join(", ")}`,
+      : `Deployed apps: ${o.apps.map((app) => describeApp(app, project)).join(", ")}`,
   );
   return lines.join("\n");
 }
 
-/** The shown server's facts, or undefined on this computer or when the
- * server does not answer: the chat opens either way. */
-export async function serverFacts(): Promise<string | undefined> {
+/** The shown server's facts, with project's app marked, or undefined on
+ * this computer or when the server does not answer: the chat goes on
+ * either way. */
+export async function serverFacts(project?: string): Promise<string | undefined> {
   if (!connectedServer()) return undefined;
   try {
-    return describeServer(await publishing());
+    return describeServer(await publishing(), project);
   } catch {
     return undefined;
   }

@@ -437,19 +437,25 @@ function DomainSection({ onLeave }: { onLeave?: () => void }) {
         </div>
       )}
       {error && <p className="set__note">{error}</p>}
-      <p className="muted set__note">
-        Not sure how to set this up at your DNS provider?{" "}
-        <AskMayka
-          link
-          onLeave={onLeave}
-          message={
-            `Help me point ${form?.domain.trim() ? `my domain ${shown}` : (first ?? "my domain")} ` +
-            `at this server (${address}), with ` +
-            `${(form?.records ?? domains[0]?.records ?? "wildcard") === "wildcard" ? "one wildcard record" : "a record per app"}.`
-          }
-        />{" "}
-        to walk you through it.
-      </p>
+      {/* Help with the DNS while there is some to set up: a new domain, or a
+          record that does not point here yet. */}
+      {(form !== null ||
+        domains.length === 0 ||
+        overview.apps.some((app) => app.record_problem)) && (
+        <p className="muted set__note">
+          Not sure how to set this up at your DNS provider?{" "}
+          <AskMayka
+            link
+            onLeave={onLeave}
+            message={
+              `Help me point ${form?.domain.trim() ? `my domain ${shown}` : (first ?? "my domain")} ` +
+              `at this server (${address}), with ` +
+              `${(form?.records ?? domains[0]?.records ?? "wildcard") === "wildcard" ? "one wildcard record" : "a record per app"}.`
+            }
+          />{" "}
+          to walk you through it.
+        </p>
+      )}
     </section>
   );
 }

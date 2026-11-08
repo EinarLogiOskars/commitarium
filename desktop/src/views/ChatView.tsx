@@ -29,15 +29,7 @@ import {
   type Conversation,
 } from "../api/assistant";
 import { ApiError } from "../api/client";
-import {
-  openAppWindow,
-  setAppsPage,
-  setListed,
-  webviewSnapshot,
-  webviewSnapshotSupported,
-  type Access,
-} from "../ipc";
-import { connectedServer } from "../connection";
+import { openAppWindow, webviewSnapshot, webviewSnapshotSupported } from "../ipc";
 import { getVision } from "../api/vision";
 import { developerModeOn } from "../devMode";
 import { getProject } from "../api/projects";
@@ -72,8 +64,8 @@ import {
 } from "./AssistantActivity";
 import { AppliedGroup } from "./AppliedGroup";
 import {
+  appsPageQuestion,
   deployAddress,
-  deployApproved,
   SERVER_CARDS,
   ServerCard,
   serverCardQuestion,
@@ -1232,30 +1224,6 @@ function ActionCard({
         const applied = conversation.actions?.find((a) => a.id === action.id);
         if (applied?.start_failed) {
           // It stays here, showing why, with Try again.
-        } else if (applied?.type === "deploy_app") {
-          // The server's host deploys: Commitarium only recorded the approval.
-          if (connectedServer())
-            void deployApproved(typeof scope === "string" ? scope : scope.scope, applied).catch(
-              (e) => setError(String(e)),
-            );
-          else setError("Deploying needs a server: connect one in Settings → Server.");
-        } else if (applied?.type === "set_apps_page" || applied?.type === "list_on_apps_page") {
-          // The server's host changes it: Commitarium only recorded the approval.
-          if (!connectedServer()) {
-            setError("The apps page needs a server: connect one in Settings → Server.");
-          } else if (applied.type === "list_on_apps_page") {
-            const project = typeof scope === "string" ? scope : scope.scope;
-            void setListed(project, applied.how !== "hide").catch((e) => setError(String(e)));
-          } else {
-            const access = applied.how === "off" ? null : (applied.how as Access);
-            void setAppsPage(access, undefined, undefined, applied.domain || undefined).catch((e) =>
-              setError(
-                access === "private"
-                  ? "The apps page needs a password first: choose one in Settings → Server → Apps page."
-                  : String(e),
-              ),
-            );
-          }
         } else if (applied?.type === "create_app" && applied.project_id) {
           void openAppWindow(applied.project_id, applied.title);
         } else if (applied?.type === "plan_project" && applied.project_id) {
@@ -1721,22 +1689,6 @@ const APPLY_LABEL: Record<AssistantAction["type"], string> = {
   set_homelab: "Change",
   start_planning: "Start plan mode",
 };
-
-/** The question on an apps page card, by who may open it, and at which
- * domain when it names one. */
-function appsPageQuestion(how: string | undefined, domain?: string): string {
-  const page = domain ? `the apps page at ${domain}` : "the apps page";
-  switch (how) {
-    case "off":
-      return `Turn ${page} off?`;
-    case "public":
-      return `Turn on ${page}, open to anyone?`;
-    case "company":
-      return `Turn on ${page}, behind company sign-in?`;
-    default:
-      return `Turn on ${page}, behind its password?`;
-  }
-}
 
 const STATUS_LABEL: Record<AssistantAction["status"], string> = {
   proposed: "Proposed",

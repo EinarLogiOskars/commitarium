@@ -196,20 +196,27 @@ func (service *Service) focusInstructions(ctx context.Context, scope string, foc
 			"stack Commitarium knows; otherwise design_stack, with what the app needs. For a repository that already " +
 			"has code, design_stack checks the stack the code uses."
 	case FocusSignIn:
-		return signInInstructions + serverFactsText(focus.Facts)
+		return signInInstructions
 	case FocusServing:
-		return servingInstructions + serverFactsText(focus.Facts)
+		return servingInstructions
 	}
 	return ""
 }
 
-// serverFactsText hands the assistant what the server reported, so it never
-// asks the user what Commitarium already knows.
-func serverFactsText(facts string) string {
+// serverFactsFor hands the assistant what the user's server reported, in
+// every chat while their app is connected to one, so it never asks what
+// Commitarium already knows: the latest the app sent, or else what the
+// server reported when this chat opened on it.
+func (service *Service) serverFactsFor(focus *Focus) string {
+	opened := ""
+	if focus != nil && (focus.Kind == FocusServing || focus.Kind == FocusSignIn) {
+		opened = focus.Facts
+	}
+	facts := service.currentServerFacts(opened)
 	if facts == "" {
 		return ""
 	}
-	return "\n\nWhat Commitarium reported about this server when the user opened this chat. Use it; never ask the " +
-		"user for any of it, and if something here may have changed since, say what you see and let them correct " +
-		"you:\n" + facts
+	return "\n\nWhat the user's server last reported about itself: its domains, company sign-in, apps pages, and " +
+		"the deployed apps with their addresses, main first. Use it; never ask the user for any of it, and if " +
+		"something here may have changed since, say what you see and let them correct you:\n" + facts
 }
