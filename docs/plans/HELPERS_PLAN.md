@@ -1,7 +1,7 @@
 # Mayka's Helpers and Output Files: Implementation Plan (0.14.0)
 
 **Status:** scope agreed 2026-11-07 (release order after 0.12.1); plan written
-2026-11-08; building. Builds on ADR-035 (the assistant starts helpers) and
+2026-11-08; H1 and H2 built; test accounts (H3) moved to the next release. Builds on ADR-035 (the assistant starts helpers) and
 the research helper.
 
 Mayka can brief a helper for any task, not just the four fixed ones (vision,
@@ -45,12 +45,10 @@ PDF export.
 - **Helpers show in the Agents card.** A delegated helper appears there while
   it works, like the brief writer does. Loose chats get the Agents card while
   a helper works there.
-- **Project test accounts.** Each project gets a list of test logins for its
-  own app (a label, username, password, and a note like "admin"), in the
-  project's Settings, typed by the user or added by Mayka for logins the app
-  seeds itself. Passwords never pass through the chat: Mayka sees only the
-  labels, and a helper she briefs to test the app gets them as a file in its
-  directory. They are test values for the user's own app, not real logins.
+- **Project test accounts** move to the next release, with helpers that
+  test the running app (see H3). Each project will get a list of test
+  logins for its own app in Settings; passwords never pass through the
+  chat, and a helper gets them as a file.
 - **Limits, kept simple.** 20 MB a file, 200 files a scope; the oldest go
   first, as with loose-chat attachments. Deleting a file is in its viewer.
   Deleting a project removes its outputs with it.
@@ -90,17 +88,21 @@ Each step is a PR on its own, reviewed before it merges.
 - Agents card: the helper role's label, and the card in loose chats while a
   helper works.
 
-### H3: project test accounts
+### H3: project test accounts (moved to the next release)
 
-- Stored by the coordinator per project, next to its secrets, not in the
-  repository; routes to list, add and remove; a Settings section to manage
-  them.
-- Mayka sees the labels and notes in her state, and her brief may say
-  "use the test accounts". The helper then gets `test-accounts.json` in its
-  directory and the preview's address when the app is running.
-- To check before building: that a helper's worker can reach the preview
-  and drive a browser there. If it cannot, H3 ships the accounts for
-  agents that test through HTTP and leaves browsing for later.
+Checked 2026-11-08: a helper cannot reach the preview yet. The preview
+publishes its port on the computer's 127.0.0.1 in a Docker network of its
+own, and a helper runs in a worker container, where 127.0.0.1 is the
+container itself. The worker image also has Chromium's libraries but not
+Chromium. Test accounts without a way to use them would be hollow, so the
+user decided to ship 0.14.0 without them. They come in the next release,
+together with real testing:
+- the host connects a helper's worker to the preview's network (or gives
+  it a reachable address) for the length of the helper;
+- Chromium goes into the worker image, or is installed on demand;
+- the project's test accounts (in Settings, never in the chat) are given to
+  the helper as a file, and it reports what it found with screenshots in
+  its outputs.
 
 ### H4: release 0.14.0
 
