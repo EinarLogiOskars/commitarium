@@ -913,7 +913,17 @@ export function DevShell({
             </button>
           )}
 
-          <div className="chat-side__label">Chats</div>
+          <div className="chat-side__label">
+            Chats
+            <button
+              className="ghost chat-side__all"
+              onClick={() => void newChat(TOP)}
+              title="New chat"
+              aria-label="New chat"
+            >
+              <PlusIcon />
+            </button>
+          </div>
           {(chats[TOP] ?? []).map((chat) => chatButton(chat, false))}
         </div>
 
