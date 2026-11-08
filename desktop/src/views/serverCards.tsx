@@ -309,6 +309,9 @@ async function listIt(project: string | null, action: AssistantAction): Promise<
  * look never applies one twice. */
 const appliedHere = new Set<string>();
 
+/** Whether this app took the card up by itself, as one the user asked for. */
+export const applyingHere = (id: string) => appliedHere.has(id);
+
 /** Whether a card the user asked for applies without asking again: never
  * one that removes, stops, hides, turns Homelab, or moves an app. */
 export function appliesAtOnce(action: AssistantAction, app?: PublishedApp): boolean {

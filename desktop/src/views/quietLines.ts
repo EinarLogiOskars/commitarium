@@ -118,6 +118,19 @@ export function appliedLine(
     return line("done", "work", `${why}: ${appliedWhat(action.title) || "the work order"}`);
   }
   switch (action.type) {
+    case "add_domain":
+    case "install_authentik":
+    case "set_app_access":
+    case "set_homelab":
+    case "deploy_app":
+    case "set_apps_page":
+    case "list_on_apps_page":
+      // A server change says it is done; how it went is on its card's result.
+      return line(
+        done ? "done" : action.status === "failed" ? "failed" : "busy",
+        "note",
+        `${done ? "Done" : action.status === "failed" ? "Didn't go through" : "Doing"}: ${action.title}`,
+      );
     case "answer_helper":
       return line(
         done ? "done" : "busy",

@@ -7469,3 +7469,42 @@ button.shell-agent:hover {
   justify-content: flex-end;
   gap: 8px;
 }
+
+/* The checklist under the chat while Mayka applies what the user asked for. */
+.working {
+  margin: 0 0 8px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-m);
+  font-size: var(--text-sm);
+  color: var(--text-subtle);
+}
+.working__head {
+  margin: 0 0 4px;
+  font-weight: 500;
+  color: var(--text);
+}
+.working__items {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.working__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.working__mark {
+  display: inline-flex;
+  justify-content: center;
+  width: 12px;
+}
+.working__item--done .working__mark {
+  color: var(--ok);
+}
+.working__item--failed {
+  color: var(--bad);
+}
