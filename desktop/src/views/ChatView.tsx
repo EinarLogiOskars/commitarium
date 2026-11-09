@@ -75,7 +75,7 @@ import {
   ServerCard,
   serverCardQuestion,
 } from "./serverCards";
-import { foldedEvent, groupTurn } from "./appliedSummary";
+import { foldedEvent, groupHelpers, groupTurn } from "./appliedSummary";
 import {
   appliedLine,
   dropRepeats,
@@ -615,10 +615,17 @@ export function ChatView({
           action.type === "delegate" ||
           action.type === "update_plan") &&
         appliesItself(action));
-  // A turn's work actions fold into one summary line, and the autopilot
-  // lines that repeat them are not shown again.
+  // The helpers Mayka briefed that are still at work, by their task.
+  const helping = new Set(conversation?.helping ?? []);
+  const helperWorking = (action: AssistantAction) =>
+    action.type === "delegate" && helping.has(action.title);
+  // A turn's work actions fold into one summary line, and so do its helpers
+  // at work; the autopilot lines that repeat them are not shown again.
   const turnPieces = new Map(
-    [...byMessage].map(([messageId, actions]) => [messageId, groupTurn(actions, asLine)]),
+    [...byMessage].map(([messageId, actions]) => [
+      messageId,
+      groupHelpers(groupTurn(actions, asLine), (action) => asLine(action) && helperWorking(action)),
+    ]),
   );
   const groupedTitles = new Set(
     [...turnPieces.values()].flatMap((pieces) =>
@@ -645,8 +652,14 @@ export function ChatView({
   const turnEntries = (messageId: string): QuietEntry<ReactElement>[] =>
     (turnPieces.get(messageId) ?? [])
       .map((piece): QuietEntry<ReactElement> | null => {
-        if (piece.kind === "group") {
-          const line = groupLine(piece);
+        if (piece.kind === "helpers") {
+          const line: QuietLine = {
+            tone: "busy",
+            kind: "helper",
+            count: piece.items.length,
+            text: piece.summary,
+            live: true,
+          };
           return {
             quiet: line,
             node: (
@@ -654,7 +667,32 @@ export function ChatView({
                 key={piece.actions[0].id}
                 summary={piece.summary}
                 items={piece.items}
-                tone={line.tone}
+                tone="busy"
+                pulse
+              />
+            ),
+          };
+        }
+        if (piece.kind === "group") {
+          const line = groupLine(piece);
+          // Its work orders still running pulse the line, as one does alone.
+          const working = work
+            ? piece.items.filter((item) => item.workOrderId && work.running.has(item.workOrderId))
+                .length
+            : 0;
+          const summary = working > 0 ? `${piece.summary} · ${working} working` : piece.summary;
+          return {
+            quiet:
+              working > 0
+                ? { ...line, tone: "busy", text: summary.replace(/^✓ /, ""), live: true }
+                : line,
+            node: (
+              <AppliedGroup
+                key={piece.actions[0].id}
+                summary={summary}
+                items={piece.items}
+                tone={working > 0 ? "busy" : line.tone}
+                pulse={working > 0}
                 onOpenOrder={onOpenOrder}
               />
             ),
@@ -696,7 +734,9 @@ export function ChatView({
         }
         if (!asLine(action)) return { block: renderAction(action) };
         const running =
-          action.type === "research" && (conversation?.researching ?? []).includes(action.title);
+          (action.type === "research" &&
+            (conversation?.researching ?? []).includes(action.title)) ||
+          helperWorking(action);
         const change = changes.get(action.id);
         const line = appliedLine(action, change, running);
         if (action.id === latestPlanDocument) line.pinned = true;
@@ -1851,6 +1891,7 @@ function AppliedLine({
     <QuietRow
       tone={line.tone}
       pulse={running}
+      live={line.live}
       title={
         running
           ? action.reason && `Why: ${action.reason}`

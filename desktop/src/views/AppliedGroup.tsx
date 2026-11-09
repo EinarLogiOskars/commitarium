@@ -2,17 +2,20 @@ import { useState } from "react";
 import type { WorkItem } from "./appliedSummary";
 import { QUIET_GLYPH, type QuietTone } from "./quietLines";
 
-// A turn's work actions as one summary line, collapsed by default; expanded,
-// a line per work order whose title opens it.
+// A turn's work actions, or its helpers at work, as one summary line,
+// collapsed by default; expanded, a line per work order whose title opens it.
+// While any of them works, the line pulses.
 export function AppliedGroup({
   summary,
   items,
   tone,
+  pulse,
   onOpenOrder,
 }: {
   summary: string;
   items: WorkItem[];
   tone: QuietTone;
+  pulse?: boolean;
   onOpenOrder?: (featureId: string) => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -23,12 +26,12 @@ export function AppliedGroup({
         aria-expanded={open}
         onClick={() => setOpen(!open)}
       >
-        {QUIET_GLYPH[tone] && (
+        {(pulse || QUIET_GLYPH[tone]) && (
           <span className="quiet__glyph" aria-hidden>
-            {QUIET_GLYPH[tone]}
+            {pulse ? <span className="assistant__pulse" /> : QUIET_GLYPH[tone]}
           </span>
         )}
-        <span className="quiet__text">
+        <span className={pulse ? "quiet__text live-text" : "quiet__text"}>
           {summary.replace(/^✓ /, "")} {open ? "▾" : "▸"}
         </span>
       </button>

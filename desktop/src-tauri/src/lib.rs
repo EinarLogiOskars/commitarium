@@ -91,6 +91,7 @@ pub fn run() {
             apps::open_app_window,
             outputs::print_output,
             outputs::save_output,
+            outputs::open_output,
             snapshot::webview_snapshot,
             snapshot::webview_snapshot_supported,
             cli_updates::agent_cli_status,

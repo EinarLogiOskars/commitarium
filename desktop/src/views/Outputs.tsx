@@ -7,6 +7,7 @@ import {
   type OutputFile,
   deleteOutput,
   listOutputs,
+  openOutput,
   printOutput,
   readOutput,
   saveOutput,
@@ -17,15 +18,19 @@ import { Overlay } from "./Overlay";
 import {
   type OutputKind,
   csvTable,
-  escapeHtml,
+  imageType,
+  openable,
   outputKind,
   parseCsv,
   printPage,
   printable,
+  sizeLabel,
 } from "./outputKinds";
+import { PdfPages, PdfPresenter, usePdf } from "./PdfView";
 
 // What Mayka's helpers make (HELPERS_PLAN.md): chips on the chat line that
-// hands them back, the Outputs card, and a viewer with Export PDF and Save.
+// hands them back, the Outputs card, and a viewer with Export PDF, Present
+// (PDFs), Open (what it cannot show) and Save.
 
 const POLL_MS = 15_000;
 
@@ -178,7 +183,10 @@ export function OutputViewer({
         const text = ["markdown", "html", "csv", "text"].includes(kind)
           ? await blob.text()
           : undefined;
-        if (kind === "image" || kind === "pdf") url = URL.createObjectURL(blob);
+        // An image, an SVG too, loads only as an <img> from a blob of its
+        // own type: its scripts never run.
+        if (kind === "image")
+          url = URL.createObjectURL(new Blob([blob], { type: imageType(name) }));
         if (!gone) setLoaded({ blob, text, url });
       })
       .catch((e) => !gone && setError(describe(e)));
@@ -187,6 +195,19 @@ export function OutputViewer({
       if (url) URL.revokeObjectURL(url);
     };
   }, [owner, name, kind]);
+  // Who made a file the app cannot show, and when, for its details.
+  const [file, setFile] = useState<OutputFile | null>(null);
+  useEffect(() => {
+    if (kind !== "other") return;
+    let gone = false;
+    listOutputs(owner)
+      .then((r) => !gone && setFile(r.outputs?.find((f) => f.name === name) ?? null))
+      .catch(() => undefined);
+    return () => {
+      gone = true;
+    };
+  }, [owner, name, kind]);
+  const [presenting, setPresenting] = useState(false);
 
   const act = (work: () => Promise<unknown>) => {
     setBusy(true);
@@ -198,9 +219,10 @@ export function OutputViewer({
   const exportPdf = () =>
     act(async () => {
       if (!loaded) return;
-      await printOutput(name.replace(/\.[^.]+$/, ""), await printableHtml(name, kind, loaded));
+      await printOutput(name.replace(/\.[^.]+$/, ""), printableHtml(name, kind, loaded));
     });
   const save = () => act(async () => loaded && saveOutput(name, loaded.blob));
+  const open = () => act(async () => loaded && openOutput(name, loaded.blob));
   const remove = () =>
     act(async () => {
       if (!(await confirmAction(`Delete ${name}? This cannot be undone.`, "Delete"))) return;
@@ -217,6 +239,16 @@ export function OutputViewer({
             Export PDF
           </button>
         )}
+        {kind === "pdf" && (
+          <button className="primary" onClick={() => setPresenting(true)} disabled={!loaded}>
+            Present
+          </button>
+        )}
+        {kind === "other" && openable(name) && (
+          <button className="primary" onClick={open} disabled={!loaded || busy}>
+            Open
+          </button>
+        )}
         <button onClick={save} disabled={!loaded || busy}>
           Save…
         </button>
@@ -229,14 +261,35 @@ export function OutputViewer({
         {!loaded ? (
           !error && <p className="muted">Loading…</p>
         ) : (
-          <OutputBody kind={kind} name={name} loaded={loaded} />
+          <OutputBody
+            kind={kind}
+            name={name}
+            loaded={loaded}
+            file={file}
+            presenting={presenting}
+            onLeave={() => setPresenting(false)}
+          />
         )}
       </div>
     </Overlay>
   );
 }
 
-function OutputBody({ kind, name, loaded }: { kind: OutputKind; name: string; loaded: Loaded }) {
+function OutputBody({
+  kind,
+  name,
+  loaded,
+  file,
+  presenting,
+  onLeave,
+}: {
+  kind: OutputKind;
+  name: string;
+  loaded: Loaded;
+  file: OutputFile | null;
+  presenting: boolean;
+  onLeave: () => void;
+}) {
   switch (kind) {
     case "markdown":
       return (
@@ -262,41 +315,81 @@ function OutputBody({ kind, name, loaded }: { kind: OutputKind; name: string; lo
     case "text":
       return <pre className="output-viewer__text">{loaded.text}</pre>;
     case "pdf":
-      return <iframe className="output-viewer__frame" title={name} src={loaded.url} />;
+      return <PdfBody blob={loaded.blob} presenting={presenting} onLeave={onLeave} />;
     default:
-      return (
-        <p className="muted">Commitarium cannot show this kind of file. Save it to open it.</p>
-      );
+      return <OutputDetails name={name} size={file?.size ?? loaded.blob.size} file={file} />;
   }
 }
 
-/** The page Export PDF prints: the file as the app shows it, on plain paper
- * styles; a helper's HTML as it is. */
-async function printableHtml(name: string, kind: OutputKind, loaded: Loaded): Promise<string> {
-  switch (kind) {
-    case "html":
-      return loaded.text ?? "";
-    case "markdown":
-      return printPage(
+function PdfBody({
+  blob,
+  presenting,
+  onLeave,
+}: {
+  blob: Blob;
+  presenting: boolean;
+  onLeave: () => void;
+}) {
+  const { doc, error } = usePdf(blob);
+  if (error)
+    return <p className="muted">This PDF could not be shown: {error}. Save it to open it.</p>;
+  if (!doc) return <p className="muted">Loading…</p>;
+  return (
+    <>
+      <PdfPages doc={doc} />
+      {presenting && <PdfPresenter doc={doc} onLeave={onLeave} />}
+    </>
+  );
+}
+
+/** A file the app cannot show: what it is, who made it and when. */
+function OutputDetails({
+  name,
+  size,
+  file,
+}: {
+  name: string;
+  size: number;
+  file: OutputFile | null;
+}) {
+  const made = file ? new Date(file.made_at) : null;
+  return (
+    <div className="output-viewer__details">
+      <p className="output-viewer__details-name">{name}</p>
+      <dl>
+        <dt>Size</dt>
+        <dd>{sizeLabel(size)}</dd>
+        {file?.title && (
+          <>
+            <dt>Made by</dt>
+            <dd>The helper on “{file.title}”</dd>
+          </>
+        )}
+        {made && !Number.isNaN(made.getTime()) && (
+          <>
+            <dt>Made</dt>
+            <dd>{made.toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}</dd>
+          </>
+        )}
+      </dl>
+      <p className="muted">
+        {openable(name)
+          ? "Commitarium cannot show this kind of file here. Open it in your own app, or save it."
+          : "Commitarium cannot show this kind of file. Save it to open it."}
+      </p>
+    </div>
+  );
+}
+
+/** The page Export PDF prints: a helper's HTML as it is, or its Markdown
+ * on plain paper styles. */
+function printableHtml(name: string, kind: OutputKind, loaded: Loaded): string {
+  return kind === "html"
+    ? (loaded.text ?? "")
+    : printPage(
         name,
         renderToStaticMarkup(
           <ReactMarkdown remarkPlugins={[remarkGfm]}>{loaded.text ?? ""}</ReactMarkdown>,
         ),
       );
-    case "csv":
-      return printPage(name, csvTable(parseCsv(loaded.text ?? "")));
-    case "image":
-      return printPage(name, `<img src="${await dataUrl(loaded.blob)}" alt="${escapeHtml(name)}">`);
-    default:
-      return printPage(name, `<pre>${escapeHtml(loaded.text ?? "")}</pre>`);
-  }
-}
-
-function dataUrl(blob: Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result));
-    reader.onerror = () => reject(reader.error);
-    reader.readAsDataURL(blob);
-  });
 }
