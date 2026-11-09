@@ -125,7 +125,7 @@ func TestAGeneralHelperThatFailsKeepsWhatItMade(t *testing.T) {
 // The helper is told the defaults only for when the brief names no format,
 // and how to make the rest.
 func TestHelperInstructionsLetTheBriefsFormatWin(t *testing.T) {
-	instructions := taskInstructions("A pitch deck as a .pptx.", nil)
+	instructions := taskInstructions("A pitch deck as a .pptx.", nil, "")
 	for _, want := range []string{"when the brief names a format", "Only when it names none", "16:9",
 		"PLAYWRIGHT_BROWSERS_PATH=/opt/commitarium-browser", "python-pptx", "nearest one"} {
 		if !strings.Contains(instructions, want) {
