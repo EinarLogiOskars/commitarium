@@ -182,3 +182,16 @@ func TestPasswordsUseTheAlphabetOnly(t *testing.T) {
 		}
 	}
 }
+
+func TestALabelTypedAsAnEmailNamesTheLoginByItsFirstPart(t *testing.T) {
+	for label, want := range map[string]string{
+		"einar@einarlogi.is": "einar",
+		"Mayka@Mayka.is":     "mayka",
+		"@nobody":            "nobody",
+		"admin":              "admin",
+	} {
+		if got := slug(label); got != want {
+			t.Errorf("slug(%q) = %q, want %q", label, got, want)
+		}
+	}
+}
