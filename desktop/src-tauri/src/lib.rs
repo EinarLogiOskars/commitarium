@@ -91,6 +91,8 @@ pub fn run() {
             apps::open_app_window,
             apps::real_app,
             apps::open_real_app_in_browser,
+            apps::real_app_status,
+            apps::start_real_app,
             outputs::print_output,
             outputs::save_output,
             snapshot::webview_snapshot,

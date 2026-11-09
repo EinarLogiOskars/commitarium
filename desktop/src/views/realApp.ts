@@ -1,20 +1,21 @@
 import { useCallback, useEffect, useState } from "react";
 import {
-  getPreviewStatus,
+  getRealAppStatus,
   openAppWindow,
   openRealAppInBrowser,
   realApp as readRealApp,
-  startPreview,
+  startRealApp,
   type RealApp,
   type RealAppOpened,
 } from "../ipc";
 
 // The real app, as the preview bar and the Apps page offer it
 // (HELPERS_PLAN.md H5): the app the user uses, with its real data, never the
-// preview, which is a test copy with test data. On this computer it opens in
-// its own Commitarium window or in the browser at its local address; on a
-// server it is the deployment, opened in the browser at its domain or
-// Tailscale address (ADR-040).
+// preview, which is a test copy with test data. It is the project's
+// deployment, a stack of its own. On this computer it follows the main
+// branch and opens in its own Commitarium window or in the browser at its
+// local address (H7); on a server it is deployed explicitly and opens in the
+// browser at its domain or Tailscale address (ADR-040).
 
 /** What to offer: the buttons in order, the one used last first, or why
  * there is nothing to open yet. */
@@ -28,7 +29,8 @@ export function realAppOffer(real: RealApp, isApp: boolean): RealAppOffer {
       return { kind: "missing", text: "Your real app is deployed but has no address yet." };
     return { kind: "open", buttons: ["browser"] };
   }
-  // On this computer an app is installed once it is on the Apps page.
+  // On this computer an app is installed once it is on the Apps page: its
+  // real app then starts when it is opened.
   if (!isApp) return { kind: "missing", text: "Your real app isn't installed yet." };
   return {
     kind: "open",
@@ -59,9 +61,9 @@ export async function openRealApp(
 }
 
 async function runLocally(projectId: string): Promise<void> {
-  let status = await getPreviewStatus(projectId);
+  let status = await getRealAppStatus(projectId);
   if (status?.state !== "running" && status?.state !== "starting") {
-    status = await startPreview(projectId);
+    status = await startRealApp(projectId);
   }
   const until = Date.now() + START_WAIT_MS;
   while (status?.state !== "running") {
@@ -69,7 +71,7 @@ async function runLocally(projectId: string): Promise<void> {
     if (status?.state === "stopped" || Date.now() > until)
       throw new Error("The app isn't running yet.");
     await new Promise((done) => setTimeout(done, START_POLL_MS));
-    status = await getPreviewStatus(projectId);
+    status = await getRealAppStatus(projectId);
   }
 }
 

@@ -6,10 +6,12 @@
 //!
 //! A window shows either the real app, the one the user uses, or a preview:
 //! a test copy with test data, which the page marks with a bar the app
-//! cannot hide, and two ways to the real app (HELPERS_PLAN.md H5). On this
-//! computer the real app opens in a window or the browser; on a server it is
-//! the deployment, opened in a browser at its address (ADR-040), so every
-//! window there shows the preview.
+//! cannot hide, and two ways to the real app (HELPERS_PLAN.md H5). The real
+//! app is the project's deployment, a stack apart from the preview with data
+//! of its own and no test accounts. On this computer it follows the default
+//! branch and opens in a window or the browser (H7); on a server it is
+//! deployed explicitly and opens in a browser at its address (ADR-040), so
+//! every window there shows the preview.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -234,11 +236,21 @@ fn primary_url(status: &Value) -> Option<&str> {
         .and_then(|u| u["url"].as_str())
 }
 
-/// The real app's address on this computer: its running copy, on loopback
-/// over http only.
+/// The real app's address on this computer: its running deployment, on
+/// loopback over http only.
 fn local_address(status: &Value) -> Option<String> {
     let url = Url::parse(primary_url(status)?).ok()?;
     (url.scheme() == "http" && url.host_str() == Some("127.0.0.1")).then(|| url.to_string())
+}
+
+/// The state of the project's deployment, from the host's list: `null`
+/// when it is not running.
+fn deployment_status(deployments: &Value, project_id: &str) -> Value {
+    deployments
+        .as_array()
+        .and_then(|all| all.iter().find(|d| d["project_id"] == project_id))
+        .map(|d| d["status"].clone())
+        .unwrap_or(Value::Null)
 }
 
 /// Whether a server's list of deployments has the project deployed.
@@ -273,9 +285,8 @@ async fn find_real_app(app: &AppHandle, project_id: &str) -> Result<RealApp, Str
         };
         (deployed, address)
     } else {
-        let body = json!({ "project_id": project_id, "feature_id": null });
-        let status = host::post(app, "/v1/previews/status", body).await?;
-        (false, local_address(&status))
+        let deployments = host::get(app, "/v1/deployments").await?;
+        (false, local_address(&deployment_status(&deployments, project_id)))
     };
     Ok(RealApp {
         on_server,
@@ -289,6 +300,29 @@ async fn find_real_app(app: &AppHandle, project_id: &str) -> Result<RealApp, Str
 #[tauri::command]
 pub async fn real_app(app: AppHandle, project_id: String) -> Result<RealApp, String> {
     find_real_app(&app, &project_id).await
+}
+
+/// The real app's state on this computer: its deployment's, or `null` when
+/// it is not running. The real app's window follows it.
+#[tauri::command]
+pub async fn real_app_status(app: AppHandle, project_id: String) -> Result<Value, String> {
+    valid_project_id(&project_id)?;
+    let deployments = host::get(&app, "/v1/deployments").await?;
+    Ok(deployment_status(&deployments, &project_id))
+}
+
+/// Starts the real app on this computer, or moves it to the default
+/// branch's head, keeping its data; one already up at the head is left as
+/// it is. On a server the real app is deployed from the Deploy card, never
+/// from a window.
+#[tauri::command]
+pub async fn start_real_app(app: AppHandle, project_id: String) -> Result<Value, String> {
+    valid_project_id(&project_id)?;
+    if host::on_server(&app) {
+        return Err("On a server the app is deployed from its Deploy card.".into());
+    }
+    let body = json!({ "project_id": project_id });
+    host::post(&app, "/v1/deployments/follow", body).await
 }
 
 /// Opens the real app in the user's browser. The address is looked up here,
@@ -355,6 +389,21 @@ mod tests {
         let other_scheme =
             json!({ "state": "running", "urls": [{ "url": "file:///etc/passwd", "open": true }] });
         assert_eq!(local_address(&other_scheme), None);
+    }
+
+    #[test]
+    fn the_real_app_is_the_projects_deployment() {
+        let deployments = json!([
+            { "project_id": "prj_a", "status": { "state": "running", "urls": [{ "url": "http://127.0.0.1:5005", "open": true }] } },
+            { "project_id": "prj_b", "status": null },
+        ]);
+        assert_eq!(
+            local_address(&deployment_status(&deployments, "prj_a")).as_deref(),
+            Some("http://127.0.0.1:5005/")
+        );
+        assert_eq!(deployment_status(&deployments, "prj_b"), Value::Null);
+        assert_eq!(deployment_status(&deployments, "prj_c"), Value::Null);
+        assert_eq!(deployment_status(&Value::Null, "prj_a"), Value::Null);
     }
 
     #[test]

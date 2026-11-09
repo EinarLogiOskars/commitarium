@@ -1,7 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getAgentsAtWork, getProject } from "../api/projects";
 import { listFeatures, setUpPreview, tellAssistantPreviewFailed } from "../api/features";
-import { getPreviewStatus, onPreviewStatusChanged, startPreview, type PreviewStatus } from "../ipc";
+import {
+  getPreviewStatus,
+  getRealAppStatus,
+  onPreviewStatusChanged,
+  startPreview,
+  startRealApp,
+  type PreviewStatus,
+} from "../ipc";
 import { isStopped, primaryUrl } from "./usePreview";
 import { AssistantDrawer, SignInNotice } from "./AssistantDrawer";
 import { RippleField } from "./RippleField";
@@ -21,18 +28,22 @@ const MERGE_POLL_MS = 15_000;
 
 // An app's own window (APPS_PLAN.md): the running app, full size, in a frame
 // from its own local address, so its code never reaches Commitarium; the
-// assistant's round button floats over it. The app runs on the project's
-// preview, started when the window opens and rebuilt when work merges.
-// A Developer-mode project that is not an app opens its running preview here
-// too (the Preview card's Open): it has no launch, so the window never says
-// it is being built, and merged work is not rebuilt on its own; the
-// project's Restart does that.
+// assistant's round button floats over it.
+//
+// The real app's window (the Apps page, Marketplace, Mayka's new app) runs
+// the project's deployment on this computer: a stack apart from the preview,
+// with data of its own and no test accounts (HELPERS_PLAN.md H7). It follows
+// the default branch: moved to the head when the window opens and when work
+// merges, keeping its data.
 //
 // A window opened as a preview (the Preview card's Open, or any window on a
-// server, where the real app is the deployment) shows a bar along its top
-// saying it is a test copy with test data, with the ways to the real app
-// (HELPERS_PLAN.md H5). The bar is this page's, outside the frame, so the
-// app cannot cover or hide it.
+// server, where the real app is the deployment, opened in a browser) runs
+// the default branch's preview, a test copy with test data, and shows a bar
+// along its top saying so, with the ways to the real app (H5). The bar is
+// this page's, outside the frame, so the app cannot cover or hide it. A
+// Developer-mode project that is not an app opens its preview here too: it
+// has no launch, so the window never says it is being built, and merged
+// work is not rebuilt on its own; the project's Restart does that.
 export function AppWindow({
   projectId,
   preview = false,
@@ -50,13 +61,13 @@ export function AppWindow({
     setError(null);
     setStarting(true);
     try {
-      setStatus(await startPreview(projectId));
+      setStatus(await (preview ? startPreview(projectId) : startRealApp(projectId)));
     } catch (e) {
       setError(String(e));
     } finally {
       setStarting(false);
     }
-  }, [projectId]);
+  }, [projectId, preview]);
 
   useEffect(() => {
     getProject(projectId)
@@ -67,24 +78,27 @@ export function AppWindow({
       .catch(() => undefined);
   }, [projectId, preview]);
 
-  // Follow the preview, starting it when the app isn't running.
+  // Follow the stack, starting it when the app isn't running. The real app
+  // is also brought up to the default branch's head, which leaves one
+  // already there running as it is.
   useEffect(() => {
     let live = true;
-    getPreviewStatus(projectId)
+    const kind = preview ? "canonical" : "deployment";
+    (preview ? getPreviewStatus(projectId) : getRealAppStatus(projectId))
       .then((s) => {
         if (!live) return;
         setStatus(s);
-        if (!s || s.state === "stopped") void start();
+        if (!s || s.state === "stopped" || (!preview && s.state !== "failed")) void start();
       })
       .catch(() => live && void start());
     const unlisten = onPreviewStatusChanged((s) => {
-      if (live && s.projectId === projectId && s.target.kind === "canonical") setStatus(s);
+      if (live && s.projectId === projectId && s.target.kind === kind) setStatus(s);
     });
     return () => {
       live = false;
       void unlisten.then((u) => u());
     };
-  }, [projectId, start]);
+  }, [projectId, preview, start]);
 
   // Work that merges reaches the app: rebuild it from the new head. Its data
   // volumes are kept. The work fixing the app's setup is followed too. An app

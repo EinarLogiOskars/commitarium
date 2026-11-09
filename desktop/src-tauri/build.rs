@@ -6,6 +6,8 @@ const COMMANDS: &[&str] = &[
     "open_app_window",
     "real_app",
     "open_real_app_in_browser",
+    "real_app_status",
+    "start_real_app",
     "webview_snapshot",
     "webview_snapshot_supported",
     "agent_cli_status",
