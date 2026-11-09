@@ -112,6 +112,16 @@ are test logins for the user's own app, never real ones.
   a fresh session preview the accounts come back by themselves.
 - **Mayka** sees the labels, roles and notes, never passwords, and knows
   whether the app seeds them yet.
+- **Built as:** `internal/testaccounts`, one 0600 file per project under
+  the coordinator's credentials directory (left out of backups, like the
+  linked repositories' tokens); routes under
+  `/api/v1/projects/{id}/test-accounts` (list without passwords, add,
+  change role or note, remove, copy one password, and `preview`, the file
+  itself). The host reads `preview` when it starts a preview (never a
+  deployment or a preview check) and writes it into the preview's own
+  directory, removed when the preview stops; a preview the coordinator
+  cannot answer for starts without the file, so the app leaves its logins
+  alone.
 
 ### H5: the preview bar and two ways to open the real app
 
