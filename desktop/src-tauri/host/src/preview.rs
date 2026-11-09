@@ -157,6 +157,11 @@ impl PreviewStatus {
         &self.commit_id
     }
 
+    /// Whether it is starting or running, rather than failed or stopped.
+    pub(crate) fn is_up(&self) -> bool {
+        matches!(self.state, PreviewState::Starting | PreviewState::Running)
+    }
+
     /// The local port of the address it opens on, while it runs.
     pub(crate) fn open_port(&self) -> Option<u16> {
         if self.state != PreviewState::Running {
@@ -1692,6 +1697,25 @@ fn forgejo_token_path() -> Result<PathBuf, String> {
     }
 }
 
+/// The head commit of a project's default branch, as the coordinator knows
+/// it.
+pub(crate) async fn head_commit(project_id: &str) -> Result<String, String> {
+    validate_identifier("project ID", project_id)?;
+    let handoff: ProjectHandoff = coordinator_json(
+        reqwest::Client::new()
+            .get(coordinator_url(&format!(
+                "/api/v1/projects/{project_id}/handoff"
+            )))
+            .send()
+            .await
+            .map_err(|e| format!("request project handoff from coordinator: {e}"))?,
+        "project handoff",
+    )
+    .await?;
+    validate_handoff(&handoff, project_id)?;
+    Ok(handoff.source.head_commit_id)
+}
+
 pub(crate) fn validate_handoff(handoff: &ProjectHandoff, project_id: &str) -> Result<(), String> {
     if handoff.project_id != project_id {
         return Err("coordinator returned a handoff for another project".into());
@@ -1815,6 +1839,41 @@ mod tests {
         assert!(kept.contains(&named("prj_todo-live")));
         assert!(kept.contains(&named("prj_todo-fea_open")));
         assert!(!kept.contains(&named("prj_todo-fea_closed")));
+    }
+
+    #[test]
+    fn the_real_app_is_a_stack_apart_from_the_preview() {
+        // Reset data removes the preview's Compose project, never the
+        // deployment's, which is the real app on this computer (H7).
+        assert_ne!(
+            deployment_key("prj_todo").unwrap(),
+            preview_key("prj_todo", None).unwrap()
+        );
+        assert_eq!(
+            preview_compose::project_name(&deployment_compose_id("prj_todo")).unwrap(),
+            "commitarium-preview-prj_todo-live"
+        );
+        assert_eq!(
+            preview_compose::project_name("prj_todo").unwrap(),
+            "commitarium-preview-prj_todo"
+        );
+    }
+
+    #[test]
+    fn a_preview_is_up_while_it_starts_or_runs() {
+        let status = |state| PreviewStatus {
+            project_id: "prj_todo".into(),
+            target: PreviewTarget::Deployment { commit_id: None },
+            commit_id: "abc".into(),
+            state,
+            urls: Vec::new(),
+            error: None,
+            services: Vec::new(),
+        };
+        assert!(status(PreviewState::Starting).is_up());
+        assert!(status(PreviewState::Running).is_up());
+        assert!(!status(PreviewState::Failed).is_up());
+        assert!(!status(PreviewState::Stopped).is_up());
     }
 
     #[test]

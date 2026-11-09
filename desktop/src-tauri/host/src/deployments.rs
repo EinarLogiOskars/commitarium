@@ -1,6 +1,11 @@
 //! Deployments (PUBLISHING_PLAN.md): each app's frozen copy of one commit,
 //! apart from its preview, with data of its own. What is deployed is kept in
 //! a file, so a host that starts again deploys the same versions again.
+//!
+//! On this computer the same stack is the user's real app (HELPERS_PLAN.md,
+//! H7): it follows the default branch, started when its window opens and
+//! moved to the new head when work merges, and stops when the app quits.
+//! Only a server starts its deployments again by itself.
 
 use crate::events::Events;
 use crate::preview::{self, PreviewManager, PreviewStatus, PreviewTarget};
@@ -122,6 +127,39 @@ impl Deployments {
         Ok(status)
     }
 
+    /// Keeps the deployment on the default branch's head: started, or
+    /// moved to the head, when it is not already up at it. The real app on
+    /// this computer follows the default branch this way (HELPERS_PLAN.md,
+    /// H7); its data is kept.
+    pub async fn follow_head(
+        &self,
+        events: Events,
+        project_id: String,
+    ) -> Result<PreviewStatus, String> {
+        let head = preview::head_commit(&project_id).await?;
+        if let Some(status) = preview::deployment_status(&self.manager, &project_id)? {
+            if status.is_up() && status.commit_id() == head {
+                return Ok(status);
+            }
+        }
+        self.deploy(events, project_id, Some(head)).await
+    }
+
+    /// Stops a deployment and forgets it, for a project being deleted, which
+    /// removes its data too.
+    pub async fn forget(&self, events: Events, project_id: String) -> Result<(), String> {
+        preview::stop_deployment(events, &self.manager, project_id.clone()).await?;
+        let _held = self
+            .records
+            .lock()
+            .map_err(|_| "deployments are unavailable")?;
+        let mut records = self.read()?;
+        if records.remove(&project_id).is_some() {
+            self.write(&records)?;
+        }
+        Ok(())
+    }
+
     /// Stops a deployment. Its data stays for the next deploy.
     pub async fn stop(&self, events: Events, project_id: String) -> Result<(), String> {
         preview::stop_deployment(events, &self.manager, project_id.clone()).await?;
@@ -239,5 +277,21 @@ mod tests {
         let records = again.read().unwrap();
         assert_eq!(records["prj_one"].current, None);
         assert_eq!(records["prj_one"].history, vec![deploy("abc", 5)]);
+    }
+
+    #[test]
+    fn a_deleted_project_is_forgotten() {
+        let dir = tempfile::tempdir().unwrap();
+        let deployments = Deployments::new(dir.path());
+        for project in ["prj_one", "prj_two"] {
+            deployments
+                .change(project, |record| record.deployed(deploy("abc", 5)))
+                .unwrap();
+        }
+        crate::runtime::block_on(deployments.forget(Events::new(crate::events::Bus::default()), "prj_one".into()))
+            .unwrap();
+        let records = deployments.read().unwrap();
+        assert!(!records.contains_key("prj_one"));
+        assert!(records.contains_key("prj_two"));
     }
 }
