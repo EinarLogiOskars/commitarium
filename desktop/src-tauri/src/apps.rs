@@ -286,7 +286,10 @@ async fn find_real_app(app: &AppHandle, project_id: &str) -> Result<RealApp, Str
         (deployed, address)
     } else {
         let deployments = host::get(app, "/v1/deployments").await?;
-        (false, local_address(&deployment_status(&deployments, project_id)))
+        (
+            false,
+            local_address(&deployment_status(&deployments, project_id)),
+        )
     };
     Ok(RealApp {
         on_server,

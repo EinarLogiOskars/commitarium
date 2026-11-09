@@ -597,11 +597,7 @@ fn respond_to_post(path: &str, body: &[u8], shared: &Shared) -> Reply {
         // branch's head (HELPERS_PLAN.md, H7).
         "/v1/deployments/follow" => with_body(body, |follow: ProjectRequest| {
             shared.wait_for_sweep();
-            block_on(
-                shared
-                    .deployments
-                    .follow_head(events(), follow.project_id),
-            )
+            block_on(shared.deployments.follow_head(events(), follow.project_id))
         }),
         "/v1/backups/create" => respond_with(
             shared

@@ -288,8 +288,10 @@ mod tests {
                 .change(project, |record| record.deployed(deploy("abc", 5)))
                 .unwrap();
         }
-        crate::runtime::block_on(deployments.forget(Events::new(crate::events::Bus::default()), "prj_one".into()))
-            .unwrap();
+        crate::runtime::block_on(
+            deployments.forget(Events::new(crate::events::Bus::default()), "prj_one".into()),
+        )
+        .unwrap();
         let records = deployments.read().unwrap();
         assert!(!records.contains_key("prj_one"));
         assert!(records.contains_key("prj_two"));
