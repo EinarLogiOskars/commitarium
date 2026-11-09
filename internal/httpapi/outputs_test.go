@@ -23,7 +23,7 @@ type delegatingConversations struct {
 	briefs []string
 }
 
-func (stub *delegatingConversations) StartTask(_ context.Context, scope, _, title, brief string) (conversations.Helper, error) {
+func (stub *delegatingConversations) StartTask(_ context.Context, scope, _, title, brief string, _ bool) (conversations.Helper, error) {
 	stub.briefs = append(stub.briefs, scope+": "+brief)
 	return conversations.Helper{ID: "tsk_1", Kind: conversations.HelperTask, Title: title, Agent: "codex"}, nil
 }

@@ -342,6 +342,11 @@ type Config struct {
 	Attachments Attachments
 	// Outputs, when set, keeps what general helpers make (task.go).
 	Outputs Outputs
+	// TestPreviews, when set, keeps the throwaway previews helpers test the
+	// app in, and TestAccounts hands them the project's test logins
+	// (testapp.go).
+	TestPreviews TestPreviews
+	TestAccounts TestAccountFiles
 }
 
 // ChatUsage is one assistant turn's usage.

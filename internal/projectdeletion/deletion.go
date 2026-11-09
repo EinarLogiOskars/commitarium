@@ -68,7 +68,9 @@ type Service struct {
 	// documents the files attached to it; testAccounts forgets its preview's
 	// test logins.
 	conversations, documents, outputs, testAccounts ToolchainCleaner
-	mu                                              sync.Mutex
+	// testPreviews ends the throwaway previews its helpers test in.
+	testPreviews ToolchainCleaner
+	mu           sync.Mutex
 }
 
 // WithDocuments makes deletion remove the project's documents too.
@@ -86,6 +88,13 @@ func (service *Service) WithOutputs(outputs ToolchainCleaner) *Service {
 // WithTestAccounts makes deletion forget the project's test logins too.
 func (service *Service) WithTestAccounts(testAccounts ToolchainCleaner) *Service {
 	service.testAccounts = testAccounts
+	return service
+}
+
+// WithTestPreviews makes deletion end the project's test previews too; the
+// host then removes them.
+func (service *Service) WithTestPreviews(testPreviews ToolchainCleaner) *Service {
+	service.testPreviews = testPreviews
 	return service
 }
 
@@ -186,6 +195,11 @@ func (service *Service) Delete(
 	if service.testAccounts != nil {
 		if err := service.testAccounts.DeleteProject(ctx, projectID); err != nil {
 			return Result{}, fmt.Errorf("%w: remove the project's test accounts: %v", ErrUnavailable, err)
+		}
+	}
+	if service.testPreviews != nil {
+		if err := service.testPreviews.DeleteProject(ctx, projectID); err != nil {
+			return Result{}, fmt.Errorf("%w: end the project's test previews: %v", ErrUnavailable, err)
 		}
 	}
 	if deletion.Repository != nil {

@@ -37,7 +37,7 @@ func TestAGeneralHelperHandsItsFilesBack(t *testing.T) {
 		t.Fatalf("autopilot = %+v, %v", actions, err)
 	}
 	helper, err := service.StartTask(t.Context(), TopLevel, "act_deck", "Pitch deck",
-		"A ten-slide pitch deck for a bakery app, in English.")
+		"A ten-slide pitch deck for a bakery app, in English.", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +94,7 @@ func TestAGeneralHelperThatFailsKeepsWhatItMade(t *testing.T) {
 	service, worker := newTestService(t)
 	store, _ := outputs.NewStore(t.TempDir())
 	service.config.Outputs = store
-	helper, err := service.StartTask(t.Context(), "prj_test", "act_1", "Report", "Write a report.")
+	helper, err := service.StartTask(t.Context(), "prj_test", "act_1", "Report", "Write a report.", false)
 	if err != nil {
 		t.Fatal(err)
 	}

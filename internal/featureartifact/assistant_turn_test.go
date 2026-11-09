@@ -139,6 +139,21 @@ func TestResearchNeedsATitleAndAQuestion(t *testing.T) {
 	}
 }
 
+// Only a helper may be asked to test the app.
+func TestOnlyDelegateTestsTheApp(t *testing.T) {
+	delegate := AssistantAction{Type: AssistantDelegate, Reason: "Asked for", Title: "Try sign-in",
+		Description: "Sign in as the admin and add a meal.", TestApp: true}
+	turn, err := (AssistantTurn{Actions: []AssistantAction{delegate}}).Normalize()
+	if err != nil || !turn.Actions[0].TestApp {
+		t.Fatalf("delegate with test_app = %+v, %v", turn, err)
+	}
+	research := AssistantAction{Type: AssistantResearch, Reason: "A fact", Title: "VAT rates",
+		Description: "Which VAT rates apply in Iceland?", TestApp: true}
+	if _, err := (AssistantTurn{Actions: []AssistantAction{research}}).Normalize(); !errors.Is(err, ErrInvalidArtifact) {
+		t.Fatalf("research with test_app = %v", err)
+	}
+}
+
 // A project to plan is named and described like a new app.
 func TestAProjectToPlanNeedsANameAndAGoal(t *testing.T) {
 	plan := AssistantAction{Type: AssistantPlanProject, Reason: "A real project", Title: "Shop sync"}

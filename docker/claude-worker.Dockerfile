@@ -73,6 +73,19 @@ RUN apt-get update && \
     rm -rf /tmp/commitarium-python-smoke && \
     npm cache clean --force
 
+# Helpers that test an app drive its throwaway preview in a headless
+# browser (HELPERS_PLAN.md, H6): Playwright and its headless Chromium, pinned
+# and baked in so a test never waits on a download. They sit outside
+# Playwright's default paths, so a project keeps its own Playwright version;
+# a helper runs its script with PLAYWRIGHT_BROWSERS_PATH and NODE_PATH set to
+# these, as its brief says. Chromium runs without its own sandbox (Playwright's
+# default): the container is the boundary, as for everything else here.
+ARG PLAYWRIGHT_VERSION=1.64.1
+RUN npm install --global --omit=dev "playwright@${PLAYWRIGHT_VERSION}" && \
+    PLAYWRIGHT_BROWSERS_PATH=/opt/commitarium-browser playwright install --only-shell chromium && \
+    chmod -R a+rX /opt/commitarium-browser && \
+    npm cache clean --force
+
 RUN groupadd --gid 65532 commitarium && \
     useradd --uid 65532 --gid 65532 --home-dir /var/lib/commitarium-provider \
         --no-create-home --shell /usr/sbin/nologin commitarium && \
