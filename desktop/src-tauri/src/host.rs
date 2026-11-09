@@ -264,6 +264,11 @@ pub(crate) fn local_started(app: &AppHandle) -> bool {
     app.state::<Host>().local_running().is_some()
 }
 
+/// Whether the window shows a server rather than this computer.
+pub(crate) fn on_server(app: &AppHandle) -> bool {
+    app.state::<Host>().active().is_some()
+}
+
 /// Answers one call on a running host. There is no overall timeout, because
 /// starting the stack is one long request, and no proxy, because this is
 /// loopback. Bodies can hold secrets: nothing here logs them.
