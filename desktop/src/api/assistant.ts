@@ -63,6 +63,7 @@ export type AssistantActionType =
   | "design_stack"
   | "apply_stack"
   | "research"
+  | "delegate"
   | "update_plan"
   | "build_plan"
   | "deploy_app"
