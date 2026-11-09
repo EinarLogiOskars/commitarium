@@ -51,8 +51,12 @@ type RecoveryReader interface {
 // elsewhere it would only repeat it.
 type Event struct {
 	Text string
-	Wake bool
-	News bool
+	// Driven is the line the chat shows instead of Text where the assistant
+	// drives the work: it handles the step itself, so the user is not
+	// told they are waited for. The assistant still hears Text.
+	Driven string
+	Wake   bool
+	News   bool
 	// WorkOrderID is the work order it is about, which decides its chat.
 	WorkOrderID string
 }
@@ -524,7 +528,8 @@ func (item work) event() (Event, bool) {
 		if what, held := execution.ImplementationHoldWhat(item.Reason); held {
 			return Event{Text: name + " is planned and implements " + what}, true
 		}
-		return Event{Text: with(name + " is waiting for the user"), Wake: true}, true
+		return Event{Text: with(name + " is waiting for the user"), Driven: name + " has its plan ready.",
+			Wake: true}, true
 	default:
 		return Event{Text: with(name + " is waiting for the user"), Wake: true}, true
 	}
@@ -671,7 +676,11 @@ func (service *Service) tell(scope, chat string, events []Event, driving bool) e
 	defer done()
 	now := service.now()
 	for _, event := range events {
-		stored.addEvent(event.Text, now)
+		shown := event.Text
+		if driving && event.Driven != "" {
+			shown = event.Driven
+		}
+		stored.addEvent(shown, now)
 		if event.Wake && (!event.News || driving) {
 			stored.PendingEvents = append(stored.PendingEvents, event.Text)
 		}
