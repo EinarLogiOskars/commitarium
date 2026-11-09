@@ -105,7 +105,9 @@ pub async fn print_output(app: AppHandle, title: String, html: String) -> Result
             }
         }
     })
-    .on_navigation(|url| url.scheme() == PRINT_SCHEME || url.host_str() == Some("commitarium-print.localhost"))
+    .on_navigation(|url| {
+        url.scheme() == PRINT_SCHEME || url.host_str() == Some("commitarium-print.localhost")
+    })
     .on_new_window(|_, _| tauri::webview::NewWindowResponse::Deny)
     .build()
     .map(|_| ())
@@ -127,11 +129,17 @@ pub async fn save_output(app: AppHandle, request: tauri::ipc::Request<'_>) -> Re
         .and_then(|value| value.to_str().ok())
         .map(|name| name.replace(['/', '\\'], "-"))
         .unwrap_or_else(|| "output".into());
-    let Some(target) = app.dialog().file().set_file_name(&name).blocking_save_file() else {
+    let Some(target) = app
+        .dialog()
+        .file()
+        .set_file_name(&name)
+        .blocking_save_file()
+    else {
         return Ok(false);
     };
     let path = target.into_path().map_err(|e| e.to_string())?;
-    std::fs::write(&path, contents).map_err(|e| format!("could not save {}: {e}", path.display()))?;
+    std::fs::write(&path, contents)
+        .map_err(|e| format!("could not save {}: {e}", path.display()))?;
     Ok(true)
 }
 
@@ -147,6 +155,9 @@ mod tests {
             pages.add(format!("<p>{n}</p>"));
         }
         assert!(pages.get(first).is_none());
-        assert_eq!(pages.get(first + super::KEPT_PAGES as u64).as_deref(), Some("<p>7</p>"));
+        assert_eq!(
+            pages.get(first + super::KEPT_PAGES as u64).as_deref(),
+            Some("<p>7</p>")
+        );
     }
 }
