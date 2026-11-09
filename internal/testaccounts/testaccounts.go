@@ -336,6 +336,11 @@ var latin = strings.NewReplacer(
 // "Admin (Anna)" becomes "admin-anna". A label of other letters only is
 // "user".
 func slug(label string) string {
+	// A label typed as an email address names the person by its first part:
+	// "einar@example.is" becomes einar, not einar-example-is.
+	if local, _, found := strings.Cut(label, "@"); found && strings.TrimSpace(local) != "" {
+		label = local
+	}
 	plain := latin.Replace(strings.ToLower(label))
 	slugged := strings.Trim(notSlug.ReplaceAllString(plain, "-"), "-")
 	if len(slugged) > maxSlug {
