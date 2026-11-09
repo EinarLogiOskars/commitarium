@@ -665,7 +665,9 @@ func (service *Service) Get(ctx context.Context, scope string) (Conversation, er
 		}
 		if helper.Kind == HelperTask && !helper.Done && (helper.Chat == "" || helper.Chat == stored.Chat) {
 			conversation.Helping = append(conversation.Helping, helper.Title)
-			conversation.HelpersAtWork = append(conversation.HelpersAtWork, HelperAtWork{ID: helper.ID, Title: helper.Title})
+			if !helper.TestApp {
+				conversation.HelpersAtWork = append(conversation.HelpersAtWork, HelperAtWork{ID: helper.ID, Title: helper.Title})
+			}
 		}
 	}
 	return conversation, nil
