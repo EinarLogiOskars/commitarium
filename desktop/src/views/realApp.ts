@@ -5,6 +5,7 @@ import {
   openRealAppInBrowser,
   realApp as readRealApp,
   startRealApp,
+  type PreviewStatus,
   type RealApp,
   type RealAppOpened,
 } from "../ipc";
@@ -47,8 +48,9 @@ export const REAL_APP_LABEL: Record<RealAppOpened, string> = {
 const START_WAIT_MS = 5 * 60_000;
 const START_POLL_MS = 1_000;
 
-/** Opens the real app the chosen way. On this computer an app that is not
- * running is started first, and opens in the browser once it runs. */
+/** Opens the real app the chosen way. On this computer it is first brought
+ * up to the main branch's head, as its window does, and opens in the
+ * browser once it runs. */
 export async function openRealApp(
   projectId: string,
   name: string,
@@ -56,15 +58,13 @@ export async function openRealApp(
   real: RealApp | null,
 ): Promise<void> {
   if (how === "window") return openAppWindow(projectId, name);
-  if (!real?.on_server && !real?.address) await runLocally(projectId);
+  if (!real?.on_server) await runLocally(projectId);
   return openRealAppInBrowser(projectId);
 }
 
 async function runLocally(projectId: string): Promise<void> {
-  let status = await getRealAppStatus(projectId);
-  if (status?.state !== "running" && status?.state !== "starting") {
-    status = await startRealApp(projectId);
-  }
+  // Left running as it is when it is already at the head.
+  let status: PreviewStatus | null = await startRealApp(projectId);
   const until = Date.now() + START_WAIT_MS;
   while (status?.state !== "running") {
     if (status?.state === "failed") throw new Error("The app could not start.");
