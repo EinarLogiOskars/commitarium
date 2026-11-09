@@ -10,6 +10,7 @@ export function QuietRow({
   tone,
   title,
   pulse,
+  live,
   children,
   below,
 }: {
@@ -17,6 +18,8 @@ export function QuietRow({
   title?: string;
   /** Under way in the background: a pulse in place of the glyph. */
   pulse?: boolean;
+  /** Its text pulses too, as "Mayka is writing the reply" does. */
+  live?: boolean;
   children: ReactNode;
   below?: ReactNode;
 }) {
@@ -28,7 +31,7 @@ export function QuietRow({
             {pulse ? <span className="assistant__pulse" /> : QUIET_GLYPH[tone]}
           </span>
         )}
-        <span className="quiet__text">{children}</span>
+        <span className={live ? "quiet__text live-text" : "quiet__text"}>{children}</span>
       </p>
       {below}
     </div>

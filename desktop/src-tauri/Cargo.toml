@@ -38,11 +38,12 @@ tiny_http = "0.12"
 commitarium-host = { path = "host" }
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service", "crypto-rust"] }
 
-# The window's own snapshot (snapshot.rs); tauri already builds on these.
+# The window's own snapshot (snapshot.rs), and a print window's dialog
+# (outputs.rs); tauri already builds on these.
 [target.'cfg(target_os = "macos")'.dependencies]
 block2 = "0.6"
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSData", "NSDictionary", "NSError"] }
-objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSBitmapImageRep", "NSImage", "NSImageRep"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSBitmapImageRep", "NSImage", "NSImageRep", "NSResponder", "NSWindow"] }
 objc2-web-kit = { version = "0.3", default-features = false, features = ["std", "WKWebView", "WKSnapshotConfiguration", "block2", "objc2-app-kit"] }
 
 
