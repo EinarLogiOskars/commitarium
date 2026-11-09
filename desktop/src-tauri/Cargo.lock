@@ -631,7 +631,7 @@ dependencies = [
 
 [[package]]
 name = "commitarium"
-version = "0.14.0-rc.1"
+version = "0.14.0-rc.2"
 dependencies = [
  "block2",
  "commitarium-host",
@@ -658,7 +658,7 @@ dependencies = [
 
 [[package]]
 name = "commitarium-host"
-version = "0.14.0-rc.1"
+version = "0.14.0-rc.2"
 dependencies = [
  "base64 0.22.1",
  "bcrypt",
