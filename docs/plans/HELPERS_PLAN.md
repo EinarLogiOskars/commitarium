@@ -300,6 +300,49 @@ the two have different data, Reset data on the preview and see the real app
 keep its own, Open in browser on a stopped app, quit Commitarium and see
 both stop, and delete the project and see both stacks' volumes go.
 
+### H8: work on a file together
+
+Agreed 2026-11-09 after testing rc.1: a helper today is one-shot. It hands
+back a finished file and stops; feedback ("make the titles blue") makes Mayka
+brief a new helper with no memory of the first. That is the opposite of how
+people work with an assistant on a CV, a deck or a logo. H8 makes an output
+something the user and Mayka keep working on until it is right.
+
+- **The file opens beside the chat.** Opening an output (a chip, the Outputs
+  card, or automatically when a helper Mayka briefed for this chat makes its
+  first file) shows it in a side panel next to the chat, not an overlay. The
+  panel stays while the user talks and reloads whenever the file changes. The
+  viewer's actions (Present, Export PDF, Save, Open, Delete) live there.
+- **The helper stays with its file.** A helper's session and directory are kept
+  after it finishes instead of being removed. Feedback goes back to **the same
+  helper**, resumed with its earlier work, sources and files: a new action,
+  `revise`, that Mayka sends at once (like `delegate`) with the user's change in
+  her words. Small changes and big rework go the same way; the helper decides
+  how much to redo. Mayka stays in the middle (ADR-035): she keeps no write
+  access to files herself, and the user never talks to the helper directly.
+- **It shows as it is built.** While a helper works, the panel shows its
+  output folder's current files (served read-only from its directory), so the
+  user can say "wrong direction" early. Mayka hears the user's message as
+  usual; a revise sent mid-run waits for the turn to end and follows it.
+- **Every change is a version.** Each time the helper finishes, its files are
+  collected as a new version of the same output (`deck.pdf` v1, v2, …), not a
+  new file. The panel steps back through versions and can restore one; the
+  Outputs card shows the latest with its version count. Older versions count
+  toward the store's limits.
+- **When it ends.** The helper's directory and session are kept while the
+  output is being worked on, and removed when the user marks it **Done**,
+  deletes the chat or the output, or after 14 days without a revision (the
+  versions stay). Revising after that starts a new helper that is given the
+  latest version and the earlier briefs, so it continues instead of starting
+  over.
+- **Mayka knows what is open.** Her state lists the chat's outputs with their
+  helper, version and whether it can still be revised, so "make it shorter"
+  goes to the file the user is looking at.
+
+To check before building: the worker resumes a finished consultant attempt's
+provider session for a new turn (Mayka's chats already do this), and keeping
+helper directories does not collide with the test-preview cleanup (H6).
+
 ### H4: release 0.14.0
 
 The version bump, then an rc on the test VPS, then the release.
