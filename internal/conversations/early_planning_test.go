@@ -183,3 +183,40 @@ func TestBuildPlansPutTheFoundationFirst(t *testing.T) {
 		t.Fatal("building everything does not choose steps by risk")
 	}
 }
+
+// A plan ready at its checkpoint wakes the assistant as waiting for the
+// user, but where the assistant drives the work the chat says so plainly
+// instead of telling the user they are needed.
+func TestAReadyPlanIsAPlainLineWhereTheAssistantDrives(t *testing.T) {
+	item := work{Title: "Fix practice bugs", State: feature.StatePlanning, RunID: "run_fix",
+		RunStatus: execution.RunStatusWaitingForUser, WaitKind: execution.RunWaitKindPhaseCheckpoint,
+		Reason: "The agreed implementation plan was published to Forgejo."}
+	event, ok := item.event()
+	if !ok || !event.Wake || !strings.Contains(event.Text, "is waiting for the user") ||
+		event.Driven != "\"Fix practice bugs\" has its plan ready." {
+		t.Fatalf("event = %+v, %v", event, ok)
+	}
+}
+
+// The chat shows the plain line only where the assistant drives the work;
+// the assistant hears the full event either way.
+func TestTellShowsTheDrivenLineOnlyWhereTheAssistantDrives(t *testing.T) {
+	for _, driving := range []bool{false, true} {
+		service, _ := newTestService(t)
+		event := Event{Text: "\"Fix\" is waiting for the user: plan ready.", Driven: "\"Fix\" has its plan ready.", Wake: true}
+		if err := service.tell("prj_test", "", []Event{event}, driving); err != nil {
+			t.Fatal(err)
+		}
+		conversation, err := service.Get(t.Context(), "prj_test")
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := event.Text
+		if driving {
+			want = event.Driven
+		}
+		if got := conversation.Messages[len(conversation.Messages)-1].Text; got != want {
+			t.Fatalf("driving %v: shown %q, want %q", driving, got, want)
+		}
+	}
+}
