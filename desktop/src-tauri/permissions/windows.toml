@@ -80,6 +80,7 @@ permissions = [
   "allow-disconnect-profile",
   "allow-print-output",
   "allow-save-output",
+  "allow-open-output",
 ]
 
 [[set]]
@@ -96,6 +97,7 @@ permissions = [
   "allow-open-real-app-in-browser",
   "allow-print-output",
   "allow-save-output",
+  "allow-open-output",
   "allow-webview-snapshot",
   "allow-webview-snapshot-supported",
   "allow-agent-cli-status",

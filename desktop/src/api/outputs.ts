@@ -50,3 +50,9 @@ export const saveOutput = async (name: string, contents: Blob): Promise<boolean>
  * it as a PDF. */
 export const printOutput = (title: string, html: string): Promise<void> =>
   invoke("print_output", { title, html });
+
+/** Opens a file the app cannot show in the user's default app for it. */
+export const openOutput = async (name: string, contents: Blob): Promise<void> =>
+  invoke("open_output", new Uint8Array(await contents.arrayBuffer()), {
+    headers: { "x-name": name },
+  });

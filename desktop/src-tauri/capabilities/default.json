@@ -8,6 +8,7 @@
   "permissions": [
     "main-window",
     "core:default",
+    "core:window:allow-set-fullscreen",
     "opener:default",
     "dialog:allow-open",
     "dialog:allow-ask",

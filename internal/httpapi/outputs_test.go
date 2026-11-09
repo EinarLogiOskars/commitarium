@@ -60,8 +60,11 @@ func TestOutputRoutes(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(from, outputs.Dir), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(from, outputs.Dir, "deck.html"), []byte("<h1>Deck</h1>"), 0o600); err != nil {
-		t.Fatal(err)
+	for name, contents := range map[string]string{"deck.html": "<h1>Deck</h1>", "plan.docx": "PK docx",
+		"logo.svg": "<svg/>", "data.weird": "bytes"} {
+		if err := os.WriteFile(filepath.Join(from, outputs.Dir, name), []byte(contents), 0o600); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if _, err := store.Collect(t.Context(), conversations.TopLevel, from, "tsk_1", "Deck"); err != nil {
 		t.Fatal(err)
@@ -74,7 +77,7 @@ func TestOutputRoutes(t *testing.T) {
 	handler.ServeHTTP(list, httptest.NewRequest(http.MethodGet, "/api/v1/outputs/commitarium", nil))
 	var listed outputsResponse
 	if err := json.Unmarshal(list.Body.Bytes(), &listed); err != nil || list.Code != http.StatusOK ||
-		len(listed.Outputs) != 1 || listed.Outputs[0].Name != "deck.html" {
+		len(listed.Outputs) != 4 {
 		t.Fatalf("list = %d %s", list.Code, list.Body)
 	}
 	read := httptest.NewRecorder()
@@ -82,6 +85,21 @@ func TestOutputRoutes(t *testing.T) {
 	if read.Code != http.StatusOK || read.Body.String() != "<h1>Deck</h1>" ||
 		!strings.HasPrefix(read.Header().Get("Content-Security-Policy"), "sandbox") {
 		t.Fatalf("read = %d %v %s", read.Code, read.Header(), read.Body)
+	}
+	// Office files and the unknown are attachments; SVG is an image, under
+	// the same sandbox.
+	for name, want := range map[string][2]string{
+		"plan.docx":  {"application/vnd.openxmlformats-officedocument.wordprocessingml.document", `attachment; filename=plan.docx`},
+		"data.weird": {"application/octet-stream", `attachment; filename=data.weird`},
+		"logo.svg":   {"image/svg+xml", ""},
+	} {
+		got := httptest.NewRecorder()
+		handler.ServeHTTP(got, httptest.NewRequest(http.MethodGet, "/api/v1/outputs/commitarium/"+name, nil))
+		if got.Code != http.StatusOK || got.Header().Get("Content-Type") != want[0] ||
+			got.Header().Get("Content-Disposition") != want[1] ||
+			!strings.HasPrefix(got.Header().Get("Content-Security-Policy"), "sandbox") {
+			t.Errorf("%s = %d %v", name, got.Code, got.Header())
+		}
 	}
 	deleted := httptest.NewRecorder()
 	handler.ServeHTTP(deleted, httptest.NewRequest(http.MethodDelete, "/api/v1/outputs/commitarium/deck.html", nil))

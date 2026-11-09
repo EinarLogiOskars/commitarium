@@ -79,6 +79,7 @@ const COMMANDS: &[&str] = &[
     "disconnect_profile",
     "print_output",
     "save_output",
+    "open_output",
 ];
 
 fn main() {
