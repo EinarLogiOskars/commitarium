@@ -13,6 +13,7 @@ import { ApiError } from "../api/client";
 import type { AutonomyPolicy, MergePolicy, Project } from "../api/types";
 import { ASSISTANT_CHANGED } from "./AssistantDrawer";
 import { ASSISTANT_MODES, assistantMode } from "./assistantMode";
+import { TestAccounts } from "./TestAccounts";
 
 // Project preferences. Agents and models are not among them (ADR-027): each
 // work order's are chosen when it starts. Each section maps to its own PUT endpoint and saves
@@ -34,6 +35,7 @@ export function ProjectSettings({
       <Autonomy project={project} onUpdated={onUpdated} />
       <Merge project={project} onUpdated={onUpdated} />
       <Validation project={project} />
+      <TestAccounts projectId={project.id} />
       <Recovery project={project} />
     </>
   );
