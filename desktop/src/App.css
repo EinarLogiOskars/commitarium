@@ -4702,7 +4702,8 @@ button.danger:not(.ghost) {
   opacity: 0.7;
 }
 /* A live line: a soft highlight sweeps through the text at a slight angle. */
-.assistant__activity .live-text {
+.assistant__activity .live-text,
+.quiet .live-text {
   background: linear-gradient(
     100deg,
     var(--muted) 0%,
@@ -4726,7 +4727,8 @@ button.danger:not(.ghost) {
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .assistant__activity .live-text {
+  .assistant__activity .live-text,
+  .quiet .live-text {
     animation: none;
     color: var(--muted);
     background: none;

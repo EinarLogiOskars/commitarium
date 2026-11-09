@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AssistantAction } from "../api/assistant";
-import { foldedEvent, groupTurn } from "./appliedSummary";
+import { foldedEvent, groupHelpers, groupTurn } from "./appliedSummary";
 
 const action = (fields: Partial<AssistantAction>): AssistantAction =>
   ({
@@ -104,5 +104,28 @@ describe("a turn's work actions", () => {
       ),
     ).toBe(false);
     expect(foldedEvent("“Step 3” merged.", titles)).toBe(false);
+  });
+});
+
+describe("a turn's helpers", () => {
+  const helpers = ["Deck", "Report", "Logo"].map((title) => action({ title, type: "delegate" }));
+  const note = action({ id: "act_r", type: "research", title: "VAT" });
+  const pieces = groupTurn([note, ...helpers], always);
+
+  it("fold into one line while several work", () => {
+    const working = new Set(["Deck", "Logo"]);
+    const folded = groupHelpers(pieces, (a) => working.has(a.title));
+    expect(folded.map((piece) => piece.kind)).toEqual(["one", "helpers", "one"]);
+    const group = folded[1];
+    expect(group.kind === "helpers" && group.summary).toBe("2 helpers working");
+    expect(group.kind === "helpers" && group.items.map((item) => item.title)).toEqual([
+      "Deck",
+      "Logo",
+    ]);
+  });
+
+  it("stay lines of their own when one or none works", () => {
+    expect(groupHelpers(pieces, (a) => a.title === "Deck")).toEqual(pieces);
+    expect(groupHelpers(pieces, () => false)).toEqual(pieces);
   });
 });

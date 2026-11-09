@@ -29,7 +29,8 @@ export interface WorkItem {
 
 export type TurnPiece =
   | { kind: "one"; action: AssistantAction }
-  | { kind: "group"; actions: AssistantAction[]; items: WorkItem[]; summary: string };
+  | { kind: "group"; actions: AssistantAction[]; items: WorkItem[]; summary: string }
+  | { kind: "helpers"; actions: AssistantAction[]; items: WorkItem[]; summary: string };
 
 /** Splits a turn's actions into single ones and one summary of its work
  * actions shown as lines, placed where the first of them was. */
@@ -58,6 +59,39 @@ export function groupTurn(
     }
   }
   return pieces;
+}
+
+/** A turn's helpers still at work fold into one line, "3 helpers working",
+ * placed where the first of them was; one at work stays its own line. */
+export function groupHelpers(
+  pieces: TurnPiece[],
+  working: (action: AssistantAction) => boolean,
+): TurnPiece[] {
+  const busy = pieces.flatMap((piece) =>
+    piece.kind === "one" && piece.action.type === "delegate" && working(piece.action)
+      ? [piece.action]
+      : [],
+  );
+  if (busy.length < 2) return pieces;
+  const out: TurnPiece[] = [];
+  for (const piece of pieces) {
+    if (piece.kind !== "one" || !busy.includes(piece.action)) {
+      out.push(piece);
+    } else if (piece.action === busy[0]) {
+      out.push({
+        kind: "helpers",
+        actions: busy,
+        items: busy.map((action) => ({
+          key: action.id,
+          title: action.title || "a task",
+          state: "working…",
+          bucket: "busy",
+        })),
+        summary: `${busy.length} helpers working`,
+      });
+    }
+  }
+  return out;
 }
 
 /** The work orders of a turn's actions: a queued start and the create it
