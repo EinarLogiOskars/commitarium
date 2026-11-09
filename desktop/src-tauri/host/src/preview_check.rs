@@ -241,13 +241,17 @@ fn check_source(project_id: &str, root: &Path, open: Option<RunOpen>) -> (bool, 
     });
     // The stack's open target may predate the file the agent just wrote;
     // then the check opens what the file declares.
-    let prepared =
-        match preview_compose::normalize_and_rewrite(&source, &compose_id, configured.as_ref()) {
-            Err(error) if configured.is_some() && error.contains("preview open") => {
-                preview_compose::normalize_and_rewrite(&source, &compose_id, None)
-            }
-            prepared => prepared,
-        };
+    let prepared = match preview_compose::normalize_and_rewrite(
+        &source,
+        &compose_id,
+        configured.as_ref(),
+        None,
+    ) {
+        Err(error) if configured.is_some() && error.contains("preview open") => {
+            preview_compose::normalize_and_rewrite(&source, &compose_id, None, None)
+        }
+        prepared => prepared,
+    };
     let prepared = match prepared {
         Ok(prepared) => prepared,
         Err(error) => return (false, Evidence::failed(STAGE_SETUP, &error)),
