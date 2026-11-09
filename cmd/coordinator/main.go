@@ -36,6 +36,7 @@ import (
 	"github.com/EinarLogiOskars/commitarium/internal/projectdeletion"
 	"github.com/EinarLogiOskars/commitarium/internal/projectenvironment"
 	"github.com/EinarLogiOskars/commitarium/internal/release"
+	"github.com/EinarLogiOskars/commitarium/internal/testaccounts"
 	"github.com/EinarLogiOskars/commitarium/internal/toolchain"
 	"github.com/EinarLogiOskars/commitarium/internal/validation"
 	"github.com/EinarLogiOskars/commitarium/internal/vision"
@@ -277,6 +278,12 @@ func run(ctx context.Context, coordinatorConfig config) error {
 	if err != nil {
 		return fmt.Errorf("set up helper outputs: %w", err)
 	}
+	// A project's test logins for its preview are credentials: they live
+	// beside the linked repositories' tokens, which backups leave out.
+	testAccountStore, err := testaccounts.NewStore(filepath.Join(coordinatorConfig.credentialsRoot, "test-accounts"))
+	if err != nil {
+		return fmt.Errorf("set up test accounts: %w", err)
+	}
 	// A work order that is a slice of a written plan finds the plan in its
 	// checkouts (PLAN_MODE_PLAN.md PM6); the visions come later, with the
 	// real agents.
@@ -427,7 +434,7 @@ func run(ctx context.Context, coordinatorConfig config) error {
 			Describer: conversations.StateDescriber{
 				Projects: projectService, Agents: agentService, Features: featureService,
 				Visions: visions, Toolchains: toolchainService, Models: models, Runs: executionService,
-				Documents: documentStore,
+				Documents: documentStore, TestAccounts: testAccountStore,
 				Usage: func(ctx context.Context) []agent.Usage {
 					reported, err := usage.AgentUsage(ctx)
 					if err != nil {
@@ -677,7 +684,7 @@ func run(ctx context.Context, coordinatorConfig config) error {
 	if projectConversations != nil {
 		projectDeletionService.WithConversations(projectConversations)
 	}
-	projectDeletionService.WithDocuments(documentStore).WithOutputs(outputStore)
+	projectDeletionService.WithDocuments(documentStore).WithOutputs(outputStore).WithTestAccounts(testAccountStore)
 	var marketplaceService httpapi.MarketplaceService
 	var releaseService httpapi.ReleaseService
 	var installService httpapi.InstallService
@@ -739,6 +746,7 @@ func run(ctx context.Context, coordinatorConfig config) error {
 		modelGuide,
 		documentStore,
 		outputStore,
+		testAccountStore,
 	)
 
 	if assistantWatcher != nil {
