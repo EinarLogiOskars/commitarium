@@ -5,11 +5,14 @@ import { deleteProject, openAppWindow } from "../ipc";
 import { ApiError } from "../api/client";
 import { listMarketplaceInstalls, type MarketplaceInstall } from "../api/marketplace";
 import { OPEN_ASSISTANT, WORK_CHANGED } from "./AssistantDrawer";
+import { RealAppButtons } from "./RealAppButtons";
 import type { AttentionItem, Project, RunningWorkOrder } from "../api/types";
 
 // The Apps area (APPS_PLAN.md): the projects the user uses as apps, one tile
 // each. A tile opens the app in its own window; "Show the work" opens the
-// project behind it.
+// project behind it. Each tile also has the two ways to open the real app,
+// in Commitarium or in the browser, the one used last first, as the preview
+// bar has (HELPERS_PLAN.md H5).
 export function AppsView({
   reachable,
   attention,
@@ -127,6 +130,7 @@ export function AppsView({
                     From {origin.owner} · {origin.version}
                   </span>
                 )}
+                <RealAppButtons projectId={app.id} name={app.name} isApp className="apps__open" />
                 <span className="apps__actions">
                   {onShowWork && (
                     <button

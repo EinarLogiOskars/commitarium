@@ -13,6 +13,7 @@ import { buildItemState } from "./projectCardData";
 import { ContainerEvidence } from "./ContainerEvidence";
 import { plainFailure } from "./previewEvidence";
 import { isPreviewWork } from "./usePreviewSetup";
+import { RealAppButtons } from "./RealAppButtons";
 import "../App.css";
 
 // How often the window looks for newly merged work to reload.
@@ -26,7 +27,19 @@ const MERGE_POLL_MS = 15_000;
 // too (the Preview card's Open): it has no launch, so the window never says
 // it is being built, and merged work is not rebuilt on its own; the
 // project's Restart does that.
-export function AppWindow({ projectId }: { projectId: string }) {
+//
+// A window opened as a preview (the Preview card's Open, or any window on a
+// server, where the real app is the deployment) shows a bar along its top
+// saying it is a test copy with test data, with the ways to the real app
+// (HELPERS_PLAN.md H5). The bar is this page's, outside the frame, so the
+// app cannot cover or hide it.
+export function AppWindow({
+  projectId,
+  preview = false,
+}: {
+  projectId: string;
+  preview?: boolean;
+}) {
   const [project, setProject] = useState<Project | null>(null);
   const [status, setStatus] = useState<PreviewStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -49,10 +62,10 @@ export function AppWindow({ projectId }: { projectId: string }) {
     getProject(projectId)
       .then((p) => {
         setProject(p);
-        document.title = p.name;
+        document.title = preview ? `${p.name} · Preview` : p.name;
       })
       .catch(() => undefined);
-  }, [projectId]);
+  }, [projectId, preview]);
 
   // Follow the preview, starting it when the app isn't running.
   useEffect(() => {
@@ -258,29 +271,45 @@ export function AppWindow({ projectId }: { projectId: string }) {
 
   return (
     <div className="app-window">
-      {url && (
-        <iframe
-          key={url}
-          className={`app-window__frame ${loadedUrl === url ? "" : "app-window__frame--loading"}`}
-          src={address ?? url}
-          title={name}
-          onLoad={() => setLoadedUrl(url)}
-          // Same-site with this page (ADR-029), so it may not navigate it
-          // away: everything but top navigation.
-          sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads allow-pointer-lock"
-          allow="clipboard-read; clipboard-write; fullscreen"
-        />
-      )}
-      {waiting}
-      {revealed && building && goal && (
-        <div className="app-window__progress">
-          <button className="ghost" onClick={() => setShowProgress((was) => !was)}>
-            Building · {goal.items.filter((i) => i.done).length} of {goal.items.length}
-            {nextItem && <span className="muted"> · {nextItem.title}</span>}
-          </button>
-          {showProgress && <BuildChecklist goal={goal} orders={orders} agents={atWork} />}
+      {preview && (
+        <div className="preview-bar" role="note">
+          <span className="preview-bar__label">Preview</span>
+          <span className="preview-bar__text">A test copy with test data</span>
+          {project && (
+            <RealAppButtons
+              projectId={projectId}
+              name={name}
+              isApp={app}
+              className="preview-bar__real"
+            />
+          )}
         </div>
       )}
+      <div className="app-window__body">
+        {url && (
+          <iframe
+            key={url}
+            className={`app-window__frame ${loadedUrl === url ? "" : "app-window__frame--loading"}`}
+            src={address ?? url}
+            title={name}
+            onLoad={() => setLoadedUrl(url)}
+            // Same-site with this page (ADR-029), so it may not navigate it
+            // away: everything but top navigation.
+            sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads allow-pointer-lock"
+            allow="clipboard-read; clipboard-write; fullscreen"
+          />
+        )}
+        {waiting}
+        {revealed && building && goal && (
+          <div className="app-window__progress">
+            <button className="ghost" onClick={() => setShowProgress((was) => !was)}>
+              Building · {goal.items.filter((i) => i.done).length} of {goal.items.length}
+              {nextItem && <span className="muted"> · {nextItem.title}</span>}
+            </button>
+            {showProgress && <BuildChecklist goal={goal} orders={orders} agents={atWork} />}
+          </div>
+        )}
+      </div>
       <AssistantDrawer
         scope={projectId}
         scopeLabel={name}
