@@ -163,6 +163,14 @@ export function appliedLine(
         "research",
         `${done ? "Looked up" : "Looking up"}: ${action.title}`,
       );
+    case "revise":
+      // The change goes back to the helper that made the file; its own
+      // event line says what changed and carries the files.
+      return line(
+        done ? "done" : "busy",
+        "helper",
+        `${done ? "Sent a change" : "Sending a change"}: ${action.guidance ?? ""}`,
+      );
     case "delegate":
       // The helper works in the background: while it does, the line pulses;
       // its own event line says when it is done and carries its files.

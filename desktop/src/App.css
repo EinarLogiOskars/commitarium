@@ -7677,6 +7677,125 @@ button.shell-agent:hover {
 .output-row__when {
   flex: none;
 }
+.output-row__version {
+  flex: none;
+  font-size: var(--text-xs);
+}
+.output-rows--nested {
+  margin: 2px 0 4px 14px;
+}
+.output-gallery__name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-sm);
+}
+
+/* The file beside the chat (H8): the chat and the panel share the centre;
+   on a narrow window the panel lies over the chat's right side. */
+.chat-view-split {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+}
+.chat-view-split > .chat-view {
+  min-width: 0;
+}
+.output-panel {
+  width: clamp(340px, 46%, 760px);
+  flex: none;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--border);
+  background: var(--bg);
+}
+.output-panel__head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.output-panel__title {
+  margin: 0;
+  min-width: 0;
+  font-size: var(--text-base);
+  font-weight: var(--weight-strong);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.output-panel__live {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 1px 8px;
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+.output-panel__versions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  font-size: var(--text-sm);
+}
+.output-panel__version {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.output-panel__body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  overflow: hidden;
+}
+.output-panel__body .output-viewer__frame {
+  min-height: 0;
+}
+.output-panel__empty {
+  margin: 0;
+}
+.output-panel--collapsed {
+  width: 36px;
+  padding: 8px 0;
+  align-items: center;
+}
+.output-panel__unfold {
+  writing-mode: vertical-rl;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-height: 100%;
+  padding: 8px 4px;
+}
+.output-panel__unfold-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-height: 60vh;
+  font-size: var(--text-sm);
+}
+@media (max-width: 1100px) {
+  .output-panel:not(.output-panel--collapsed) {
+    position: absolute;
+    inset: 0 0 0 auto;
+    z-index: 6;
+    width: min(100%, 560px);
+    box-shadow: var(--side-shadow);
+  }
+}
 .output-viewer__actions {
   display: flex;
   align-items: center;

@@ -4,7 +4,15 @@ import { workingOn } from "./workingOn";
 import { BuildForMeCard, FIRST_LOOK_NOTE } from "./BuildForMeCard";
 import { AttachmentChips, SentAttachments, useAttachments } from "./Attachments";
 import { OutputChips } from "./Outputs";
-import { OUTPUTS_CHANGED } from "../api/outputs";
+import {
+  OPEN_OUTPUT,
+  OUTPUTS_CHANGED,
+  type HelperFile,
+  type OpenOutputDetail,
+  listHelperFiles,
+} from "../api/outputs";
+import { OutputPanel } from "./OutputPanel";
+import { type PanelTarget, autoOpenTarget } from "./panelTargets";
 import { ComposerBox } from "./Composer";
 import {
   useCallback,
@@ -210,6 +218,66 @@ export function ChatView({
   useEffect(() => {
     if (handedBack > 0) window.dispatchEvent(new Event(OUTPUTS_CHANGED));
   }, [handedBack]);
+  // The file beside the chat (H8): opened from a chip or the Outputs card,
+  // or by itself once a helper this chat briefed makes its first file. Only
+  // the chat page has it; the drawer opens files over the page.
+  // It belongs to the chat it was opened in.
+  const [panelOf, setPanelOf] = useState<{ chat: string; target: PanelTarget } | null>(null);
+  const panel = panelOf?.chat === targetKey ? panelOf.target : null;
+  const setPanel = useCallback(
+    (next: PanelTarget | null) => setPanelOf(next ? { chat: shown.current, target: next } : null),
+    [],
+  );
+  const sectionRef = useRef<HTMLElement | null>(null);
+  // Helpers the panel opened on by itself, or the user closed it on.
+  const panelSeen = useRef<Set<string>>(new Set());
+  const atWorkIds = (conversation?.helpers_at_work ?? []).map((helper) => helper.id).join(",");
+  const atWork = useMemo(() => new Set(atWorkIds ? atWorkIds.split(",") : []), [atWorkIds]);
+  useEffect(() => {
+    if (!page) return;
+    const onOpen = (event: Event) => {
+      const detail = (event as CustomEvent<OpenOutputDetail>).detail;
+      // Only a chat that is showing takes it; else the card opens it itself.
+      if (detail.owner !== scope || !sectionRef.current?.getClientRects().length) return;
+      event.preventDefault();
+      setPanel(detail.images?.length ? { images: detail.images } : { name: detail.name });
+    };
+    window.addEventListener(OPEN_OUTPUT, onOpen);
+    return () => window.removeEventListener(OPEN_OUTPUT, onOpen);
+  }, [page, scope, setPanel]);
+  const panelOpen = panel !== null;
+  useEffect(() => {
+    if (!page || panelOpen || !atWorkIds) return;
+    let gone = false;
+    const look = async () => {
+      const ids = atWorkIds.split(",").filter((id) => !panelSeen.current.has(id));
+      if (ids.length === 0) return;
+      const filesOf = new Map<string, HelperFile[]>();
+      await Promise.all(
+        ids.map((id) =>
+          listHelperFiles(scope, id)
+            .then((r) => filesOf.set(id, r.files ?? []))
+            .catch(() => undefined),
+        ),
+      );
+      const next = autoOpenTarget(ids, panelSeen.current, filesOf);
+      if (gone || !next?.helper) return;
+      panelSeen.current.add(next.helper);
+      setPanel(next);
+    };
+    void look();
+    const timer = setInterval(() => void look(), 4_000);
+    return () => {
+      gone = true;
+      clearInterval(timer);
+    };
+  }, [page, panelOpen, atWorkIds, scope, setPanel]);
+  const closePanel = useCallback(() => {
+    setPanelOf((was) => {
+      if (was?.target.helper) panelSeen.current.add(was.target.helper);
+      return null;
+    });
+  }, []);
   // Work autopilot changed reloads the project's lists, as the user's own
   // approvals do.
   const autoApplied = useRef<number | null>(null);
@@ -613,6 +681,7 @@ export function ChatView({
           action.type === "answer_helper" ||
           action.type === "research" ||
           action.type === "delegate" ||
+          action.type === "revise" ||
           action.type === "update_plan") &&
         appliesItself(action));
   // The helpers Mayka briefed that are still at work, by their task.
@@ -805,7 +874,12 @@ export function ChatView({
           block: (
             <div key={message.id}>
               <QuietText line={eventLine(message.text)} />
-              <OutputChips owner={scope} names={message.outputs} />
+              <OutputChips
+                owner={scope}
+                names={message.outputs}
+                onOpen={page ? (name) => setPanel({ name }) : undefined}
+                onOpenImages={page ? (images) => setPanel({ images }) : undefined}
+              />
             </div>
           ),
         });
@@ -1186,10 +1260,21 @@ export function ChatView({
   return (
     <>
       {page ? (
-        <section className="chat-view" aria-label="Chat">
-          {header}
-          <div className="chat-view__body">{body}</div>
-        </section>
+        <div className={`chat-view-split ${panel ? "chat-view-split--panel" : ""}`}>
+          <section className="chat-view" aria-label="Chat" ref={sectionRef}>
+            {header}
+            <div className="chat-view__body">{body}</div>
+          </section>
+          {panel && (
+            <OutputPanel
+              key={JSON.stringify(panel)}
+              owner={scope}
+              target={panel}
+              atWork={atWork}
+              onClose={closePanel}
+            />
+          )}
+        </div>
       ) : (
         open && (
           <aside
@@ -1358,28 +1443,30 @@ function ActionCard({
                                         ? `Look up: ${action.title}`
                                         : action.type === "delegate"
                                           ? `Have a helper make: ${action.title}`
-                                          : action.type === "build_plan"
-                                            ? "Build it"
-                                            : action.type === "deploy_app"
-                                              ? action.domain
-                                                ? `Deploy at ${deployAddress(action)}`
-                                                : "Deploy the latest version"
-                                              : SERVER_CARDS.has(action.type)
-                                                ? serverCardQuestion(action)[0].replace("?", "")
-                                                : action.type === "set_apps_page"
-                                                  ? appsPageQuestion(
-                                                      action.how,
-                                                      action.domain,
-                                                    ).replace("?", "")
-                                                  : action.type === "list_on_apps_page"
-                                                    ? action.how === "hide"
-                                                      ? "Hide this app on the apps page"
-                                                      : "List this app on the apps page"
-                                                    : action.type === "start_planning"
-                                                      ? "Plan it first"
-                                                      : action.type === "update_plan"
-                                                        ? "Update the plan"
-                                                        : "Switch models";
+                                          : action.type === "revise"
+                                            ? "Change a file a helper made"
+                                            : action.type === "build_plan"
+                                              ? "Build it"
+                                              : action.type === "deploy_app"
+                                                ? action.domain
+                                                  ? `Deploy at ${deployAddress(action)}`
+                                                  : "Deploy the latest version"
+                                                : SERVER_CARDS.has(action.type)
+                                                  ? serverCardQuestion(action)[0].replace("?", "")
+                                                  : action.type === "set_apps_page"
+                                                    ? appsPageQuestion(
+                                                        action.how,
+                                                        action.domain,
+                                                      ).replace("?", "")
+                                                    : action.type === "list_on_apps_page"
+                                                      ? action.how === "hide"
+                                                        ? "Hide this app on the apps page"
+                                                        : "List this app on the apps page"
+                                                      : action.type === "start_planning"
+                                                        ? "Plan it first"
+                                                        : action.type === "update_plan"
+                                                          ? "Update the plan"
+                                                          : "Switch models";
   const models = [
     action.lead_model &&
       `Lead ${action.lead_agent ? agentName(agents, action.lead_agent) + " · " : ""}${modelName(action.lead_model)}`,
@@ -1746,6 +1833,7 @@ const APPLY_LABEL: Record<AssistantAction["type"], string> = {
   apply_stack: "Apply",
   research: "Look it up",
   delegate: "Start",
+  revise: "Send change",
   update_plan: "Update",
   build_plan: "Build it",
   deploy_app: "Deploy",
