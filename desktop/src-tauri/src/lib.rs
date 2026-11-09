@@ -93,6 +93,7 @@ pub fn run() {
             apps::open_real_app_in_browser,
             outputs::print_output,
             outputs::save_output,
+            outputs::open_output,
             snapshot::webview_snapshot,
             snapshot::webview_snapshot_supported,
             cli_updates::agent_cli_status,

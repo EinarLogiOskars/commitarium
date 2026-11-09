@@ -4760,7 +4760,8 @@ button.danger:not(.ghost) {
   opacity: 0.7;
 }
 /* A live line: a soft highlight sweeps through the text at a slight angle. */
-.assistant__activity .live-text {
+.assistant__activity .live-text,
+.quiet .live-text {
   background: linear-gradient(
     100deg,
     var(--muted) 0%,
@@ -4784,7 +4785,8 @@ button.danger:not(.ghost) {
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .assistant__activity .live-text {
+  .assistant__activity .live-text,
+  .quiet .live-text {
     animation: none;
     color: var(--muted);
     background: none;
@@ -7719,4 +7721,53 @@ button.shell-agent:hover {
   padding: 4px 8px;
   text-align: left;
   vertical-align: top;
+}
+
+/* A helper's PDF, page by page (PdfView.tsx), and presented full screen. */
+.pdf-pages {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+.pdf-pages__page {
+  max-width: 100%;
+  border: 1px solid var(--border);
+  background: #fff;
+}
+.pdf-present {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #000;
+  cursor: pointer;
+}
+.pdf-present__count {
+  position: absolute;
+  right: 16px;
+  bottom: 12px;
+  color: rgba(255, 255, 255, 0.5);
+  font-size: var(--text-sm);
+}
+/* A file the app cannot show: its details, to open or save. */
+.output-viewer__details-name {
+  font-weight: 600;
+  margin: 0 0 8px;
+  word-break: break-all;
+}
+.output-viewer__details dl {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 16px;
+  margin: 0 0 12px;
+  font-size: var(--text-sm);
+}
+.output-viewer__details dt {
+  color: var(--muted);
+}
+.output-viewer__details dd {
+  margin: 0;
 }

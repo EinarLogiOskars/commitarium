@@ -56,6 +56,10 @@ func TestAGeneralHelperHandsItsFilesBack(t *testing.T) {
 	if stored, _ := service.read(TopLevel); len(stored.PendingEvents) != 0 {
 		t.Fatalf("a working helper woke the assistant: %v", stored.PendingEvents)
 	}
+	// While it works, the chat names it, so its line shows it working.
+	if conversation, err := service.Get(t.Context(), TopLevel); err != nil || strings.Join(conversation.Helping, ",") != "Pitch deck" {
+		t.Fatalf("helping = %v, %v", conversation.Helping, err)
+	}
 
 	directory := filepath.Join(service.config.WorkspaceRoot, helper.ID)
 	for name, contents := range map[string]string{"outputs/deck.html": "<h1>Bakery</h1>",
@@ -78,6 +82,9 @@ func TestAGeneralHelperHandsItsFilesBack(t *testing.T) {
 		!strings.Contains(stored.PendingEvents[0], "deck.html is the deck") || !stored.Helpers[0].Done ||
 		last.Text != "The helper on “Pitch deck” is done." || strings.Join(last.Outputs, ",") != "deck.html,notes-market.md" {
 		t.Fatalf("pending = %v helpers = %+v last = %+v", stored.PendingEvents, stored.Helpers, last)
+	}
+	if conversation, _ := service.Get(t.Context(), TopLevel); len(conversation.Helping) != 0 {
+		t.Fatalf("a finished helper is still working: %v", conversation.Helping)
 	}
 	files, err := store.List(t.Context(), outputs.TopLevel)
 	if err != nil || len(files) != 2 || files[0].Helper != helper.ID || files[0].Title != "Pitch deck" {
@@ -112,5 +119,17 @@ func TestAGeneralHelperThatFailsKeepsWhatItMade(t *testing.T) {
 	if len(stored.PendingEvents) != 1 || !strings.Contains(stored.PendingEvents[0], "The helper on “Report” stopped") ||
 		!strings.Contains(stored.PendingEvents[0], "draft.md") {
 		t.Fatalf("pending = %v", stored.PendingEvents)
+	}
+}
+
+// The helper is told the defaults only for when the brief names no format,
+// and how to make the rest.
+func TestHelperInstructionsLetTheBriefsFormatWin(t *testing.T) {
+	instructions := taskInstructions("A pitch deck as a .pptx.", nil)
+	for _, want := range []string{"when the brief names a format", "Only when it names none", "16:9",
+		"PLAYWRIGHT_BROWSERS_PATH=/opt/commitarium-browser", "python-pptx", "nearest one"} {
+		if !strings.Contains(instructions, want) {
+			t.Errorf("instructions lack %q", want)
+		}
 	}
 }
