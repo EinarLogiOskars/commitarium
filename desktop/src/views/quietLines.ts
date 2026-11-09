@@ -160,6 +160,14 @@ export function appliedLine(
         "research",
         `${done ? "Looked up" : "Looking up"}: ${action.title}`,
       );
+    case "delegate":
+      // The helper works in the background; its own line says when it is
+      // done and carries its files.
+      return line(
+        done ? "done" : "busy",
+        "research",
+        `${done ? "A helper is on it" : "Briefing a helper"}: ${action.title}`,
+      );
     case "design_stack":
       return line(
         done ? "done" : "busy",
