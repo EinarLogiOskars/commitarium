@@ -612,6 +612,7 @@ export function ChatView({
       : (builds ||
           action.type === "answer_helper" ||
           action.type === "research" ||
+          action.type === "delegate" ||
           action.type === "update_plan") &&
         appliesItself(action));
   // A turn's work actions fold into one summary line, and the autopilot
@@ -1315,28 +1316,30 @@ function ActionCard({
                                       ? "Suggested stack"
                                       : action.type === "research"
                                         ? `Look up: ${action.title}`
-                                        : action.type === "build_plan"
-                                          ? "Build it"
-                                          : action.type === "deploy_app"
-                                            ? action.domain
-                                              ? `Deploy at ${deployAddress(action)}`
-                                              : "Deploy the latest version"
-                                            : SERVER_CARDS.has(action.type)
-                                              ? serverCardQuestion(action)[0].replace("?", "")
-                                              : action.type === "set_apps_page"
-                                                ? appsPageQuestion(
-                                                    action.how,
-                                                    action.domain,
-                                                  ).replace("?", "")
-                                                : action.type === "list_on_apps_page"
-                                                  ? action.how === "hide"
-                                                    ? "Hide this app on the apps page"
-                                                    : "List this app on the apps page"
-                                                  : action.type === "start_planning"
-                                                    ? "Plan it first"
-                                                    : action.type === "update_plan"
-                                                      ? "Update the plan"
-                                                      : "Switch models";
+                                        : action.type === "delegate"
+                                          ? `Have a helper make: ${action.title}`
+                                          : action.type === "build_plan"
+                                            ? "Build it"
+                                            : action.type === "deploy_app"
+                                              ? action.domain
+                                                ? `Deploy at ${deployAddress(action)}`
+                                                : "Deploy the latest version"
+                                              : SERVER_CARDS.has(action.type)
+                                                ? serverCardQuestion(action)[0].replace("?", "")
+                                                : action.type === "set_apps_page"
+                                                  ? appsPageQuestion(
+                                                      action.how,
+                                                      action.domain,
+                                                    ).replace("?", "")
+                                                  : action.type === "list_on_apps_page"
+                                                    ? action.how === "hide"
+                                                      ? "Hide this app on the apps page"
+                                                      : "List this app on the apps page"
+                                                    : action.type === "start_planning"
+                                                      ? "Plan it first"
+                                                      : action.type === "update_plan"
+                                                        ? "Update the plan"
+                                                        : "Switch models";
   const models = [
     action.lead_model &&
       `Lead ${action.lead_agent ? agentName(agents, action.lead_agent) + " · " : ""}${modelName(action.lead_model)}`,
@@ -1702,6 +1705,7 @@ const APPLY_LABEL: Record<AssistantAction["type"], string> = {
   design_stack: "Design stack",
   apply_stack: "Apply",
   research: "Look it up",
+  delegate: "Start",
   update_plan: "Update",
   build_plan: "Build it",
   deploy_app: "Deploy",
