@@ -32,20 +32,27 @@ PDF export.
   scope's output store, then deletes the directory. Its summary and the file
   names go to Mayka as an event, and the event line in the chat shows the
   files as chips you can open.
-- **Formats.** Markdown for documents and reports, one self-contained HTML
-  file for decks and anything visual (slides as sections, print styles for
-  one slide per page), and images, CSV or PDF when that is the natural form.
-  The helper is told this; Commitarium does not convert.
+- **Formats.** The format the user asked for wins (docx, pptx, xlsx, PDF,
+  JPEG, …): Mayka puts it in the brief, and the helper installs a library
+  into its own directory when it needs one. Without one, the defaults: a deck
+  is a 16:9 PDF, one slide per page, rendered with the worker's headless
+  Chromium from an HTML source it keeps too; a report or document is
+  Markdown; data is CSV; an image is PNG; a logo is an SVG plus PNGs at 512,
+  1024 and favicon sizes. What it truly cannot make, it makes the nearest of
+  and says so. Commitarium does not convert.
 - **Outputs card.** A rail card, shown only when the scope has output files,
   newest first, each with who made it and when. It also shows in loose chats
   (no project yet). Opening a file shows the viewer.
 - **Viewer and PDF export.** Markdown renders as a page; HTML renders in a
-  sandboxed frame (no scripts reaching the app); images, text and CSV show
-  as they are; PDF opens in the frame. **Export PDF** renders the page in a
-  print window of its own (a custom scheme, scripts off, no commands
-  granted) and opens the system print dialog there, where macOS and Windows
-  both offer Save as PDF. **Save** writes the file as it is; **Delete**
-  removes it, after a native confirm.
+  sandboxed frame (no scripts reaching the app); images (SVG only as an
+  image), text and CSV show as they are; a PDF shows its pages and can be
+  presented full screen, a slide at a time. Files it cannot show (docx,
+  pptx, xlsx, zip, …) show their details with **Open** in the user's default
+  app. **Export PDF** (Markdown and HTML) renders the page in a print window
+  of its own (a custom scheme, scripts off, no commands granted) and opens
+  the system print dialog there, where macOS and Windows both offer Save as
+  PDF. **Save** writes the file as it is; **Delete** removes it, after a
+  native confirm.
 - **Helpers show in the Agents card.** A delegated helper appears there while
   it works, like the brief writer does. Loose chats get the Agents card while
   a helper works there.

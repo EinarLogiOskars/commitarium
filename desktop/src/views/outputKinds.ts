@@ -16,8 +16,96 @@ export function outputKind(name: string): OutputKind {
   return KINDS.find(([pattern]) => pattern.test(name))?.[1] ?? "other";
 }
 
-/** Whether Export PDF applies: anything the app renders, except a PDF. */
-export const printable = (kind: OutputKind) => kind !== "pdf" && kind !== "other";
+/** Whether Export PDF applies: a page the app renders, Markdown or HTML. A
+ * PDF is saved as it is. */
+export const printable = (kind: OutputKind) => kind === "markdown" || kind === "html";
+
+const IMAGE_TYPES: Record<string, string> = {
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  gif: "image/gif",
+  webp: "image/webp",
+  svg: "image/svg+xml",
+};
+
+/** An image's type by its name, so it shows as an image whatever the server
+ * said; an SVG only ever loads as an <img>, where its scripts never run. */
+export const imageType = (name: string): string =>
+  IMAGE_TYPES[name.split(".").pop()?.toLowerCase() ?? ""] ?? "application/octet-stream";
+
+/** Kinds Open hands to the user's own app (outputs.rs keeps the same list):
+ * documents, sheets, slides, archives and media, never what runs. */
+const OPENABLE = new Set([
+  "docx",
+  "doc",
+  "pptx",
+  "ppt",
+  "xlsx",
+  "xls",
+  "odt",
+  "odp",
+  "ods",
+  "rtf",
+  "pages",
+  "numbers",
+  "key",
+  "epub",
+  "pdf",
+  "csv",
+  "tsv",
+  "txt",
+  "md",
+  "png",
+  "jpg",
+  "jpeg",
+  "gif",
+  "webp",
+  "svg",
+  "ico",
+  "zip",
+  "mp3",
+  "wav",
+  "mp4",
+  "mov",
+]);
+
+export const openable = (name: string): boolean =>
+  name.includes(".") && OPENABLE.has(name.split(".").pop()!.toLowerCase());
+
+/** A file's size in plain units: "12 KB", "3.4 MB". */
+export function sizeLabel(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes < 0) return "";
+  if (bytes < 1024) return `${bytes} bytes`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/** The page a presentation moves to on a key, or null when the key leaves
+ * it (Esc) or does nothing. Pages count from 1. */
+export function presentKey(key: string, page: number, pages: number): number | "leave" | null {
+  switch (key) {
+    case "Escape":
+      return "leave";
+    case "ArrowRight":
+    case "ArrowDown":
+    case "PageDown":
+    case " ":
+    case "Enter":
+      return Math.min(page + 1, pages);
+    case "ArrowLeft":
+    case "ArrowUp":
+    case "PageUp":
+    case "Backspace":
+      return Math.max(page - 1, 1);
+    case "Home":
+      return 1;
+    case "End":
+      return pages;
+    default:
+      return null;
+  }
+}
 
 /** The rows of a CSV file, quoted fields and all. */
 export function parseCsv(text: string): string[][] {

@@ -207,6 +207,9 @@ type Conversation struct {
 	// Researching names the research still being looked up, so the user sees
 	// it running while they carry on; only Get fills it in.
 	Researching []string `json:"researching,omitempty"`
+	// Helping names the general helpers this chat briefed that are still
+	// at work (task.go), so its lines show them working; only Get fills it in.
+	Helping []string `json:"helping,omitempty"`
 	// TurnStartedAt is when the assistant's current or last turn started,
 	// its automatic retries included.
 	TurnStartedAt *time.Time `json:"turn_started_at,omitempty"`
@@ -656,6 +659,9 @@ func (service *Service) Get(ctx context.Context, scope string) (Conversation, er
 	for _, helper := range stored.Helpers {
 		if helper.Kind == HelperResearch && !helper.Done {
 			conversation.Researching = append(conversation.Researching, helper.Title)
+		}
+		if helper.Kind == HelperTask && !helper.Done && (helper.Chat == "" || helper.Chat == stored.Chat) {
+			conversation.Helping = append(conversation.Helping, helper.Title)
 		}
 	}
 	return conversation, nil

@@ -94,6 +94,19 @@ describe("applied lines", () => {
     });
   });
 
+  it("pulse a helper's line while it works, and settle once it is done", () => {
+    const deck = action({ type: "delegate", title: "Pitch deck" });
+    expect(appliedLine(deck, undefined, true)).toMatchObject({
+      tone: "busy",
+      kind: "helper",
+      text: "A helper is working on: Pitch deck",
+      live: true,
+    });
+    const done = appliedLine(deck);
+    expect(done).toMatchObject({ tone: "done", text: "Briefed a helper: Pitch deck" });
+    expect(done.live).toBeUndefined();
+  });
+
   it("link a drafted plan", () => {
     const change = {
       decided: [],

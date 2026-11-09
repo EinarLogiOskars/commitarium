@@ -1,5 +1,6 @@
 //! What Mayka's helpers make (HELPERS_PLAN.md): saving a file where the user
-//! chooses, and exporting it as a PDF through the system's print dialog.
+//! chooses, opening one the app cannot show in the user's own app for it,
+//! and exporting it as a PDF through the system's print dialog.
 //!
 //! A helper's HTML is not Commitarium's: it never loads in the main window.
 //! Export renders the page in a window of its own, served from a custom
@@ -14,6 +15,7 @@ use tauri::http::{header, Response, StatusCode};
 use tauri::webview::PageLoadEvent;
 use tauri::{AppHandle, Manager, Url, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_dialog::DialogExt;
+use tauri_plugin_opener::OpenerExt;
 
 /// The scheme print windows load their page from.
 pub(crate) const PRINT_SCHEME: &str = "commitarium-print";
@@ -100,8 +102,9 @@ pub async fn print_output(app: AppHandle, title: String, html: String) -> Result
     .inner_size(860.0, 1000.0)
     .on_page_load(|window, payload| {
         if payload.event() == PageLoadEvent::Finished {
-            if let Err(error) = window.print() {
-                eprintln!("[outputs] could not open the print dialog: {error}");
+            match window.print() {
+                Ok(()) => close_after_printing(window),
+                Err(error) => eprintln!("[outputs] could not open the print dialog: {error}"),
             }
         }
     })
@@ -112,6 +115,128 @@ pub async fn print_output(app: AppHandle, title: String, html: String) -> Result
     .build()
     .map(|_| ())
     .map_err(|e| e.to_string())
+}
+
+/// How often a print window looks whether its dialog is still open.
+#[cfg(target_os = "macos")]
+const PRINT_POLL: std::time::Duration = std::time::Duration::from_millis(400);
+
+/// Closes a print window once its print dialog is gone. On macOS the dialog
+/// is a sheet that `print()` starts and returns from at once, with no word
+/// of when it ends (wry passes no delegate), so the window looks for the
+/// sheet: once it was there and has been gone a moment (Save as PDF swaps
+/// one sheet for another), printing is done or cancelled and the window
+/// closes. A dialog that never shows leaves the window to the user, who
+/// closes it as any other (⌘W). Elsewhere the window stays for the user to
+/// close: WebView2's print dialog says nothing either.
+#[cfg(target_os = "macos")]
+fn close_after_printing(window: tauri::WebviewWindow) {
+    use objc2_app_kit::NSWindow;
+    /// Polls without a sheet before closing, after one was seen.
+    const GONE_POLLS: u32 = 4;
+    /// Polls to wait for the sheet to show at all.
+    const SHOW_POLLS: u32 = 50;
+    std::thread::spawn(move || {
+        let mut seen = false;
+        let mut quiet = 0;
+        loop {
+            std::thread::sleep(PRINT_POLL);
+            let (sender, receiver) = std::sync::mpsc::channel();
+            let asked = window.with_webview(move |platform| {
+                // SAFETY: wry hands its NSWindow on the main thread, where
+                // this closure runs.
+                let ns_window = unsafe { &*(platform.ns_window() as *const NSWindow) };
+                let _ = sender.send(ns_window.attachedSheet().is_some());
+            });
+            // The user closed the window, or the app is quitting.
+            let Ok(sheet) = asked.map_err(|_| ()).and_then(|()| {
+                receiver
+                    .recv_timeout(std::time::Duration::from_secs(5))
+                    .map_err(|_| ())
+            }) else {
+                return;
+            };
+            if sheet {
+                seen = true;
+                quiet = 0;
+                continue;
+            }
+            quiet += 1;
+            if (seen && quiet >= GONE_POLLS) || (!seen && quiet >= SHOW_POLLS) {
+                break;
+            }
+        }
+        if seen {
+            let _ = window.close();
+        }
+    });
+}
+
+#[cfg(not(target_os = "macos"))]
+fn close_after_printing(_window: tauri::WebviewWindow) {}
+
+/// Kinds a helper's file may be opened as in the user's own app: documents,
+/// sheets, slides, archives and media, never anything that runs (a script,
+/// an app, an installer, or an Office file with macros).
+const OPENABLE: &[&str] = &[
+    "docx", "doc", "pptx", "ppt", "xlsx", "xls", "odt", "odp", "ods", "rtf", "pages", "numbers",
+    "key", "epub", "pdf", "csv", "tsv", "txt", "md", "png", "jpg", "jpeg", "gif", "webp", "svg",
+    "ico", "zip", "mp3", "wav", "mp4", "mov",
+];
+
+/// A file's name as written to the cache: its last part, without
+/// separators, control characters or a leading dot.
+fn cache_name(name: &str) -> String {
+    let base = name.rsplit(['/', '\\']).next().unwrap_or_default();
+    let cleaned: String = base
+        .chars()
+        .map(|c| if c.is_control() || c == ':' { '-' } else { c })
+        .collect();
+    let cleaned = cleaned.trim().trim_start_matches('.').trim();
+    if cleaned.is_empty() {
+        "output".into()
+    } else {
+        cleaned.chars().take(120).collect()
+    }
+}
+
+fn openable(name: &str) -> bool {
+    name.rsplit_once('.')
+        .map(|(_, extension)| OPENABLE.contains(&extension.to_ascii_lowercase().as_str()))
+        .unwrap_or(false)
+}
+
+/// Opens a file the app cannot show in the user's default app for it: the
+/// contents come as the raw body and the name in `x-name`, as for Save, and
+/// are written to the app's cache under the file's name first.
+#[tauri::command]
+pub async fn open_output(app: AppHandle, request: tauri::ipc::Request<'_>) -> Result<(), String> {
+    let tauri::ipc::InvokeBody::Raw(contents) = request.body() else {
+        return Err("the file's contents are missing".into());
+    };
+    let name = cache_name(
+        request
+            .headers()
+            .get("x-name")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default(),
+    );
+    if !openable(&name) {
+        return Err(format!(
+            "Commitarium does not open {name} itself. Save it instead."
+        ));
+    }
+    let directory = app
+        .path()
+        .app_cache_dir()
+        .map_err(|e| e.to_string())?
+        .join("outputs");
+    std::fs::create_dir_all(&directory).map_err(|e| format!("could not open {name}: {e}"))?;
+    let path = directory.join(&name);
+    std::fs::write(&path, contents).map_err(|e| format!("could not open {name}: {e}"))?;
+    app.opener()
+        .open_path(path.to_string_lossy(), None::<&str>)
+        .map_err(|e| format!("could not open {name}: {e}"))
 }
 
 /// Saves a file where the user chooses, under its name. The contents come as
@@ -145,7 +270,17 @@ pub async fn save_output(app: AppHandle, request: tauri::ipc::Request<'_>) -> Re
 
 #[cfg(test)]
 mod tests {
-    use super::PrintPages;
+    use super::{cache_name, openable, PrintPages};
+
+    #[test]
+    fn opened_files_keep_a_plain_name_and_only_document_kinds() {
+        assert_eq!(cache_name("../../etc/plan.docx"), "plan.docx");
+        assert_eq!(cache_name("a\\b\\.hidden.xlsx"), "hidden.xlsx");
+        assert_eq!(cache_name("deck:\u{7}.pptx"), "deck--.pptx");
+        assert_eq!(cache_name(".."), "output");
+        assert!(openable("Plan.DOCX") && openable("data.zip"));
+        assert!(!openable("run.command") && !openable("book.xlsm") && !openable("noext"));
+    }
 
     #[test]
     fn print_pages_keep_only_the_latest() {

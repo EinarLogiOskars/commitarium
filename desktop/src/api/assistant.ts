@@ -205,6 +205,8 @@ export interface Conversation {
   launch?: { stage: LaunchStage; started_at: string };
   /** Research still being looked up; the user can carry on meanwhile. */
   researching?: string[];
+  /** The general helpers this chat briefed that are still at work, by task. */
+  helping?: string[];
   updated_at: string;
   /** Set while the last turn waits for its agent's login: the message is
    * kept and sent once the agent works (needs_user: the user signs in). */
