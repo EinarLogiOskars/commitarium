@@ -83,6 +83,14 @@ identity and the audit trail shows which account wrote and which approved.
 Lead and reviewer of one agent share the account's provider state but run as
 separate sessions.
 
+On this computer an app's real app (HELPERS_PLAN.md, H7) runs as the
+project's deployment: the same validated Compose rewrite as a preview, in a
+Compose project of its own (`<project>-live`) with its own volumes, and never
+given the test accounts file. The preview, which gets that file, is a separate
+stack, so the test logins and the preview's Reset data never reach the data
+the user keeps. App windows can start the real app only on this computer, and
+only at the default branch's head the coordinator reports.
+
 A helper that tests the app (HELPERS_PLAN.md, H6) is the one time a worker
 joins another network: for the length of that helper, the host connects the
 agent's worker to the network of a throwaway preview of the project's default
@@ -133,8 +141,8 @@ no proxy.
 
 The host process now holds this work alone, with the app's environment, and it
 reaches the npm registry itself over TLS. It runs as the same user, so this
-adds no privilege. If the app crashes, the host stops previews and logins and
-exits, and it never outlives the pipe. Host and app are both trusted; the
+adds no privilege. If the app crashes, the host stops previews, the local
+real apps and logins and exits, and it never outlives the pipe. Host and app are both trusted; the
 boundary around workers has not moved.
 
 Import, local synchronization, and upstream publication cross the boundary

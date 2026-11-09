@@ -4,7 +4,8 @@
 2026-11-08; H1 and H2 built. On 2026-11-09 the user brought test accounts,
 the preview bar and testing helpers back into 0.14.0 (H3, H5, H6), built
 overnight and tested live together before the release; H6 built in full,
-not yet tested live. Builds on ADR-035
+not yet tested live. H7, a separate local install of the real app, added
+and built the same day, not yet tested live. Builds on ADR-035
 (the assistant starts helpers) and the research helper.
 
 Mayka can brief a helper for any task, not just the four fixed ones (vision,
@@ -129,7 +130,8 @@ are test logins for the user's own app, never real ones.
 - Every preview window shows a bar Commitarium draws (the app cannot hide
   it): "Preview: a test copy with test data", with **Open in Commitarium**
   (the real app's window) and **Open in browser** (its local address, or its
-  domain or Tailscale address on a server). The button the user used last
+  domain or Tailscale address on a server). On this computer the real app is
+  a stack of its own (H7). The button the user used last
   for that app comes first. The buttons show only once the app is installed
   or deployed; before that the bar says so.
 - The Apps page cards get the same two buttons, remembered the same way.
@@ -244,6 +246,59 @@ checkout is a session preview; the helper would get that instead), showing
 the test preview's progress or logs in the UI, and a narrower reach (a
 proxy that forwards only the open port) if the shared worker's reach ever
 matters more.
+
+### H7: a separate local install of the real app
+
+Agreed 2026-11-09, after review found that on this computer the preview and
+the real app were one stack: the Apps page window and the preview window
+framed the same containers and data volume, and the test accounts reached
+the user's real data. The user chose a separate local install.
+
+- **The real app is the project's deployment, here too.** The host already
+  runs a server's deployment as its own stack (`<project>@live`, Compose
+  project `<project>-live`, data kept from one deploy to the next, no test
+  accounts). On this computer the real app is the same: its own containers
+  and volumes, never given the test accounts file. The default branch's
+  preview stays the test copy, with test accounts.
+- **Version: it follows the main branch.** Before this the app on this
+  computer followed main by itself, and that stays: opening the real app's
+  window, or Open in browser, brings it to the default branch's head
+  (`/v1/deployments/follow`: left as it is when already up at the head,
+  otherwise deployed at the head, keeping its data), and the window moves
+  it again when work merges. A server keeps pinned versions and explicit
+  deploys: there other people use the app, and the user decides when they
+  get a change. On one's own computer that ceremony adds nothing.
+- **Installed** means on this computer what it meant in H5: the project is
+  on the Apps page. Its real app starts the first time it is opened, so the
+  bar's buttons show for every app; a project that is not an app has none.
+- **Start and stop.** The real app runs when its window opens or Open in
+  browser starts it, and the preview when it is previewed; neither starts
+  the other. Closing the window leaves it running, as before; quitting
+  Commitarium stops both (the host stops deployments with previews), and
+  nothing starts the real app again until it is opened.
+- **Data.** Reset data on the Preview removes the preview's Compose project
+  only. Deleting a project stops its deployment, forgets its record and
+  removes both stacks' data.
+- **Where it is used.** The Apps page window and its tiles' buttons, the
+  Marketplace's installs and Mayka's new-app card open the real app's
+  window; the bar's Open in Commitarium opens it, and Open in browser its
+  127.0.0.1 address. On a server nothing changes.
+- **Built as:** the host's `Deployments::follow_head` and `forget`, the
+  routes `/v1/deployments/follow` and the deletion through
+  `/v1/previews/delete-project`; Tauri commands `start_real_app` (refused on
+  a server) and `real_app_status`, granted to the main window and app
+  pages; `real_app` reads the deployment's address. Mayka's prompt and the
+  preview rules say the real app is a separate install.
+- **Existing installs:** an app used before this keeps its data in the old
+  preview's volume, which is now the test copy's; the real app starts empty.
+  There are no users yet, so there is no migration; noted in the PR.
+
+**Live testing owed:** open an app from the Apps page (a `-live` Compose
+project starts, with no test accounts mounted), merge a work order and see
+it move to the new head with its data, open the preview alongside and check
+the two have different data, Reset data on the preview and see the real app
+keep its own, Open in browser on a stopped app, quit Commitarium and see
+both stop, and delete the project and see both stacks' volumes go.
 
 ### H4: release 0.14.0
 
