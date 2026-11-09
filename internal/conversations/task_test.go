@@ -12,9 +12,9 @@ import (
 	"github.com/EinarLogiOskars/commitarium/internal/workerhttp"
 )
 
-// A general helper runs one writable attempt with the web in a directory of
+// A general helper runs a writable attempt with the web in a directory of
 // its own; the files it leaves in outputs/ are kept, named on its event line
-// and to the assistant, and its directory goes.
+// and to the assistant, and its directory stays with it.
 func TestAGeneralHelperHandsItsFilesBack(t *testing.T) {
 	service, worker := newTestService(t)
 	store, err := outputs.NewStore(t.TempDir())
@@ -90,8 +90,9 @@ func TestAGeneralHelperHandsItsFilesBack(t *testing.T) {
 	if err != nil || len(files) != 2 || files[0].Helper != helper.ID || files[0].Title != "Pitch deck" {
 		t.Fatalf("outputs = %+v, %v", files, err)
 	}
-	if _, err := os.Stat(directory); !os.IsNotExist(err) {
-		t.Fatalf("the helper's directory is still there: %v", err)
+	// It stays with its files, to revise them (together.go).
+	if _, err := os.Stat(directory); err != nil || !stored.Helpers[0].Kept || stored.Helpers[0].Session != "thread" {
+		t.Fatalf("the helper did not stay with its files: %v %+v", err, stored.Helpers[0])
 	}
 }
 

@@ -64,6 +64,7 @@ export type AssistantActionType =
   | "apply_stack"
   | "research"
   | "delegate"
+  | "revise"
   | "update_plan"
   | "build_plan"
   | "deploy_app"
@@ -207,6 +208,9 @@ export interface Conversation {
   researching?: string[];
   /** The general helpers this chat briefed that are still at work, by task. */
   helping?: string[];
+  /** Those helpers by ID, whose files show beside the chat as they are
+   * built (H8); helpers that test the app are not among them. */
+  helpers_at_work?: { id: string; title: string }[];
   updated_at: string;
   /** Set while the last turn waits for its agent's login: the message is
    * kept and sent once the agent works (needs_user: the user signs in). */
