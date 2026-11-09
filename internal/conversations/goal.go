@@ -439,7 +439,7 @@ func (service *Service) autopilotChat(ctx context.Context, scope, chat string, l
 		case featureartifact.AssistantWriteBrief, featureartifact.AssistantAcceptBrief:
 			inGoal, target = builds, action.WorkOrderID
 		case featureartifact.AssistantAnswerHelper, featureartifact.AssistantResearch, featureartifact.AssistantDelegate,
-			featureartifact.AssistantUpdatePlan:
+			featureartifact.AssistantRevise, featureartifact.AssistantUpdatePlan:
 			// Answering a helper the assistant started, or researching a
 			// question, changes nothing in the project, and updating the plan
 			// only fills in what the user watches being planned: each is sent
@@ -990,13 +990,16 @@ func (stored *record) addEvent(text string, at time.Time) {
 // talks to a helper, or updates the plan being written.
 func sentAtOnce(kind featureartifact.AssistantActionType) bool {
 	return kind == featureartifact.AssistantAnswerHelper || kind == featureartifact.AssistantResearch ||
-		kind == featureartifact.AssistantDelegate ||
+		kind == featureartifact.AssistantDelegate || kind == featureartifact.AssistantRevise ||
 		kind == featureartifact.AssistantUpdatePlan
 }
 
 func actionName(action featureartifact.AssistantAction) string {
 	if action.Type == featureartifact.AssistantAnswerHelper {
 		return "your answer to a helper's question"
+	}
+	if action.Type == featureartifact.AssistantRevise {
+		return "your change for helper " + action.Helper
 	}
 	if action.Title != "" {
 		return fmt.Sprintf("%q", action.Title)

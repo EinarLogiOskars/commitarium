@@ -53,9 +53,32 @@ type Helper struct {
 	Chat string `json:"chat,omitempty"`
 	// TestApp marks a general helper that tests the app: it starts, on
 	// Model with Brief, once its test preview runs (testapp.go).
+	// A general helper keeps Model and Brief too, to continue from them
+	// (together.go).
 	TestApp bool   `json:"test_app,omitempty"`
 	Model   string `json:"model,omitempty"`
 	Brief   string `json:"brief,omitempty"`
+	// A general helper stays with its files after it finishes (H8,
+	// together.go). Turn is its latest turn, from 1, across Generation, the
+	// fresh helpers it continued in once its session was gone; Session is
+	// its provider session, and Kept says its directory and session are
+	// still there to resume. Made names the outputs it made, RevisedAt is
+	// when its last turn ended, and Changes are the changes asked of it,
+	// oldest first: Change is the one its current turn makes, Waiting those
+	// asked while it worked, which its next turn makes. Restarted marks a
+	// turn that already continued in a fresh helper, and Closing a helper to
+	// end once its turn ends.
+	Turn       int        `json:"turn,omitempty"`
+	Generation int        `json:"generation,omitempty"`
+	Session    string     `json:"provider_session,omitempty"`
+	Kept       bool       `json:"kept,omitempty"`
+	Made       []string   `json:"made,omitempty"`
+	RevisedAt  *time.Time `json:"revised_at,omitempty"`
+	Changes    []string   `json:"changes,omitempty"`
+	Change     string     `json:"change,omitempty"`
+	Waiting    []string   `json:"waiting,omitempty"`
+	Restarted  bool       `json:"restarted,omitempty"`
+	Closing    bool       `json:"closing,omitempty"`
 }
 
 type HelperStatus string
@@ -77,8 +100,10 @@ type HelperState struct {
 	Turn   int
 	Text   string
 	Agent  string
-	// Outputs name the files a general helper made (task.go).
+	// Outputs name the files a general helper made or changed (task.go),
+	// and Session is its provider session.
 	Outputs []string
+	Session string
 }
 
 // HelperReader reads a helper's state through its service.
@@ -167,6 +192,9 @@ func (watcher Watcher) followHelpers(ctx context.Context, scope string) {
 		var state HelperState
 		switch {
 		case helper.Done:
+			if expired(helper, watcher.Service.now()) {
+				watcher.Service.endTaskLater(ctx, scope, helper.ID)
+			}
 			continue
 		case helper.Kind == HelperResearch:
 			state, err = watcher.Service.readResearch(ctx, helper)
@@ -258,7 +286,7 @@ func (service *Service) helpersChangedIn(ctx context.Context, scope, chat string
 				capitalized(name), helper.ID, state.Text, helper.ID))
 		case HelperProposes:
 			if helper.Kind == HelperTask {
-				stored.delivered(helper, state.Text, state.Outputs, now)
+				service.taskTurnEnded(ctx, &stored, helper, state, now)
 				continue
 			}
 			if helper.Kind == HelperResearch {
@@ -270,7 +298,13 @@ func (service *Service) helpersChangedIn(ctx context.Context, scope, chat string
 		case HelperFinished:
 			helper.Done = true
 		case HelperFailed:
+			if helper.Kind == HelperTask && service.continueFailedTurn(ctx, &stored, helper, state, now) {
+				continue
+			}
 			helper.Done = true
+			if helper.Kind == HelperTask {
+				service.taskFailed(ctx, helper, state, now)
+			}
 			if service.waitsForSignIn(ctx, &stored, helper, state, now) {
 				continue
 			}

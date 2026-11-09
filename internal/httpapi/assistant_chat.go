@@ -415,6 +415,7 @@ func (api *API) approveConversationActionHandler(w http.ResponseWriter, r *http.
 	// and the server's cards, which act on the server.
 	topLevel := action.Type == featureartifact.AssistantCreateApp || action.Type == featureartifact.AssistantPlanProject
 	if action.Type != featureartifact.AssistantResearch && action.Type != featureartifact.AssistantDelegate &&
+		action.Type != featureartifact.AssistantRevise &&
 		!featureartifact.AnyChat(action.Type) &&
 		(scope == conversations.TopLevel) != topLevel {
 		writeError(w, http.StatusConflict, "action_needs_project", "this action runs in a project's conversation, and a new app at the top level")
@@ -557,6 +558,8 @@ func (api *API) approveConversationActionHandler(w http.ResponseWriter, r *http.
 		result, helper, ok = api.applyResearch(w, r, scope, action)
 	case featureartifact.AssistantDelegate:
 		result, helper, ok = api.applyDelegate(w, r, scope, action)
+	case featureartifact.AssistantRevise:
+		result, ok = api.applyRevise(w, r, scope, action)
 	case featureartifact.AssistantUpdatePlan:
 		result, ok = api.applyUpdatePlan(w, r, scope, action)
 	case featureartifact.AssistantBuildPlan:

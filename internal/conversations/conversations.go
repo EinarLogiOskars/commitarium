@@ -210,6 +210,9 @@ type Conversation struct {
 	// Helping names the general helpers this chat briefed that are still
 	// at work (task.go), so its lines show them working; only Get fills it in.
 	Helping []string `json:"helping,omitempty"`
+	// HelpersAtWork are those helpers by ID too, so the app shows their files
+	// as they are built (together.go); only Get fills it in.
+	HelpersAtWork []HelperAtWork `json:"helpers_at_work,omitempty"`
 	// TurnStartedAt is when the assistant's current or last turn started,
 	// its automatic retries included.
 	TurnStartedAt *time.Time `json:"turn_started_at,omitempty"`
@@ -662,6 +665,7 @@ func (service *Service) Get(ctx context.Context, scope string) (Conversation, er
 		}
 		if helper.Kind == HelperTask && !helper.Done && (helper.Chat == "" || helper.Chat == stored.Chat) {
 			conversation.Helping = append(conversation.Helping, helper.Title)
+			conversation.HelpersAtWork = append(conversation.HelpersAtWork, HelperAtWork{ID: helper.ID, Title: helper.Title})
 		}
 	}
 	return conversation, nil
@@ -913,6 +917,14 @@ func (service *Service) DeleteProject(_ context.Context, projectID string) error
 	}
 	service.mu.Lock()
 	defer service.mu.Unlock()
+	if shared, _, err := service.readShared(projectID); err == nil {
+		// The directories general helpers stay with their files in go too.
+		for _, helper := range shared.Helpers {
+			if helper.Kind == HelperTask {
+				service.removeHelperDirs(helper)
+			}
+		}
+	}
 	if err := os.Remove(service.legacyPath(projectID)); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return ErrUnavailable
 	}

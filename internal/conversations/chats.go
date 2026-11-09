@@ -794,6 +794,8 @@ func (service *Service) DeleteChat(ctx context.Context, scope, chat string) erro
 	service.activityMu.Lock()
 	delete(service.activity, stored.idPart())
 	service.activityMu.Unlock()
+	// The helpers it briefed stop keeping their directories; their files stay.
+	service.endChatTasks(ctx, scope, chat)
 	return nil
 }
 
