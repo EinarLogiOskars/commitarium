@@ -34,6 +34,7 @@ import { RECENT_PROJECTS, later, sidebarProjects } from "./sidebarProjects";
 import { LooseAgentsCard, ProjectCards } from "./ProjectCards";
 import { OutputsCard } from "./Outputs";
 import { useRail } from "./useRail";
+import { OUTPUT_PANEL } from "../api/outputs";
 import { Projects } from "./Projects";
 import { ProjectPageBody, useProjectPages } from "./ProjectPages";
 import type { PageTarget } from "./pageTarget";
@@ -177,7 +178,28 @@ export function DevShell({
   const [searching, setSearching] = useState(false);
   const [query, setQuery] = useState("");
   const sidebar = useRail(SIDEBAR_HIDDEN_KEY, SIDEBAR_FOLDS_BELOW);
-  const cards = useRail(CARDS_HIDDEN_KEY, CARDS_FOLD_BELOW);
+  const cardRail = useRail(CARDS_HIDDEN_KEY, CARDS_FOLD_BELOW);
+  // While a file is open beside the chat the cards fold, unless the user
+  // brings them back; the choice lasts until the file closes.
+  const [panelOpen, setPanelOpen] = useState(false);
+  const [cardsBeside, setCardsBeside] = useState(false);
+  useEffect(() => {
+    const onPanel = (e: Event) => {
+      const open = Boolean((e as CustomEvent<{ open?: boolean }>).detail?.open);
+      setPanelOpen(open);
+      if (!open) setCardsBeside(false);
+    };
+    window.addEventListener(OUTPUT_PANEL, onPanel);
+    return () => window.removeEventListener(OUTPUT_PANEL, onPanel);
+  }, []);
+  const cardsHidden = cardRail.hidden || (panelOpen && !cardsBeside);
+  const toggleCards = useCallback(() => {
+    if (!panelOpen) return cardRail.toggle();
+    if (!cardsHidden) return setCardsBeside(false);
+    setCardsBeside(true);
+    if (cardRail.hidden) cardRail.toggle();
+  }, [panelOpen, cardsHidden, cardRail]);
+  const cards = { hidden: cardsHidden, toggle: toggleCards };
   // What the search found in the chats' messages; null until it answers.
   const [found, setFound] = useState<ChatMatch[] | null>(null);
   const [reveal, setReveal] = useState<string | undefined>();

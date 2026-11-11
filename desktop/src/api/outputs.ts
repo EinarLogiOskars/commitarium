@@ -107,6 +107,10 @@ export interface OpenOutputDetail {
   images?: string[];
 }
 
+/** Sent when the file beside the chat opens or closes, with { open }: the
+ * cards fold while it is open. */
+export const OUTPUT_PANEL = "commitarium:output-panel";
+
 export function openOutputBeside(owner: string, name?: string, images?: string[]): boolean {
   const event = new CustomEvent<OpenOutputDetail>(OPEN_OUTPUT, {
     detail: { owner, name, images },

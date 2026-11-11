@@ -11,6 +11,7 @@ import {
   panelTitle,
   shownKey,
   storedFor,
+  towardPdf,
   versionLabel,
 } from "./panelTargets";
 
@@ -122,5 +123,38 @@ describe("folding many files", () => {
     expect(rows[0]).toMatchObject({ kind: "file" });
     expect(rows[1]).toMatchObject({ kind: "run", title: "Checkout test" });
     expect(run.length).toBeGreaterThan(FOLD_OVER);
+  });
+});
+
+describe("a deck's page and its PDF", () => {
+  it("folds the page away when its PDF is there", () => {
+    expect(foldOutputs(["deck.html", "deck.pdf", "notes.html"]).documents).toEqual([
+      "deck.pdf",
+      "notes.html",
+    ]);
+  });
+
+  it("opens the PDF instead of the page once there is one", () => {
+    expect(towardPdf({ name: "deck.html" }, ["deck.html", "deck.pdf"])).toEqual({
+      name: "deck.pdf",
+      live: undefined,
+    });
+    expect(towardPdf({ helper: "h1", live: "deck.html" }, ["deck.html"])).toEqual({
+      helper: "h1",
+      live: "deck.html",
+    });
+  });
+
+  it("opens by itself on the PDF when the helper has made both", () => {
+    const files = new Map([
+      [
+        "h1",
+        [
+          { name: "deck.html", size: 1, made_at: "" },
+          { name: "deck.pdf", size: 1, made_at: "" },
+        ],
+      ],
+    ]);
+    expect(autoOpenTarget(["h1"], new Set(), files)).toEqual({ helper: "h1", live: "deck.pdf" });
   });
 });

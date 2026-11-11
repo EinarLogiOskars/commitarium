@@ -3,6 +3,7 @@ package outputs
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -175,5 +176,26 @@ func TestLiveListsAHelpersFilesNow(t *testing.T) {
 	}
 	if Live(t.TempDir()) != nil {
 		t.Fatal("a helper without outputs/ lists files")
+	}
+}
+
+func TestCleanNameDropsAFolderItsFilesRepeat(t *testing.T) {
+	cases := map[string]string{
+		"concept-a/concept-a-app-icon-1024.png": "concept-a-app-icon-1024.png",
+		"logos/concept-a.svg":                   "logos-concept-a.svg",
+		"deck.pdf":                              "deck.pdf",
+	}
+	for relative, want := range cases {
+		if got := cleanName(relative); got != want {
+			t.Errorf("cleanName(%q) = %q, want %q", relative, got, want)
+		}
+	}
+}
+
+func TestWithoutSourcesHidesThePageAPDFWasMadeFrom(t *testing.T) {
+	got := WithoutSources([]string{"deck.html", "deck.pdf", "notes.html", "Logo.HTM", "logo.pdf"})
+	want := []string{"deck.pdf", "notes.html", "logo.pdf"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("WithoutSources = %v, want %v", got, want)
 	}
 }

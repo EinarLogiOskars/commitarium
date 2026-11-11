@@ -501,7 +501,19 @@ func trim(directory string, files []File) []File {
 // cleanName makes a helper's file name (with any folders it was in) one the
 // store keeps.
 func cleanName(relative string) string {
-	name := strings.ReplaceAll(filepath.ToSlash(relative), "/", "-")
+	// A folder whose files already start with its name adds nothing:
+	// concept-a/concept-a-icon.png is concept-a-icon.png, not
+	// concept-a-concept-a-icon.png.
+	parts := strings.Split(filepath.ToSlash(relative), "/")
+	kept := make([]string, 0, len(parts))
+	for index, part := range parts {
+		if index+1 < len(parts) && part != "" &&
+			strings.HasPrefix(strings.ToLower(parts[index+1]), strings.ToLower(part)) {
+			continue
+		}
+		kept = append(kept, part)
+	}
+	name := strings.Join(kept, "-")
 	name = unsafeChars.ReplaceAllString(name, "-")
 	name = strings.ReplaceAll(name, "..", ".")
 	name = strings.TrimLeft(name, " .-_()")
@@ -515,6 +527,29 @@ func cleanName(relative string) string {
 		return "output"
 	}
 	return name
+}
+
+// IsSourceOf says whether name is the page a PDF among names was made
+// from: deck.html beside deck.pdf. Commitarium keeps it, so a later change
+// can edit it, and shows the user the PDF.
+func IsSourceOf(name string, names []string) bool {
+	extension := strings.ToLower(filepath.Ext(name))
+	if extension != ".html" && extension != ".htm" {
+		return false
+	}
+	pdf := strings.ToLower(strings.TrimSuffix(name, filepath.Ext(name))) + ".pdf"
+	return slices.ContainsFunc(names, func(other string) bool { return strings.ToLower(other) == pdf })
+}
+
+// WithoutSources answers names without the pages their PDFs were made from.
+func WithoutSources(names []string) []string {
+	shown := make([]string, 0, len(names))
+	for _, name := range names {
+		if !IsSourceOf(name, names) {
+			shown = append(shown, name)
+		}
+	}
+	return shown
 }
 
 // freeName answers name, or name-2, name-3 … when it is taken.

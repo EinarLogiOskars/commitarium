@@ -1,5 +1,5 @@
 import type { HelperFile, OutputFile, OutputVersion } from "../api/outputs";
-import { outputKind } from "./outputKinds";
+import { isSourceOf, outputKind, pdfOf, withoutSources } from "./outputKinds";
 
 // What the panel beside the chat shows (HELPERS_PLAN.md, H8): an output the
 // user opened, or a helper's file while it is built, which becomes the
@@ -69,7 +69,8 @@ export function autoOpenTarget(
   for (const helper of atWork) {
     const files = filesOf.get(helper);
     if (seen.has(helper) || !files?.length) continue;
-    return { helper, live: files[0].name };
+    const names = files.map((file) => file.name);
+    return { helper, live: withoutSources(names)[0] ?? names[0] };
   }
   return null;
 }
@@ -77,6 +78,22 @@ export function autoOpenTarget(
 /** A version as the history lists it. */
 export function versionLabel(version: OutputVersion, latest: number): string {
   return version.number === latest ? `v${version.number} · latest` : `v${version.number}`;
+}
+
+/** The outputs the user sees: not the pages their PDFs were made from. */
+export function shownOutputs(files: OutputFile[]): OutputFile[] {
+  const names = files.map((file) => file.name);
+  return files.filter((file) => !isSourceOf(file.name, names));
+}
+
+/** The target, on the PDF instead of the page it was made from once there
+ * is one among names: the user sees the PDF. */
+export function towardPdf(target: PanelTarget, names: string[]): PanelTarget {
+  if (target.images) return target;
+  const swap = (name?: string) => (name && isSourceOf(name, names) ? pdfOf(name, names)! : name);
+  const name = swap(target.name);
+  const live = swap(target.live);
+  return name === target.name && live === target.live ? target : { ...target, name, live };
 }
 
 /** The panel's title. */
@@ -90,7 +107,8 @@ export const FOLD_OVER = 4;
 
 /** A helper's files as the chat and the Outputs card show them: documents
  * first, then its images folded into one gallery when there are many. */
-export function foldOutputs(names: string[]): { documents: string[]; images: string[] } {
+export function foldOutputs(all: string[]): { documents: string[]; images: string[] } {
+  const names = withoutSources(all);
   const images = names.filter((name) => outputKind(name) === "image");
   if (names.length <= FOLD_OVER || images.length < 2) return { documents: names, images: [] };
   return {
@@ -113,7 +131,8 @@ export type OutputRow =
 
 /** The Outputs card's rows, newest first: a helper's files one by one,
  * or, past FOLD_OVER, as one row for its run. */
-export function outputRows(files: OutputFile[]): OutputRow[] {
+export function outputRows(all: OutputFile[]): OutputRow[] {
+  const files = shownOutputs(all);
   const runs = new Map<string, OutputFile[]>();
   for (const file of files) {
     if (!file.helper) continue;

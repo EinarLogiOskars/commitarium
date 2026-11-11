@@ -116,7 +116,7 @@ func (service *Service) taskTurnEnded(ctx context.Context, stored *record, helpe
 		stored.delivered(helper, state.Text, state.Outputs, now)
 		return
 	}
-	stored.revised(helper, state.Text, service.versionLabels(ctx, stored.Scope, state.Outputs, previous), state.Outputs, now)
+	stored.revised(helper, state.Text, service.versionLabels(ctx, stored.Scope, outputs.WithoutSources(state.Outputs), previous), state.Outputs, now)
 }
 
 // revised hands a general helper's later turn to the assistant: the line

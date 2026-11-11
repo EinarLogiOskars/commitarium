@@ -10,6 +10,7 @@ import {
   type HelperFile,
   type OpenOutputDetail,
   listHelperFiles,
+  OUTPUT_PANEL,
 } from "../api/outputs";
 import { OutputPanel } from "./OutputPanel";
 import { type PanelTarget, autoOpenTarget } from "./panelTargets";
@@ -224,6 +225,15 @@ export function ChatView({
   // It belongs to the chat it was opened in.
   const [panelOf, setPanelOf] = useState<{ chat: string; target: PanelTarget } | null>(null);
   const panel = panelOf?.chat === targetKey ? panelOf.target : null;
+  const panelShown = page && panel !== null;
+  // The cards fold while the file is beside the chat, and come back after.
+  useEffect(() => {
+    if (!panelShown) return;
+    window.dispatchEvent(new CustomEvent(OUTPUT_PANEL, { detail: { open: true } }));
+    return () => {
+      window.dispatchEvent(new CustomEvent(OUTPUT_PANEL, { detail: { open: false } }));
+    };
+  }, [panelShown]);
   const setPanel = useCallback(
     (next: PanelTarget | null) => setPanelOf(next ? { chat: shown.current, target: next } : null),
     [],

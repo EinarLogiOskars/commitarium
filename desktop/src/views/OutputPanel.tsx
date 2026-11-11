@@ -21,13 +21,14 @@ import {
   panelTitle,
   shownKey,
   storedFor,
+  towardPdf,
   versionLabel,
 } from "./panelTargets";
 
 // The file beside the chat (HELPERS_PLAN.md, H8): an output the user opened,
 // or a helper's file while it is built. It reads the file again whenever it
 // changes, steps back through its versions and restores one, and marks it
-// Done, which lets its helper go.
+// Finish, which lets its helper go.
 
 const POLL_MS = 4_000;
 
@@ -35,7 +36,7 @@ const describe = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 export function OutputPanel({
   owner,
-  target,
+  target: given,
   atWork,
   onClose,
 }: {
@@ -73,8 +74,7 @@ export function OutputPanel({
     };
   }, [loadFiles]);
 
-  const file = storedFor(target, files);
-  const helper = target.images ? null : liveHelper(target, file, atWork);
+  const helper = given.images ? null : liveHelper(given, storedFor(given, files), atWork);
   // While its helper works on it, the file shows as it is built.
   useEffect(() => {
     if (!helper) return;
@@ -91,6 +91,12 @@ export function OutputPanel({
     };
   }, [owner, helper]);
   const live = helper && looked?.helper === helper ? looked.files : [];
+  // A deck's page turns into its PDF once there is one.
+  const target = towardPdf(given, [
+    ...files.map((stored) => stored.name),
+    ...live.map((made) => made.name),
+  ]);
+  const file = storedFor(target, files);
   const liveFile = helper && version === null ? liveFor(target, file, live) : null;
 
   const latest = file?.version ?? 1;
@@ -126,6 +132,7 @@ export function OutputPanel({
       if (!file) return;
       await markOutputDone(owner, file.name);
       window.dispatchEvent(new Event(OUTPUTS_CHANGED));
+      onClose();
     });
 
   const title = target.images ? imagesLabel(target.images) : panelTitle(target, file);
@@ -210,13 +217,18 @@ export function OutputPanel({
           )}
           <span className="chat-view__spacer" />
           {(file.kept || file.working) && (
-            <button
-              onClick={done}
-              disabled={busy}
-              title="Finished with it: the helper lets go of its work; the versions stay"
-            >
-              Done
-            </button>
+            <>
+              <span className="muted output-panel__hint">
+                Ask Mayka for changes. Finish when you are happy with it.
+              </span>
+              <button
+                onClick={done}
+                disabled={busy}
+                title="The helper lets go of this file; its versions stay"
+              >
+                Finish
+              </button>
+            </>
           )}
           {error && <span className="chat-view__error">{error}</span>}
         </div>

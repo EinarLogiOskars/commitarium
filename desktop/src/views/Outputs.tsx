@@ -27,8 +27,9 @@ import {
   printable,
   sizeLabel,
 } from "./outputKinds";
-import { type OutputRow, foldOutputs, imagesLabel, outputRows } from "./panelTargets";
-import { PdfPages, PdfPresenter, usePdf } from "./PdfView";
+import { type OutputRow, foldOutputs, imagesLabel, outputRows, shownOutputs } from "./panelTargets";
+import { ImagePresenter, PdfPages, PdfPresenter, usePdf } from "./PdfView";
+import { FileIcon } from "./FileIcon";
 
 // What Mayka's helpers make (HELPERS_PLAN.md): chips on the chat line that
 // hands them back, the Outputs card, and a viewer with Export PDF, Present
@@ -38,16 +39,6 @@ const POLL_MS = 15_000;
 
 const describe = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const SHOWN = 5;
-
-const ICON: Record<OutputKind, string> = {
-  markdown: "📄",
-  html: "🖥",
-  image: "🖼",
-  csv: "📊",
-  text: "📄",
-  pdf: "📕",
-  other: "📦",
-};
 
 /** A helper's files, as chips that open the viewer: beside the chat when
  * onOpen opens it there, else over the page. Many images fold into one chip
@@ -67,7 +58,7 @@ export function OutputChips({
   const [gallery, setGallery] = useState<string[] | null>(null);
   if (!owner || !names?.length) return null;
   const { documents, images } = foldOutputs(names);
-  const chip = (key: string, icon: string, label: string, title: string, click: () => void) => (
+  const chip = (key: string, icon: ReactNode, label: string, title: string, click: () => void) => (
     <li key={key}>
       <button className="attachment output-chip" title={title} onClick={click}>
         <span className="attachment__icon" aria-hidden>
@@ -81,13 +72,17 @@ export function OutputChips({
     <>
       <ul className="attachments attachments--sent outputs-chips">
         {documents.map((name) =>
-          chip(name, ICON[outputKind(name)], name, `Open ${name}`, () =>
+          chip(name, <FileIcon name={name} />, name, `Open ${name}`, () =>
             onOpen ? onOpen(name) : setOpen(name),
           ),
         )}
         {images.length > 0 &&
-          chip("images", ICON.image, imagesLabel(images), "Step through them", () =>
-            onOpenImages ? onOpenImages(images) : setGallery(images),
+          chip(
+            "images",
+            <FileIcon kind="gallery" />,
+            imagesLabel(images),
+            "Step through them",
+            () => (onOpenImages ? onOpenImages(images) : setGallery(images)),
           )}
       </ul>
       {open && <OutputViewer owner={owner} name={open} onClose={() => setOpen(null)} />}
@@ -126,6 +121,7 @@ export function OutputsCard({ owner }: { owner: string }) {
   }, [load]);
   if (files.length === 0) return null;
   const rows = outputRows(files);
+  const shownCount = shownOutputs(files).length;
   const fileRow = (file: OutputFile, nested = false) => (
     <li key={file.name}>
       <button
@@ -136,7 +132,7 @@ export function OutputsCard({ owner }: { owner: string }) {
           if (!openOutputBeside(owner, file.name)) setOpen(file.name);
         }}
       >
-        <span aria-hidden>{ICON[outputKind(file.name)]}</span>
+        <FileIcon name={file.name} />
         <span className="output-row__name">{file.name}</span>
         {(file.version ?? 1) > 1 && (
           <span className="muted output-row__version">v{file.version}</span>
@@ -183,7 +179,7 @@ export function OutputsCard({ owner }: { owner: string }) {
                     if (!openOutputBeside(owner, undefined, images)) setGallery(images);
                   }}
                 >
-                  <span aria-hidden>{ICON.image}</span>
+                  <FileIcon kind="gallery" />
                   <span className="output-row__name">{imagesLabel(images)}</span>
                 </button>
               </li>
@@ -197,12 +193,12 @@ export function OutputsCard({ owner }: { owner: string }) {
     <section className="shell-card">
       <div className="shell-card__top">
         <h2 className="shell-card__head">Outputs</h2>
-        <span className="muted shell-card__meta">{files.length}</span>
+        <span className="muted shell-card__meta">{shownCount}</span>
       </div>
       <ul className="output-rows">{rows.slice(0, SHOWN).map(row)}</ul>
       {rows.length > SHOWN && (
         <button className="shell-card__link" onClick={() => setShowAll(true)}>
-          All ({files.length})
+          All ({shownCount})
         </button>
       )}
       {showAll && (
@@ -234,6 +230,7 @@ export function OutputsCard({ owner }: { owner: string }) {
  * Each loads as an <img> from a blob of its own type, so nothing in it runs. */
 export function OutputGallery({ owner, images }: { owner: string; images: string[] }) {
   const [index, setIndex] = useState(0);
+  const [presenting, setPresenting] = useState(false);
   const [shown, setShown] = useState<{ url: string; blob: Blob } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const name = images[Math.min(index, images.length - 1)];
@@ -282,6 +279,9 @@ export function OutputGallery({ owner, images }: { owner: string; images: string
         <span className="output-gallery__name" title={name}>
           {name}
         </span>
+        <button className="primary" onClick={() => setPresenting(true)}>
+          Present
+        </button>
         <button
           onClick={() =>
             shown && void saveOutput(name, shown.blob).catch((e) => setError(describe(e)))
@@ -299,6 +299,15 @@ export function OutputGallery({ owner, images }: { owner: string; images: string
           !error && <p className="muted">Loading…</p>
         )}
       </div>
+      {presenting && (
+        <ImagePresenter
+          url={shown?.url ?? null}
+          index={index}
+          count={images.length}
+          onStep={setIndex}
+          onLeave={() => setPresenting(false)}
+        />
+      )}
     </>
   );
 }

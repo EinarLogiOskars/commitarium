@@ -102,13 +102,9 @@ export function PdfPages({ doc }: { doc: PDFDocumentProxy }) {
 
 /** The PDF full screen, a page at a time: arrows, space or a click move
  * on (a click on the left third goes back), Esc leaves. */
-export function PdfPresenter({ doc, onLeave }: { doc: PDFDocumentProxy; onLeave: () => void }) {
-  const [page, setPage] = useState(1);
-  const [size, setSize] = useState({ width: window.innerWidth, height: window.innerHeight });
-  const canvas = useRef<HTMLCanvasElement>(null);
-  const pages = doc.numPages;
-
-  // The window goes full screen while presenting, unless it already was.
+/** The window full screen while a presentation shows, unless it already
+ * was; back as it was after. */
+export function useFullScreenWhileShown() {
   useEffect(() => {
     const appWindow = getCurrentWindow();
     let restore = false;
@@ -124,6 +120,63 @@ export function PdfPresenter({ doc, onLeave }: { doc: PDFDocumentProxy; onLeave:
       if (restore) void appWindow.setFullscreen(false).catch(() => undefined);
     };
   }, []);
+}
+
+/** Images full screen, one at a time, keys and clicks stepping through
+ * them as a PDF's pages do; index counts from 0. */
+export function ImagePresenter({
+  url,
+  index,
+  count,
+  onStep,
+  onLeave,
+}: {
+  url: string | null;
+  index: number;
+  count: number;
+  onStep: (index: number) => void;
+  onLeave: () => void;
+}) {
+  useFullScreenWhileShown();
+  useEffect(() => {
+    // Before the gallery's and the viewer's own keys.
+    const onKey = (e: KeyboardEvent) => {
+      const next = presentKey(e.key, index + 1, count);
+      if (next === null) return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (next === "leave") onLeave();
+      else onStep(next - 1);
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [index, count, onStep, onLeave]);
+  return createPortal(
+    <div
+      className="pdf-present"
+      role="dialog"
+      aria-label={`Image ${index + 1} of ${count}`}
+      onClick={(e) => {
+        const back = e.clientX < window.innerWidth / 3;
+        onStep(back ? Math.max(index - 1, 0) : Math.min(index + 1, count - 1));
+      }}
+    >
+      {url && <img className="pdf-present__image" src={url} alt="" />}
+      <span className="pdf-present__count" aria-hidden>
+        {index + 1} / {count}
+      </span>
+    </div>,
+    document.body,
+  );
+}
+
+export function PdfPresenter({ doc, onLeave }: { doc: PDFDocumentProxy; onLeave: () => void }) {
+  const [page, setPage] = useState(1);
+  const [size, setSize] = useState({ width: window.innerWidth, height: window.innerHeight });
+  const canvas = useRef<HTMLCanvasElement>(null);
+  const pages = doc.numPages;
+
+  useFullScreenWhileShown();
 
   useEffect(() => {
     const onResize = () => setSize({ width: window.innerWidth, height: window.innerHeight });
