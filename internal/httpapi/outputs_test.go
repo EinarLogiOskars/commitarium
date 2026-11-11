@@ -116,7 +116,6 @@ type revisingConversations struct {
 	*helperConversations
 	revised  []string
 	dir      string
-	done     []string
 	deleted  []string
 	listed   []conversations.Helper
 	reviseOK string
@@ -125,11 +124,6 @@ type revisingConversations struct {
 func (stub *revisingConversations) ReviseTask(_ context.Context, scope, chat, target, change string) (string, error) {
 	stub.revised = append(stub.revised, scope+"|"+chat+"|"+target+"|"+change)
 	return stub.reviseOK, nil
-}
-
-func (stub *revisingConversations) OutputDone(_ context.Context, _, name string) error {
-	stub.done = append(stub.done, name)
-	return nil
 }
 
 func (stub *revisingConversations) OutputDeleted(_ context.Context, _, helper string) error {
@@ -223,10 +217,6 @@ func TestOutputVersionAndHelperFileRoutes(t *testing.T) {
 	}
 	if got := serve(http.MethodGet, "/api/v1/outputs/prj_test/cv.html"); got.Body.String() != "<p>v1</p>" {
 		t.Fatalf("latest after restore = %s", got.Body)
-	}
-	if got := serve(http.MethodPost, "/api/v1/outputs/prj_test/cv.html/done"); got.Code != http.StatusNoContent ||
-		strings.Join(stub.done, ",") != "cv.html" {
-		t.Fatalf("done = %d %v", got.Code, stub.done)
 	}
 
 	// While the helper builds it: its files now, read-only and sandboxed.

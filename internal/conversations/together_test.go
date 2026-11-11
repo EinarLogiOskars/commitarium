@@ -145,12 +145,13 @@ func TestReviseWaitsWhileTheHelperWorks(t *testing.T) {
 	}
 }
 
-// Once the helper's directory and session are gone (the output marked Done),
+// Once the helper's directory and session are gone (30 minutes after its
+// last turn),
 // a revise starts a fresh helper from the latest version and the earlier
 // briefs, so the work continues; the versions stay.
 func TestReviseContinuesInAFreshHelperOnceItsSessionIsGone(t *testing.T) {
 	service, worker, store, helper := deckHelper(t, true)
-	if err := service.OutputDone(t.Context(), "prj_test", "deck.html"); err != nil {
+	if err := service.EndTask(t.Context(), "prj_test", helper.ID); err != nil {
 		t.Fatal(err)
 	}
 	if ended := followed(t, service, helper.ID); ended.Kept || ended.Session != "" {
@@ -292,5 +293,19 @@ func TestReviseIsSentAtOnce(t *testing.T) {
 		Type: featureartifact.AssistantRevise, Reason: "Feedback", Helper: "tsk_1"}}}
 	if _, err := turn.Normalize(); err == nil {
 		t.Fatal("a revise without a change was accepted")
+	}
+}
+
+// A finished helper is kept for half an hour after its last turn, then let go.
+func TestAHelperIsKeptForHalfAnHourAfterItsLastTurn(t *testing.T) {
+	now := time.Now()
+	last := now.Add(-29 * time.Minute)
+	helper := Helper{Kind: HelperTask, Kept: true, RevisedAt: &last}
+	if expired(helper, now) {
+		t.Fatal("expired after 29 minutes")
+	}
+	last = now.Add(-31 * time.Minute)
+	if !expired(helper, now) {
+		t.Fatal("still kept after 31 minutes")
 	}
 }

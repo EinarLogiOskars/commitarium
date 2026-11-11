@@ -7,7 +7,6 @@ import {
   listHelperFiles,
   listOutputVersions,
   listOutputs,
-  markOutputDone,
   readHelperFile,
   readOutput,
   restoreOutputVersion,
@@ -27,8 +26,8 @@ import {
 
 // The file beside the chat (HELPERS_PLAN.md, H8): an output the user opened,
 // or a helper's file while it is built. It reads the file again whenever it
-// changes, steps back through its versions and restores one, and marks it
-// Finish, which lets its helper go.
+// changes, steps back through its versions and restores one, and says changes
+// go through Mayka.
 
 const POLL_MS = 4_000;
 
@@ -127,13 +126,6 @@ export function OutputPanel({
       setVersion(null);
       window.dispatchEvent(new Event(OUTPUTS_CHANGED));
     });
-  const done = () =>
-    act(async () => {
-      if (!file) return;
-      await markOutputDone(owner, file.name);
-      window.dispatchEvent(new Event(OUTPUTS_CHANGED));
-      onClose();
-    });
 
   const title = target.images ? imagesLabel(target.images) : panelTitle(target, file);
   const shownName = liveFile?.name ?? file?.name ?? target.live ?? target.name ?? "";
@@ -217,18 +209,7 @@ export function OutputPanel({
           )}
           <span className="chat-view__spacer" />
           {(file.kept || file.working) && (
-            <>
-              <span className="muted output-panel__hint">
-                Ask Mayka for changes. Finish when you are happy with it.
-              </span>
-              <button
-                onClick={done}
-                disabled={busy}
-                title="The helper lets go of this file; its versions stay"
-              >
-                Finish
-              </button>
-            </>
+            <span className="muted output-panel__hint">Ask Mayka for changes.</span>
           )}
           {error && <span className="chat-view__error">{error}</span>}
         </div>

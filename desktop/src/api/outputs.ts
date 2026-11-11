@@ -66,10 +66,6 @@ export const restoreOutputVersion = (
 ): Promise<OutputFile> =>
   request(`${outputPath(owner, name)}/versions/${version}/restore`, { method: "POST" });
 
-/** Marks an output Done: its helper lets go of its session and directory. */
-export const markOutputDone = (owner: string, name: string): Promise<void> =>
-  request(`${outputPath(owner, name)}/done`, { method: "POST" });
-
 const helperFilesPath = (owner: string, helper: string) =>
   `/api/v1/helper-files/${encodeURIComponent(owner)}/${encodeURIComponent(helper)}`;
 
