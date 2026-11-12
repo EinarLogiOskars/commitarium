@@ -388,8 +388,12 @@ func implementationReviewInstructions(
 		"the agreed plan (read it with 'commitarium-artifact plan show'); and for the risky spots (concurrency, " +
 		"money and totals, data boundaries, auth) write a throwaway reproduction or targeted check and run it, " +
 		"without committing it. Request changes only for defects and missed requirements; put polish in " +
-		"non-blocking notes. If something the change depends on cannot be run here (for example Docker), say " +
-		"plainly that it is not verified instead of approving it by inspection. Number each finding " +
+		"non-blocking notes. Neither you nor the lead has Docker or any container runtime, and neither can get " +
+		"one; Commitarium builds and starts the app's containers itself in its preview check before anything " +
+		"merges. So when something can only run with Docker (container builds, Compose setups, tests against a " +
+		"database in a container), say plainly in a non-blocking note that it is not verified here, judge the " +
+		"rest on its merits, and never request changes or withhold approval only because it could not run: " +
+		"no correction can produce that proof. Number each finding " +
 		"(F1, F2, ...) so the lead can answer it by number. "
 	if rereview {
 		scope = "You requested changes to commit " + previousReviewedCommitID + " and the lead has published " +

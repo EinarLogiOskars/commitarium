@@ -9,7 +9,8 @@ import (
 	"github.com/EinarLogiOskars/commitarium/internal/execution"
 )
 
-// ExtendPlanningRoundLimit records one user-approved extra planning round.
+// ExtendPlanningRoundLimit records one user-approved extra planning round, or
+// with Review one extra code-review round.
 // The action ID makes a retried click a no-op even if the extra round already
 // completed and the run has reached its new cap.
 func (s *ExecutionStore) ExtendPlanningRoundLimit(
@@ -44,22 +45,26 @@ func (s *ExecutionStore) ExtendPlanningRoundLimit(
 	if err != nil {
 		return execution.Run{}, false, err
 	}
+	column, current, stage := "planning_round_limit", &run.PlanningRoundLimit, "planning"
+	if extension.Review {
+		column, current, stage = "implementation_review_round_limit", &run.ImplementationReviewRoundLimit, "review"
+	}
 	if run.Status != execution.RunStatusWaitingForUser || run.Paused ||
 		run.WaitKind != execution.RunWaitKindRoundCap ||
-		run.PlanningRoundLimit != extension.ExpectedLimit {
+		*current != extension.ExpectedLimit {
 		return execution.Run{}, false, execution.ErrStateConflict
 	}
 
-	run.PlanningRoundLimit++
+	*current++
 	run.UpdatedAt = extension.OccurredAt.UTC()
 	if err := run.Validate(); err != nil {
 		return execution.Run{}, false, err
 	}
 	result, err := tx.ExecContext(
 		ctx,
-		`UPDATE runs SET planning_round_limit = ?, updated_at = ?
-		 WHERE id = ? AND status = ? AND paused = 0 AND wait_kind = ? AND planning_round_limit = ?`,
-		run.PlanningRoundLimit,
+		`UPDATE runs SET `+column+` = ?, updated_at = ?
+		 WHERE id = ? AND status = ? AND paused = 0 AND wait_kind = ? AND `+column+` = ?`,
+		*current,
 		formatExecutionTime(run.UpdatedAt),
 		run.ID,
 		execution.RunStatusWaitingForUser,
@@ -75,13 +80,14 @@ func (s *ExecutionStore) ExtendPlanningRoundLimit(
 	if _, err := tx.ExecContext(
 		ctx,
 		`INSERT INTO planning_round_extensions
-		 (id, run_id, previous_limit, extended_limit, occurred_at)
-		 VALUES (?, ?, ?, ?, ?)`,
+		 (id, run_id, previous_limit, extended_limit, occurred_at, stage)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
 		extension.ID,
 		run.ID,
 		extension.ExpectedLimit,
-		run.PlanningRoundLimit,
+		*current,
 		formatExecutionTime(run.UpdatedAt),
+		stage,
 	); err != nil {
 		return execution.Run{}, false, fmt.Errorf("record planning-round extension: %w", err)
 	}

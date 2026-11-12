@@ -52,8 +52,13 @@ func (starter *RemoteLeadStarter) ContinueRoundCap(
 	if err != nil {
 		return execution.Run{}, false, err
 	}
-	if run.Status != execution.RunStatusWaitingForUser || run.Paused ||
-		run.WaitKind != execution.RunWaitKindRoundCap || storedFeature.State != feature.StatePlanning {
+	if run.Status != execution.RunStatusWaitingForUser || run.Paused || run.WaitKind != execution.RunWaitKindRoundCap {
+		return execution.Run{}, false, ErrRoundCapNotContinuable
+	}
+	if storedFeature.State == feature.StateReviewing {
+		return starter.continueReviewRoundCap(ctx, run, actionID, guidance, fromAssistant)
+	}
+	if storedFeature.State != feature.StatePlanning {
 		return execution.Run{}, false, ErrRoundCapNotContinuable
 	}
 	for extra := 0; extra < RoundCapExtraRounds; extra++ {
@@ -87,10 +92,58 @@ func (starter *RemoteLeadStarter) ContinueRoundCap(
 	return continued, started, err
 }
 
-// withRoundCapGuidance hands a planning turn the guidance its run was
-// continued past its round limit with, once.
+// reviewRoundExtender extends a code review's round limit.
+type reviewRoundExtender interface {
+	ExtendImplementationReviewRoundLimit(context.Context, string, string, int) (execution.Run, bool, error)
+}
+
+// continueReviewRoundCap continues a code review that reached its round limit
+// with RoundCapExtraRounds more review rounds, and the guidance for the
+// reviewer's next turn. Without it the only way on was back to Ready, which
+// throws finished code away over one disagreement.
+func (starter *RemoteLeadStarter) continueReviewRoundCap(
+	ctx context.Context, run execution.Run, actionID, guidance string, fromAssistant bool,
+) (execution.Run, bool, error) {
+	extender, ok := starter.executions.(reviewRoundExtender)
+	if !ok {
+		return execution.Run{}, false, ErrRoundCapNotContinuable
+	}
+	for extra := 0; extra < RoundCapExtraRounds; extra++ {
+		extended, applied, err := extender.ExtendImplementationReviewRoundLimit(
+			ctx, planningRoundExtensionID(run.ID, fmt.Sprintf("%s:review-round-cap:%d", actionID, extra)),
+			run.ID, run.ImplementationReviewRoundLimit,
+		)
+		if err != nil {
+			return execution.Run{}, false, err
+		}
+		if !applied {
+			return extended, false, nil
+		}
+		run = extended
+	}
+	if guidance != "" {
+		starter.activeMu.Lock()
+		if starter.roundCapGuidance == nil {
+			starter.roundCapGuidance = map[string]roundCapNote{}
+		}
+		starter.roundCapGuidance[run.ID] = roundCapNote{guidance: guidance, fromAssistant: fromAssistant}
+		starter.activeMu.Unlock()
+	}
+	if err := starter.recoverIdleReviewingRun(ctx, run, RecoveryDirective{}); err != nil {
+		starter.activeMu.Lock()
+		delete(starter.roundCapGuidance, run.ID)
+		starter.activeMu.Unlock()
+		return execution.Run{}, false, err
+	}
+	current, err := starter.executions.GetRun(ctx, run.ID)
+	return current, true, err
+}
+
+// withRoundCapGuidance hands a planning or code-review turn the guidance its
+// run was continued past its round limit with, once.
 func (starter *RemoteLeadStarter) withRoundCapGuidance(request *remoteLeadRequest) {
-	if request.planningStage == planningStageNone {
+	review := request.request.OutputContract == workerhttp.OutputContractImplementationReview
+	if request.planningStage == planningStageNone && !review {
 		return
 	}
 	starter.activeMu.Lock()
@@ -104,9 +157,13 @@ func (starter *RemoteLeadStarter) withRoundCapGuidance(request *remoteLeadReques
 	if note.fromAssistant {
 		author = "Commitarium's assistant"
 	}
+	what := "discussion"
+	if review {
+		what = "review"
+	}
 	instructions := request.request.Instructions + fmt.Sprintf(
-		"\n\nThe discussion reached its round limit and continues with %d more rounds. %s read it and adds:\n%s",
-		RoundCapExtraRounds, author, note.guidance)
+		"\n\nThe %s reached its round limit and continues with %d more rounds. %s read it and adds:\n%s",
+		what, RoundCapExtraRounds, author, note.guidance)
 	if len(instructions) <= workerhttp.MaxInstructionsBytes {
 		request.request.Instructions = instructions
 	}

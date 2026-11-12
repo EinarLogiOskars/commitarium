@@ -64,6 +64,9 @@ type PlanningRoundExtension struct {
 	RunID         string
 	ExpectedLimit int
 	OccurredAt    time.Time
+	// Review extends the code review's round limit rather than the planning
+	// discussion's.
+	Review bool
 }
 
 // InterventionRequest is the atomic user action that records a message and
