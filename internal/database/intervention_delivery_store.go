@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/EinarLogiOskars/commitarium/internal/execution"
 )
@@ -266,6 +267,9 @@ func (s *ExecutionStore) CompleteIntervention(
 	if err := requireExecutionUpdate(result, "intervention", intervention.ID); err != nil {
 		return execution.Intervention{}, false, err
 	}
+	if err := restoreWorkflowCheckpoint(ctx, tx, session.ID, completion.AttemptID); err != nil {
+		return execution.Intervention{}, false, err
+	}
 	result, err = tx.ExecContext(
 		ctx,
 		`UPDATE runs SET reason = ?, updated_at = ?
@@ -289,4 +293,44 @@ func (s *ExecutionStore) CompleteIntervention(
 	intervention.UpdatedAt = answeredAt
 	intervention.AnsweredAt = &answeredAt
 	return intervention, true, nil
+}
+
+// restoreWorkflowCheckpoint hands a session's checkpoint back to the workflow
+// turn before an answered intervention. The provider conversation keeps the
+// exchange, but every workflow step matches rounds against the session's
+// latest turn: left on the intervention, a message to the reviewer between
+// review rounds broke the next review ("implementation correction has no
+// matching completed review"). A session with no turn before it keeps the
+// intervention.
+func restoreWorkflowCheckpoint(ctx context.Context, tx *sql.Tx, sessionID, interventionAttemptID string) error {
+	var prior string
+	var sequence int64
+	err := tx.QueryRowContext(
+		ctx,
+		`SELECT worker_attempt_id, MAX(worker_event_sequence) FROM session_events
+		 WHERE session_id = ? AND worker_attempt_id != '' AND worker_attempt_id NOT LIKE ? ESCAPE '\'
+		 GROUP BY worker_attempt_id ORDER BY MAX(sequence) DESC LIMIT 1`,
+		sessionID, escapeLike(sessionID+":intervention:")+"%",
+	).Scan(&prior, &sequence)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("find the turn before an intervention: %w", err)
+	}
+	if _, err := tx.ExecContext(
+		ctx,
+		`UPDATE worker_attempt_checkpoints SET attempt_id = ?, last_event_sequence = ?
+		 WHERE session_id = ? AND attempt_id = ?`,
+		prior, sequence, sessionID, interventionAttemptID,
+	); err != nil {
+		return fmt.Errorf("restore the turn before an intervention: %w", err)
+	}
+	return nil
+}
+
+// escapeLike escapes LIKE's wildcards, so an ID with underscores matches only
+// itself.
+func escapeLike(value string) string {
+	return strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(value)
 }
