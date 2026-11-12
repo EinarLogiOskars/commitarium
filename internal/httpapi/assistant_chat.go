@@ -411,10 +411,11 @@ func (api *API) approveConversationActionHandler(w http.ResponseWriter, r *http.
 		return
 	}
 	// At the top level the assistant only creates apps and projects to plan;
-	// everything else acts in a project, except research, which needs none,
+	// everything else acts in a project, except research and helpers, which need none,
 	// and the server's cards, which act on the server.
 	topLevel := action.Type == featureartifact.AssistantCreateApp || action.Type == featureartifact.AssistantPlanProject
-	if action.Type != featureartifact.AssistantResearch && !featureartifact.AnyChat(action.Type) &&
+	if action.Type != featureartifact.AssistantResearch && action.Type != featureartifact.AssistantDelegate &&
+		!featureartifact.AnyChat(action.Type) &&
 		(scope == conversations.TopLevel) != topLevel {
 		writeError(w, http.StatusConflict, "action_needs_project", "this action runs in a project's conversation, and a new app at the top level")
 		return
@@ -554,6 +555,8 @@ func (api *API) approveConversationActionHandler(w http.ResponseWriter, r *http.
 		result, ok = api.applyAnswerHelper(w, r, scope, action)
 	case featureartifact.AssistantResearch:
 		result, helper, ok = api.applyResearch(w, r, scope, action)
+	case featureartifact.AssistantDelegate:
+		result, helper, ok = api.applyDelegate(w, r, scope, action)
 	case featureartifact.AssistantUpdatePlan:
 		result, ok = api.applyUpdatePlan(w, r, scope, action)
 	case featureartifact.AssistantBuildPlan:

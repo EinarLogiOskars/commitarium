@@ -300,6 +300,7 @@ type API struct {
 	releases           ReleaseService
 	installs           InstallService
 	documents          DocumentService
+	outputs            OutputService
 	// now is the API's clock; nil is time.Now.
 	now func() time.Time
 	// mux serves the API's own routes, for actions that reuse them.
@@ -418,11 +419,14 @@ func newAPI(
 	var modelGuide ModelGuideService
 	var projectUsage ProjectUsageService
 	var documentService DocumentService
+	var outputService OutputService
 	for _, extra := range extras {
 		if typed, ok := extra.(ProjectUsageService); ok {
 			projectUsage = typed
 		}
 		switch typed := extra.(type) {
+		case OutputService:
+			outputService = typed
 		case DocumentService:
 			documentService = typed
 		case ModelGuideService:
@@ -488,6 +492,7 @@ func newAPI(
 		releases:           releaseService,
 		installs:           installService,
 		documents:          documentService,
+		outputs:            outputService,
 	}
 	api.artifacts, _ = workflow.(FeatureArtifactService)
 	api.projectImporter, _ = projects.(ProjectImporter)
@@ -503,6 +508,9 @@ func newAPI(
 	}
 	if documentService != nil {
 		api.registerDocumentRoutes(mux)
+	}
+	if outputService != nil {
+		api.registerOutputRoutes(mux)
 	}
 	if marketplaceService != nil && installService != nil {
 		api.registerMarketplaceAppRoutes(mux)
@@ -548,6 +556,7 @@ func newAPI(
 	if projects != nil && features != nil && executionService != nil {
 		mux.HandleFunc("GET /api/v1/attention", api.listAttentionHandler)
 		mux.HandleFunc("GET /api/v1/projects/{id}/agents-at-work", api.agentsAtWorkHandler)
+		mux.HandleFunc("GET /api/v1/agents-at-work", api.looseAgentsAtWorkHandler)
 	}
 	if modelGuide != nil {
 		mux.HandleFunc("GET /api/v1/model-guide", api.getModelGuideHandler)

@@ -310,6 +310,30 @@ func (api *API) applyResearch(
 	return fmt.Sprintf("Looking up “%s”.", action.Title), &helper, true
 }
 
+// delegator briefs a general helper for the assistant.
+type delegator interface {
+	StartTask(ctx context.Context, scope, actionID, title, brief string) (conversations.Helper, error)
+}
+
+// applyDelegate starts a general helper on the action's brief, on the
+// assistant's agent with the web; what it makes comes back as files
+// (HELPERS_PLAN.md).
+func (api *API) applyDelegate(
+	w http.ResponseWriter, r *http.Request, scope string, action conversations.Action,
+) (string, *conversations.Helper, bool) {
+	starter, ok := api.conversations.(delegator)
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable, "assistant_unavailable", "a helper needs real agents")
+		return "", nil, false
+	}
+	helper, err := starter.StartTask(r.Context(), scope, action.ID, action.Title, action.Description)
+	if err != nil {
+		writeError(w, http.StatusConflict, "helper_not_started", "the helper could not be started: "+err.Error())
+		return "", nil, false
+	}
+	return fmt.Sprintf("A helper is working on “%s”.", action.Title), &helper, true
+}
+
 // helperPath is the route of a helper's session.
 func helperPath(projectID string, helper conversations.Helper) string {
 	base := "/api/v1/projects/" + url.PathEscape(projectID)

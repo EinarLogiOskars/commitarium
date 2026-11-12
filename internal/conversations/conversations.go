@@ -114,6 +114,9 @@ type Message struct {
 	Text string `json:"text"`
 	// Attachments name the scope's documents the user attached to it.
 	Attachments []string `json:"attachments,omitempty"`
+	// Outputs name the files a helper made, on the event that hands them
+	// back (task.go).
+	Outputs []string `json:"outputs,omitempty"`
 	// Questions are what an assistant's reply asks the user as cards
 	// (questions.go).
 	Questions  []Question `json:"questions,omitempty"`
@@ -204,6 +207,9 @@ type Conversation struct {
 	// Researching names the research still being looked up, so the user sees
 	// it running while they carry on; only Get fills it in.
 	Researching []string `json:"researching,omitempty"`
+	// Helping names the general helpers this chat briefed that are still
+	// at work (task.go), so its lines show them working; only Get fills it in.
+	Helping []string `json:"helping,omitempty"`
 	// TurnStartedAt is when the assistant's current or last turn started,
 	// its automatic retries included.
 	TurnStartedAt *time.Time `json:"turn_started_at,omitempty"`
@@ -337,6 +343,8 @@ type Config struct {
 	// Attachments, when set, holds the files attached to messages
 	// (attachments.go).
 	Attachments Attachments
+	// Outputs, when set, keeps what general helpers make (task.go).
+	Outputs Outputs
 }
 
 // ChatUsage is one assistant turn's usage.
@@ -646,6 +654,9 @@ func (service *Service) Get(ctx context.Context, scope string) (Conversation, er
 	for _, helper := range stored.Helpers {
 		if helper.Kind == HelperResearch && !helper.Done {
 			conversation.Researching = append(conversation.Researching, helper.Title)
+		}
+		if helper.Kind == HelperTask && !helper.Done && (helper.Chat == "" || helper.Chat == stored.Chat) {
+			conversation.Helping = append(conversation.Helping, helper.Title)
 		}
 	}
 	return conversation, nil
