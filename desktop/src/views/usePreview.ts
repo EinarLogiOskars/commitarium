@@ -35,7 +35,7 @@ export const primaryUrl = (s: PreviewStatus | null) =>
 
 /** One project's preview: live status from the backend, plus start/stop. A
  * user-started preview opens once it's running (the port changes on every
- * start, so restarts open again too): an app in its own window, any other
+ * start, so restarts open again too): an app in its own preview window, any other
  * project in the browser. */
 export function usePreview(projectId: string, featureId?: string, appName?: string) {
   const [status, setStatus] = useState<PreviewStatus | null>(null);
@@ -69,7 +69,8 @@ export function usePreview(projectId: string, featureId?: string, appName?: stri
     if (status?.state === "running" && openWhenRunning.current) {
       openWhenRunning.current = false;
       const url = primaryUrl(status);
-      if (appName && !featureId) void openAppWindow(projectId, appName).catch(() => {});
+      if (appName && !featureId)
+        void openAppWindow(projectId, appName, { preview: true }).catch(() => {});
       else if (url) void openExternal(url);
     } else if (status?.state === "failed") {
       // Not "stopped": starting again first stops the old preview, and that

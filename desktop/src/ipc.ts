@@ -946,9 +946,35 @@ export interface PreviewStatus {
   services?: ServiceEvidence[];
 }
 
-/** Open an app's own window (APPS_PLAN.md), or bring it to the front. */
-export const openAppWindow = (projectId: string, title: string): Promise<void> =>
-  invoke("open_app_window", { projectId, title });
+/** Open an app's own window (APPS_PLAN.md), or bring it to the front: the
+ * real app's, or with `preview` its preview's, which says it is a test copy
+ * (HELPERS_PLAN.md H5). On a server every window shows the preview. */
+export const openAppWindow = (
+  projectId: string,
+  title: string,
+  options: { preview?: boolean } = {},
+): Promise<void> => invoke("open_app_window", { projectId, title, preview: !!options.preview });
+
+/** How the user opened an app's real app last. */
+export type RealAppOpened = "window" | "browser";
+
+/** What there is to open of a project's real app (HELPERS_PLAN.md H5). */
+export interface RealApp {
+  /** On a server the real app is the deployment, opened in a browser. */
+  on_server: boolean;
+  /** On a server: whether the app is deployed. */
+  deployed: boolean;
+  /** Its address for the browser: on this computer while it runs, on a
+   * server once it has one. */
+  address: string | null;
+  last: RealAppOpened | null;
+}
+
+export const realApp = (projectId: string): Promise<RealApp> => invoke("real_app", { projectId });
+
+/** Opens the real app in the browser, at the address the host knows for it. */
+export const openRealAppInBrowser = (projectId: string): Promise<void> =>
+  invoke("open_real_app_in_browser", { projectId });
 
 /** Start a preview, replacing any running one for the project. Returns in
  * "starting"; progress arrives via onPreviewStatusChanged. */

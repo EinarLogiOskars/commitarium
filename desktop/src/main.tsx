@@ -10,8 +10,11 @@ import { applyTheme, readTheme } from "./settings/theme";
 
 applyTheme(readTheme());
 
-// An app's own window (APPS_PLAN.md) is told which app it shows.
-const appProject = (window as { __COMMITARIUM_APP__?: string }).__COMMITARIUM_APP__;
+// An app's own window (APPS_PLAN.md) is told which app it shows, and whether
+// it shows the app's preview rather than the real app (HELPERS_PLAN.md H5).
+const told = window as { __COMMITARIUM_APP__?: string; __COMMITARIUM_PREVIEW__?: boolean };
+const appProject = told.__COMMITARIUM_APP__;
+const appPreview = told.__COMMITARIUM_PREVIEW__ === true;
 
 const root = ReactDOM.createRoot(document.getElementById("root") as HTMLElement);
 const show = (page: React.ReactNode) => root.render(<React.StrictMode>{page}</React.StrictMode>);
@@ -20,7 +23,7 @@ async function start() {
   if (appProject) {
     const connection = await coordinatorConnection().catch(() => null);
     if (connection) connectBridge(connection.coordinator_url, connection.token);
-    show(<AppWindow projectId={appProject} />);
+    show(<AppWindow projectId={appProject} preview={appPreview} />);
     return;
   }
   const { mode, server } = await connectionMode().catch(() => ({ mode: "local", server: null }));

@@ -89,6 +89,8 @@ pub fn run() {
         // access reaches the untrusted UI.
         .invoke_handler(tauri::generate_handler![
             apps::open_app_window,
+            apps::real_app,
+            apps::open_real_app_in_browser,
             outputs::print_output,
             outputs::save_output,
             outputs::open_output,

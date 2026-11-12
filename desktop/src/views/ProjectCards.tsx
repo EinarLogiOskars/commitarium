@@ -560,8 +560,8 @@ function PreviewCard({
         {url && (
           <button
             className="primary"
-            onClick={() => void openAppWindow(projectId, name)}
-            title="Open it in its own Commitarium window"
+            onClick={() => void openAppWindow(projectId, name, { preview: true })}
+            title="Open the preview in its own Commitarium window"
           >
             Open
           </button>
