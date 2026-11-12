@@ -3,6 +3,7 @@ import { getRepositoryOverview, type RepositoryOverview } from "../api/projects"
 import { ApiError } from "../api/client";
 import { openExternal } from "../ipc";
 import { Markdown } from "./Markdown";
+import { FileIcon } from "./FileIcon";
 
 // Repository overview from the internal Forgejo repo (the authoritative version
 // the agents work on): head commit, top-level tree, and the root README.
@@ -88,7 +89,9 @@ export function RepositoryCard({ projectId }: { projectId: string }) {
             <ul className="repo__tree">
               {overview.tree.map((t) => (
                 <li key={t.path} className={`repo__entry repo__entry--${t.type}`}>
-                  <span className="repo__icon">{t.type === "dir" ? "📁" : "📄"}</span>
+                  <span className="repo__icon">
+                    <FileIcon kind={t.type === "dir" ? "folder" : "text"} />
+                  </span>
                   {t.path}
                 </li>
               ))}

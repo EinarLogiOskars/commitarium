@@ -109,3 +109,162 @@ func TestOutputRoutes(t *testing.T) {
 		t.Fatalf("delete = %d, then read = %d", deleted.Code, missing.Code)
 	}
 }
+
+// revisingConversations sends a change back to a helper as the assistant's
+// service does, and keeps a helper's files for the panel.
+type revisingConversations struct {
+	*helperConversations
+	revised  []string
+	dir      string
+	done     []string
+	deleted  []string
+	listed   []conversations.Helper
+	reviseOK string
+}
+
+func (stub *revisingConversations) ReviseTask(_ context.Context, scope, chat, target, change string) (string, error) {
+	stub.revised = append(stub.revised, scope+"|"+chat+"|"+target+"|"+change)
+	return stub.reviseOK, nil
+}
+
+func (stub *revisingConversations) OutputDone(_ context.Context, _, name string) error {
+	stub.done = append(stub.done, name)
+	return nil
+}
+
+func (stub *revisingConversations) OutputDeleted(_ context.Context, _, helper string) error {
+	stub.deleted = append(stub.deleted, helper)
+	return nil
+}
+
+func (stub *revisingConversations) HelperFiles(_ context.Context, _, helper string) (string, error) {
+	if helper != "tsk_1" || stub.dir == "" {
+		return "", conversations.ErrNotFound
+	}
+	return stub.dir, nil
+}
+
+func (stub *revisingConversations) HelpersOf(context.Context, string) ([]conversations.Helper, error) {
+	return stub.listed, nil
+}
+
+// revise is applied at once, from the chat that sent it.
+func TestReviseIsAppliedAtOnce(t *testing.T) {
+	stub := &revisingConversations{reviseOK: "The helper on “Deck” is making the change.",
+		helperConversations: &helperConversations{conversationStub: &conversationStub{
+			action: conversations.Action{ID: "act_1", Status: conversations.ActionProposed, Chat: "chat_1",
+				AssistantAction: featureartifact.AssistantAction{
+					Type: featureartifact.AssistantRevise, Reason: "Feedback", Helper: "deck.html", Guidance: "Blue titles.",
+				}},
+		}}}
+	projects := &recordingProjectService{getByIDResult: project.Project{ID: "prj_test"}}
+	handler := NewWithWorkspaceRealWorkflowDeletionAndModels(projects, &recordingFeatureService{}, nil, nil, nil, nil, nil,
+		nil, nil, nil, nil, nil, stub)
+	if err := AssistantActionApplier(handler)(t.Context(), conversations.TopLevel, "act_1"); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(stub.revised, ",") != "commitarium|chat_1|deck.html|Blue titles." ||
+		stub.resolvedResult != stub.reviseOK || stub.started != nil {
+		t.Fatalf("revised = %v result = %q started = %+v", stub.revised, stub.resolvedResult, stub.started)
+	}
+}
+
+// An output's versions are listed, read and restored; Done and deleting
+// end its helper's work; a helper's files are served as they are built,
+// sandboxed, and never through a link.
+func TestOutputVersionAndHelperFileRoutes(t *testing.T) {
+	store, _ := outputs.NewStore(t.TempDir())
+	from := t.TempDir()
+	path := filepath.Join(from, outputs.Dir, "cv.html")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, contents := range []string{"<p>v1</p>", "<p>v2</p>"} {
+		if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.Collect(t.Context(), "prj_test", from, "tsk_1", "CV"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink("/etc/passwd", filepath.Join(from, outputs.Dir, "secret.txt")); err != nil {
+		t.Fatal(err)
+	}
+	stub := &revisingConversations{dir: from, helperConversations: &helperConversations{conversationStub: &conversationStub{}},
+		listed: []conversations.Helper{{ID: "tsk_1", Kind: conversations.HelperTask, Kept: true, Done: true}}}
+	projects := &recordingProjectService{getByIDResult: project.Project{ID: "prj_test"}}
+	handler := NewWithWorkspaceRealWorkflowDeletionAndModels(projects, &recordingFeatureService{}, nil, nil, nil, nil, nil,
+		nil, nil, nil, nil, nil, stub, store)
+	serve := func(method, target string) *httptest.ResponseRecorder {
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, httptest.NewRequest(method, target, nil))
+		return recorder
+	}
+
+	var listed outputsResponse
+	if list := serve(http.MethodGet, "/api/v1/outputs/prj_test"); json.Unmarshal(list.Body.Bytes(), &listed) != nil ||
+		len(listed.Outputs) != 1 || listed.Outputs[0].Version != 2 || !listed.Outputs[0].Kept || listed.Outputs[0].Working {
+		t.Fatalf("list = %s", list.Body)
+	}
+	var versions outputVersionsResponse
+	if got := serve(http.MethodGet, "/api/v1/outputs/prj_test/cv.html/versions"); json.Unmarshal(got.Body.Bytes(), &versions) != nil ||
+		len(versions.Versions) != 2 || versions.Versions[0].Number != 2 {
+		t.Fatalf("versions = %s", got.Body)
+	}
+	if got := serve(http.MethodGet, "/api/v1/outputs/prj_test/cv.html/versions/1"); got.Body.String() != "<p>v1</p>" ||
+		!strings.HasPrefix(got.Header().Get("Content-Security-Policy"), "sandbox") {
+		t.Fatalf("version 1 = %d %s", got.Code, got.Body)
+	}
+	if got := serve(http.MethodGet, "/api/v1/outputs/prj_test/cv.html/versions/x"); got.Code != http.StatusNotFound {
+		t.Fatalf("version x = %d", got.Code)
+	}
+	if got := serve(http.MethodPost, "/api/v1/outputs/prj_test/cv.html/versions/1/restore"); got.Code != http.StatusOK {
+		t.Fatalf("restore = %d %s", got.Code, got.Body)
+	}
+	if got := serve(http.MethodGet, "/api/v1/outputs/prj_test/cv.html"); got.Body.String() != "<p>v1</p>" {
+		t.Fatalf("latest after restore = %s", got.Body)
+	}
+	if got := serve(http.MethodPost, "/api/v1/outputs/prj_test/cv.html/done"); got.Code != http.StatusNoContent ||
+		strings.Join(stub.done, ",") != "cv.html" {
+		t.Fatalf("done = %d %v", got.Code, stub.done)
+	}
+
+	// While the helper builds it: its files now, read-only and sandboxed.
+	if err := os.WriteFile(path, []byte("<p>v3 in progress</p>"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var live helperFilesResponse
+	if got := serve(http.MethodGet, "/api/v1/helper-files/prj_test/tsk_1"); json.Unmarshal(got.Body.Bytes(), &live) != nil ||
+		len(live.Files) != 1 || live.Files[0].Name != "cv.html" || strings.Contains(got.Body.String(), from) {
+		t.Fatalf("live = %s", got.Body)
+	}
+	if got := serve(http.MethodGet, "/api/v1/helper-files/prj_test/tsk_1/cv.html"); got.Body.String() != "<p>v3 in progress</p>" ||
+		!strings.HasPrefix(got.Header().Get("Content-Security-Policy"), "sandbox") {
+		t.Fatalf("live file = %d %s", got.Code, got.Body)
+	}
+	for _, target := range []string{"/api/v1/helper-files/prj_test/tsk_1/secret.txt", "/api/v1/helper-files/prj_test/tsk_1/..%2Fcv.html",
+		"/api/v1/helper-files/prj_test/tsk_2", "/api/v1/helper-files/prj_test/tsk_2/cv.html"} {
+		if got := serve(http.MethodGet, target); got.Code != http.StatusNotFound && got.Code != http.StatusBadRequest {
+			t.Errorf("%s = %d %s", target, got.Code, got.Body)
+		}
+	}
+	// A folder swapped for a link is not followed.
+	if err := os.RemoveAll(filepath.Join(from, outputs.Dir)); err != nil {
+		t.Fatal(err)
+	}
+	elsewhere := t.TempDir()
+	if err := os.WriteFile(filepath.Join(elsewhere, "cv.html"), []byte("outside"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(elsewhere, filepath.Join(from, outputs.Dir)); err != nil {
+		t.Fatal(err)
+	}
+	if got := serve(http.MethodGet, "/api/v1/helper-files/prj_test/tsk_1/cv.html"); got.Code != http.StatusNotFound {
+		t.Fatalf("a linked folder was served: %d %s", got.Code, got.Body)
+	}
+
+	if got := serve(http.MethodDelete, "/api/v1/outputs/prj_test/cv.html"); got.Code != http.StatusNoContent ||
+		strings.Join(stub.deleted, ",") != "tsk_1" {
+		t.Fatalf("delete = %d %v", got.Code, stub.deleted)
+	}
+}

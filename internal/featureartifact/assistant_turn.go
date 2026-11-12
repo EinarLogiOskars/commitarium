@@ -147,6 +147,11 @@ const (
 	// may search the web and writes files, which come back to the assistant
 	// with its summary.
 	AssistantDelegate AssistantActionType = "delegate"
+	// AssistantRevise sends the user's change to a file a general helper made
+	// back to that helper (H8): Helper names it, by its ID or the file's
+	// name, and Guidance is the change in the assistant's words. Like
+	// delegate, it is sent at once.
+	AssistantRevise AssistantActionType = "revise"
 	// AssistantUpdatePlan updates the vision being planned (planning mode):
 	// Description is the goal, and Decisions, OpenQuestions, PlanItems,
 	// StackPresets, and Frameworks the plan's other sections. Like research,
@@ -655,6 +660,10 @@ func (action AssistantAction) validate() error {
 		if action.Title == "" || len(action.Title) > MaxStepTextBytes ||
 			action.Description == "" || len(action.Description) > MaxGoalBytes {
 			return fmt.Errorf("delegate needs a short title and the brief in description")
+		}
+	case AssistantRevise:
+		if action.Helper == "" || len(action.Helper) > MaxStepTextBytes || action.Guidance == "" || len(action.Guidance) > MaxGoalBytes {
+			return fmt.Errorf("revise needs the helper or its file in helper, and the change in guidance")
 		}
 	case AssistantResearch:
 		if action.Title == "" || len(action.Title) > MaxStepTextBytes ||

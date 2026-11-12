@@ -36,6 +36,7 @@ RUN apt-get update && \
         curl \
         fontconfig \
         fonts-dejavu-core \
+        fonts-noto-color-emoji \
         git \
         jq \
         libasound2 \

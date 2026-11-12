@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import { renderToStaticMarkup } from "react-dom/server";
 import remarkGfm from "remark-gfm";
@@ -8,6 +8,7 @@ import {
   deleteOutput,
   listOutputs,
   openOutput,
+  openOutputBeside,
   printOutput,
   readOutput,
   saveOutput,
@@ -26,7 +27,9 @@ import {
   printable,
   sizeLabel,
 } from "./outputKinds";
-import { PdfPages, PdfPresenter, usePdf } from "./PdfView";
+import { type OutputRow, foldOutputs, imagesLabel, outputRows, shownOutputs } from "./panelTargets";
+import { ImagePresenter, PdfPages, PdfPresenter, usePdf } from "./PdfView";
+import { FileIcon } from "./FileIcon";
 
 // What Mayka's helpers make (HELPERS_PLAN.md): chips on the chat line that
 // hands them back, the Outputs card, and a viewer with Export PDF, Present
@@ -37,48 +40,70 @@ const POLL_MS = 15_000;
 const describe = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const SHOWN = 5;
 
-const ICON: Record<OutputKind, string> = {
-  markdown: "📄",
-  html: "🖥",
-  image: "🖼",
-  csv: "📊",
-  text: "📄",
-  pdf: "📕",
-  other: "📦",
-};
-
-/** A helper's files, as chips that open the viewer. */
-export function OutputChips({ owner, names }: { owner: string | null; names?: string[] }) {
+/** A helper's files, as chips that open the viewer: beside the chat when
+ * onOpen opens it there, else over the page. Many images fold into one chip
+ * that steps through them (foldOutputs). */
+export function OutputChips({
+  owner,
+  names,
+  onOpen,
+  onOpenImages,
+}: {
+  owner: string | null;
+  names?: string[];
+  onOpen?: (name: string) => void;
+  onOpenImages?: (images: string[]) => void;
+}) {
   const [open, setOpen] = useState<string | null>(null);
+  const [gallery, setGallery] = useState<string[] | null>(null);
   if (!owner || !names?.length) return null;
+  const { documents, images } = foldOutputs(names);
+  const chip = (key: string, icon: ReactNode, label: string, title: string, click: () => void) => (
+    <li key={key}>
+      <button className="attachment output-chip" title={title} onClick={click}>
+        <span className="attachment__icon" aria-hidden>
+          {icon}
+        </span>
+        <span className="attachment__name">{label}</span>
+      </button>
+    </li>
+  );
   return (
     <>
       <ul className="attachments attachments--sent outputs-chips">
-        {names.map((name) => (
-          <li key={name}>
-            <button
-              className="attachment output-chip"
-              title={`Open ${name}`}
-              onClick={() => setOpen(name)}
-            >
-              <span className="attachment__icon" aria-hidden>
-                {ICON[outputKind(name)]}
-              </span>
-              <span className="attachment__name">{name}</span>
-            </button>
-          </li>
-        ))}
+        {documents.map((name) =>
+          chip(name, <FileIcon name={name} />, name, `Open ${name}`, () =>
+            onOpen ? onOpen(name) : setOpen(name),
+          ),
+        )}
+        {images.length > 0 &&
+          chip(
+            "images",
+            <FileIcon kind="gallery" />,
+            imagesLabel(images),
+            "Step through them",
+            () => (onOpenImages ? onOpenImages(images) : setGallery(images)),
+          )}
       </ul>
       {open && <OutputViewer owner={owner} name={open} onClose={() => setOpen(null)} />}
+      {gallery && (
+        <Overlay title={imagesLabel(gallery)} onClose={() => setGallery(null)} wide>
+          <OutputGallery owner={owner} images={gallery} />
+        </Overlay>
+      )}
     </>
   );
 }
 
-/** The scope's outputs, newest first; shown only once there are any. */
+/** The scope's outputs, newest first; shown only once there are any. A
+ * helper's run of many files is one row that unfolds. A file opens beside
+ * the chat when one of its owner is showing, else over the page. */
 export function OutputsCard({ owner }: { owner: string }) {
   const [files, setFiles] = useState<OutputFile[]>([]);
   const [open, setOpen] = useState<string | null>(null);
+  const [gallery, setGallery] = useState<string[] | null>(null);
   const [showAll, setShowAll] = useState(false);
+  const [unfolded, setUnfolded] = useState<Set<string>>(new Set());
   const load = useCallback(() => {
     listOutputs(owner)
       .then((r) => setFiles(r.outputs ?? []))
@@ -95,37 +120,90 @@ export function OutputsCard({ owner }: { owner: string }) {
     };
   }, [load]);
   if (files.length === 0) return null;
-  const row = (file: OutputFile) => (
+  const rows = outputRows(files);
+  const shownCount = shownOutputs(files).length;
+  const fileRow = (file: OutputFile, nested = false) => (
     <li key={file.name}>
       <button
-        className="output-row"
+        className={`output-row ${nested ? "output-row--nested" : ""}`}
         title={file.title ? `${file.name}, for “${file.title}”` : file.name}
         onClick={() => {
           setShowAll(false);
-          setOpen(file.name);
+          if (!openOutputBeside(owner, file.name)) setOpen(file.name);
         }}
       >
-        <span aria-hidden>{ICON[outputKind(file.name)]}</span>
+        <FileIcon name={file.name} />
         <span className="output-row__name">{file.name}</span>
+        {(file.version ?? 1) > 1 && (
+          <span className="muted output-row__version">v{file.version}</span>
+        )}
         <span className="muted output-row__when">{madeWhen(file.made_at)}</span>
       </button>
     </li>
   );
+  const row = (entry: OutputRow) => {
+    if (entry.kind === "file") return fileRow(entry.file);
+    const isOpen = unfolded.has(entry.key);
+    const { documents, images } = foldOutputs(entry.files.map((file) => file.name));
+    return (
+      <li key={entry.key}>
+        <button
+          className="output-row"
+          aria-expanded={isOpen}
+          onClick={() =>
+            setUnfolded((was) => {
+              const next = new Set(was);
+              if (isOpen) next.delete(entry.key);
+              else next.add(entry.key);
+              return next;
+            })
+          }
+        >
+          <span aria-hidden>{isOpen ? "▾" : "▸"}</span>
+          <span className="output-row__name">{entry.title}</span>
+          <span className="muted output-row__version">{entry.files.length} files</span>
+          <span className="muted output-row__when">{madeWhen(entry.madeAt)}</span>
+        </button>
+        {isOpen && (
+          <ul className="output-rows output-rows--nested">
+            {documents.map((name) => {
+              const file = entry.files.find((f) => f.name === name);
+              return file ? fileRow(file, true) : null;
+            })}
+            {images.length > 0 && (
+              <li>
+                <button
+                  className="output-row output-row--nested"
+                  onClick={() => {
+                    setShowAll(false);
+                    if (!openOutputBeside(owner, undefined, images)) setGallery(images);
+                  }}
+                >
+                  <FileIcon kind="gallery" />
+                  <span className="output-row__name">{imagesLabel(images)}</span>
+                </button>
+              </li>
+            )}
+          </ul>
+        )}
+      </li>
+    );
+  };
   return (
     <section className="shell-card">
       <div className="shell-card__top">
         <h2 className="shell-card__head">Outputs</h2>
-        <span className="muted shell-card__meta">{files.length}</span>
+        <span className="muted shell-card__meta">{shownCount}</span>
       </div>
-      <ul className="output-rows">{files.slice(0, SHOWN).map(row)}</ul>
-      {files.length > SHOWN && (
+      <ul className="output-rows">{rows.slice(0, SHOWN).map(row)}</ul>
+      {rows.length > SHOWN && (
         <button className="shell-card__link" onClick={() => setShowAll(true)}>
-          All ({files.length})
+          All ({shownCount})
         </button>
       )}
       {showAll && (
         <Overlay title="Outputs" onClose={() => setShowAll(false)}>
-          <ul className="output-rows">{files.map(row)}</ul>
+          <ul className="output-rows">{rows.map(row)}</ul>
         </Overlay>
       )}
       {open && (
@@ -139,7 +217,98 @@ export function OutputsCard({ owner }: { owner: string }) {
           }}
         />
       )}
+      {gallery && (
+        <Overlay title={imagesLabel(gallery)} onClose={() => setGallery(null)} wide>
+          <OutputGallery owner={owner} images={gallery} />
+        </Overlay>
+      )}
     </section>
+  );
+}
+
+/** Images stepped through one at a time, in order: a test's screenshots.
+ * Each loads as an <img> from a blob of its own type, so nothing in it runs. */
+export function OutputGallery({ owner, images }: { owner: string; images: string[] }) {
+  const [index, setIndex] = useState(0);
+  const [presenting, setPresenting] = useState(false);
+  const [shown, setShown] = useState<{ url: string; blob: Blob } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const name = images[Math.min(index, images.length - 1)];
+  useEffect(() => {
+    let gone = false;
+    let url: string | undefined;
+    readOutput(owner, name)
+      .then((blob) => {
+        url = URL.createObjectURL(new Blob([blob], { type: imageType(name) }));
+        if (!gone) {
+          setShown({ url, blob });
+          setError(null);
+        }
+      })
+      .catch((e) => !gone && setError(describe(e)));
+    return () => {
+      gone = true;
+      if (url) setTimeout(() => URL.revokeObjectURL(url as string), 1000);
+    };
+  }, [owner, name]);
+  const step = useCallback(
+    (by: number) => setIndex((at) => Math.max(0, Math.min(images.length - 1, at + by))),
+    [images.length],
+  );
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.target instanceof HTMLElement && e.target.closest("input, textarea")) return;
+      if (e.key === "ArrowRight") step(1);
+      if (e.key === "ArrowLeft") step(-1);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [step]);
+  return (
+    <>
+      <div className="output-viewer__actions">
+        <button onClick={() => step(-1)} disabled={index === 0} aria-label="Previous">
+          ←
+        </button>
+        <span className="muted">
+          {index + 1} of {images.length}
+        </span>
+        <button onClick={() => step(1)} disabled={index >= images.length - 1} aria-label="Next">
+          →
+        </button>
+        <span className="output-gallery__name" title={name}>
+          {name}
+        </span>
+        <button className="primary" onClick={() => setPresenting(true)}>
+          Present
+        </button>
+        <button
+          onClick={() =>
+            shown && void saveOutput(name, shown.blob).catch((e) => setError(describe(e)))
+          }
+          disabled={!shown}
+        >
+          Save…
+        </button>
+        {error && <span className="chat-view__error">{error}</span>}
+      </div>
+      <div className="output-viewer__body">
+        {shown ? (
+          <img className="output-viewer__image" src={shown.url} alt={name} />
+        ) : (
+          !error && <p className="muted">Loading…</p>
+        )}
+      </div>
+      {presenting && (
+        <ImagePresenter
+          url={shown?.url ?? null}
+          index={index}
+          count={images.length}
+          onStep={setIndex}
+          onLeave={() => setPresenting(false)}
+        />
+      )}
+    </>
   );
 }
 
@@ -158,7 +327,8 @@ interface Loaded {
   url?: string;
 }
 
-/** One output, shown as the app can, with Export PDF, Save, and Delete. */
+/** One output over the page, as the app can show it, with Export PDF,
+ * Present, Open, Save and Delete; where there is no chat beside it. */
 export function OutputViewer({
   owner,
   name,
@@ -170,6 +340,41 @@ export function OutputViewer({
   onClose: () => void;
   onDeleted?: () => void;
 }) {
+  const load = useCallback(() => readOutput(owner, name), [owner, name]);
+  return (
+    <Overlay title={name} onClose={onClose} wide>
+      <OutputView
+        owner={owner}
+        name={name}
+        load={load}
+        shown={name}
+        onDeleted={onDeleted ?? onClose}
+      />
+    </Overlay>
+  );
+}
+
+/** A file as the app can show it, with its actions: the viewer of the
+ * overlay and of the panel beside the chat. load reads it; it reads again
+ * whenever shown changes, keeping what it showed until the new one is in.
+ * Without onDeleted it cannot be deleted (a helper's file being built). */
+export function OutputView({
+  owner,
+  name,
+  load,
+  shown,
+  file: known,
+  onDeleted,
+  actions,
+}: {
+  owner: string;
+  name: string;
+  load: () => Promise<Blob>;
+  shown: string;
+  file?: OutputFile | null;
+  onDeleted?: () => void;
+  actions?: ReactNode;
+}) {
   const kind = outputKind(name);
   const [loaded, setLoaded] = useState<Loaded | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -178,7 +383,7 @@ export function OutputViewer({
   useEffect(() => {
     let gone = false;
     let url: string | undefined;
-    readOutput(owner, name)
+    load()
       .then(async (blob) => {
         const text = ["markdown", "html", "csv", "text"].includes(kind)
           ? await blob.text()
@@ -187,18 +392,23 @@ export function OutputViewer({
         // own type: its scripts never run.
         if (kind === "image")
           url = URL.createObjectURL(new Blob([blob], { type: imageType(name) }));
-        if (!gone) setLoaded({ blob, text, url });
+        if (!gone) {
+          setLoaded({ blob, text, url });
+          setError(null);
+        }
       })
       .catch((e) => !gone && setError(describe(e)));
     return () => {
       gone = true;
-      if (url) URL.revokeObjectURL(url);
+      if (url) setTimeout(() => URL.revokeObjectURL(url as string), 1000);
     };
-  }, [owner, name, kind]);
+    // shown says when to read it again.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shown, kind, name]);
   // Who made a file the app cannot show, and when, for its details.
-  const [file, setFile] = useState<OutputFile | null>(null);
+  const [listed, setFile] = useState<OutputFile | null>(null);
   useEffect(() => {
-    if (kind !== "other") return;
+    if (kind !== "other" || known !== undefined) return;
     let gone = false;
     listOutputs(owner)
       .then((r) => !gone && setFile(r.outputs?.find((f) => f.name === name) ?? null))
@@ -206,7 +416,8 @@ export function OutputViewer({
     return () => {
       gone = true;
     };
-  }, [owner, name, kind]);
+  }, [owner, name, kind, known]);
+  const file = known !== undefined ? known : listed;
   const [presenting, setPresenting] = useState(false);
 
   const act = (work: () => Promise<unknown>) => {
@@ -228,11 +439,11 @@ export function OutputViewer({
       if (!(await confirmAction(`Delete ${name}? This cannot be undone.`, "Delete"))) return;
       await deleteOutput(owner, name);
       window.dispatchEvent(new Event(OUTPUTS_CHANGED));
-      (onDeleted ?? onClose)();
+      onDeleted?.();
     });
 
   return (
-    <Overlay title={name} onClose={onClose} wide>
+    <>
       <div className="output-viewer__actions">
         {printable(kind) && (
           <button className="primary" onClick={exportPdf} disabled={!loaded || busy}>
@@ -252,9 +463,12 @@ export function OutputViewer({
         <button onClick={save} disabled={!loaded || busy}>
           Save…
         </button>
-        <button className="ghost" onClick={remove} disabled={busy}>
-          Delete
-        </button>
+        {onDeleted && (
+          <button className="ghost" onClick={remove} disabled={busy}>
+            Delete
+          </button>
+        )}
+        {actions}
         {error && <span className="chat-view__error">{error}</span>}
       </div>
       <div className="output-viewer__body">
@@ -271,7 +485,7 @@ export function OutputViewer({
           />
         )}
       </div>
-    </Overlay>
+    </>
   );
 }
 

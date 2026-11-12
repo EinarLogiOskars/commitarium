@@ -16,6 +16,24 @@ export function outputKind(name: string): OutputKind {
   return KINDS.find(([pattern]) => pattern.test(name))?.[1] ?? "other";
 }
 
+/** Whether name is the page a PDF among names was made from: deck.html
+ * beside deck.pdf. Commitarium keeps it for later changes and shows the
+ * PDF (outputs.go has the same rule). */
+export function isSourceOf(name: string, names: string[]): boolean {
+  if (!/\.html?$/i.test(name)) return false;
+  return pdfOf(name, names) !== null;
+}
+
+/** The PDF among names made from the page name, if there is one. */
+export function pdfOf(name: string, names: string[]): string | null {
+  const want = `${name.replace(/\.html?$/i, "")}.pdf`.toLowerCase();
+  return names.find((other) => other.toLowerCase() === want) ?? null;
+}
+
+/** names without the pages their PDFs were made from. */
+export const withoutSources = (names: string[]): string[] =>
+  names.filter((name) => !isSourceOf(name, names));
+
 /** Whether Export PDF applies: a page the app renders, Markdown or HTML. A
  * PDF is saved as it is. */
 export const printable = (kind: OutputKind) => kind === "markdown" || kind === "html";

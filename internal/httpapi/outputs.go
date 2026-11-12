@@ -6,8 +6,10 @@ import (
 	"log"
 	"mime"
 	"net/http"
+	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/EinarLogiOskars/commitarium/internal/conversations"
@@ -21,10 +23,40 @@ type OutputService interface {
 	Path(ctx context.Context, owner, name string) (string, error)
 	Delete(ctx context.Context, owner, name string) error
 	DeleteProject(ctx context.Context, projectID string) error
+	// Each output's versions (H8): listed newest first, read one by one, and
+	// restored as the latest.
+	Versions(ctx context.Context, owner, name string) ([]outputs.Version, error)
+	VersionPath(ctx context.Context, owner, name string, number int) (string, error)
+	Restore(ctx context.Context, owner, name string, number int) (outputs.File, error)
+}
+
+// outputWork is what working on a file together (H8) needs of the
+// assistant: ending a helper's work on its files, and where a helper's files
+// are while it builds them.
+type outputWork interface {
+	OutputDone(ctx context.Context, scope, name string) error
+	OutputDeleted(ctx context.Context, scope, helperID string) error
+	HelperFiles(ctx context.Context, scope, helperID string) (string, error)
+}
+
+// outputFile is an output as the app lists it, with whether its helper is
+// at work on it now and whether it still keeps its session and directory.
+type outputFile struct {
+	outputs.File
+	Working bool `json:"working,omitempty"`
+	Kept    bool `json:"kept,omitempty"`
 }
 
 type outputsResponse struct {
-	Outputs []outputs.File `json:"outputs"`
+	Outputs []outputFile `json:"outputs"`
+}
+
+type outputVersionsResponse struct {
+	Versions []outputs.Version `json:"versions"`
+}
+
+type helperFilesResponse struct {
+	Files []outputs.Pending `json:"files"`
 }
 
 // An owner is a project, or the top-level chats ("commitarium"), as with
@@ -33,6 +65,13 @@ func (api *API) registerOutputRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/outputs/{owner}", api.listOutputsHandler)
 	mux.HandleFunc("GET /api/v1/outputs/{owner}/{name}", api.readOutputHandler)
 	mux.HandleFunc("DELETE /api/v1/outputs/{owner}/{name}", api.deleteOutputHandler)
+	mux.HandleFunc("GET /api/v1/outputs/{owner}/{name}/versions", api.outputVersionsHandler)
+	mux.HandleFunc("GET /api/v1/outputs/{owner}/{name}/versions/{version}", api.readOutputVersionHandler)
+	mux.HandleFunc("POST /api/v1/outputs/{owner}/{name}/versions/{version}/restore", api.restoreOutputHandler)
+	mux.HandleFunc("POST /api/v1/outputs/{owner}/{name}/done", api.outputDoneHandler)
+	// What a helper has in its outputs/ folder while it works, read-only.
+	mux.HandleFunc("GET /api/v1/helper-files/{owner}/{helper}", api.listHelperFilesHandler)
+	mux.HandleFunc("GET /api/v1/helper-files/{owner}/{helper}/{name}", api.readHelperFileHandler)
 }
 
 func (api *API) listOutputsHandler(w http.ResponseWriter, r *http.Request) {
@@ -45,10 +84,23 @@ func (api *API) listOutputsHandler(w http.ResponseWriter, r *http.Request) {
 		writeOutputError(w, owner, err)
 		return
 	}
-	if files == nil {
-		files = []outputs.File{}
+	helpers := map[string]conversations.Helper{}
+	if lister, ok := api.conversations.(helperLister); ok {
+		if listed, err := lister.HelpersOf(r.Context(), owner); err == nil {
+			for _, helper := range listed {
+				helpers[helper.ID] = helper
+			}
+		}
 	}
-	writeJSON(w, http.StatusOK, outputsResponse{Outputs: files}, "outputs")
+	listed := make([]outputFile, 0, len(files))
+	for _, file := range files {
+		entry := outputFile{File: file}
+		if helper, ok := helpers[file.Helper]; ok && helper.Kind == conversations.HelperTask && !helper.TestApp {
+			entry.Working, entry.Kept = !helper.Done, helper.Kept
+		}
+		listed = append(listed, entry)
+	}
+	writeJSON(w, http.StatusOK, outputsResponse{Outputs: listed}, "outputs")
 }
 
 // outputTypes are the kinds the app shows itself, and shownTypes those
@@ -77,9 +129,7 @@ var shownTypes = map[string]bool{
 	".htm": true, ".pdf": true, ".png": true, ".jpg": true, ".jpeg": true, ".gif": true, ".webp": true, ".svg": true,
 }
 
-// readOutputHandler answers an output itself. A helper's HTML or SVG never
-// runs in the coordinator's origin: everything is served under a sandbox
-// policy, and the app shows HTML in a sandboxed frame and SVG as an image.
+// readOutputHandler answers an output's latest version.
 func (api *API) readOutputHandler(w http.ResponseWriter, r *http.Request) {
 	owner, name := r.PathValue("owner"), r.PathValue("name")
 	if !api.attachmentOwner(w, r, owner) {
@@ -90,6 +140,158 @@ func (api *API) readOutputHandler(w http.ResponseWriter, r *http.Request) {
 		writeOutputError(w, owner, err)
 		return
 	}
+	serveOutput(w, r, name, path)
+}
+
+func (api *API) outputVersionsHandler(w http.ResponseWriter, r *http.Request) {
+	owner, name := r.PathValue("owner"), r.PathValue("name")
+	if !api.attachmentOwner(w, r, owner) {
+		return
+	}
+	versions, err := api.outputs.Versions(r.Context(), owner, name)
+	if err != nil {
+		writeOutputError(w, owner, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, outputVersionsResponse{Versions: versions}, "output versions")
+}
+
+func (api *API) readOutputVersionHandler(w http.ResponseWriter, r *http.Request) {
+	owner, name := r.PathValue("owner"), r.PathValue("name")
+	if !api.attachmentOwner(w, r, owner) {
+		return
+	}
+	number, err := strconv.Atoi(r.PathValue("version"))
+	if err != nil {
+		writeOutputError(w, owner, outputs.ErrNotFound)
+		return
+	}
+	path, err := api.outputs.VersionPath(r.Context(), owner, name, number)
+	if err != nil {
+		writeOutputError(w, owner, err)
+		return
+	}
+	serveOutput(w, r, name, path)
+}
+
+// restoreOutputHandler makes an older version the latest, as a new version.
+func (api *API) restoreOutputHandler(w http.ResponseWriter, r *http.Request) {
+	owner, name := r.PathValue("owner"), r.PathValue("name")
+	if !api.attachmentOwner(w, r, owner) {
+		return
+	}
+	number, err := strconv.Atoi(r.PathValue("version"))
+	if err != nil {
+		writeOutputError(w, owner, outputs.ErrNotFound)
+		return
+	}
+	file, err := api.outputs.Restore(r.Context(), owner, name, number)
+	if err != nil {
+		writeOutputError(w, owner, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, file, "output")
+}
+
+// outputDoneHandler ends the work on an output the user marked Done: the
+// helper that made it lets go of its directory and session.
+func (api *API) outputDoneHandler(w http.ResponseWriter, r *http.Request) {
+	owner, name := r.PathValue("owner"), r.PathValue("name")
+	if !api.attachmentOwner(w, r, owner) {
+		return
+	}
+	work, ok := api.conversations.(outputWork)
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable, "assistant_unavailable", "the assistant is unavailable")
+		return
+	}
+	if err := work.OutputDone(r.Context(), owner, name); err != nil {
+		if errors.Is(err, conversations.ErrNotFound) {
+			writeOutputError(w, owner, outputs.ErrNotFound)
+			return
+		}
+		writeConversationError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// listHelperFilesHandler lists what a helper has in its outputs/ folder
+// now, so the app shows a file as it is built.
+func (api *API) listHelperFilesHandler(w http.ResponseWriter, r *http.Request) {
+	owner := r.PathValue("owner")
+	directory, ok := api.helperFiles(w, r, owner)
+	if !ok {
+		return
+	}
+	files := outputs.Live(directory)
+	if files == nil {
+		files = []outputs.Pending{}
+	}
+	writeJSON(w, http.StatusOK, helperFilesResponse{Files: files}, "helper files")
+}
+
+// readHelperFileHandler serves one file of a helper's outputs/ folder as
+// it is now, as an output is served, and never through a link.
+func (api *API) readHelperFileHandler(w http.ResponseWriter, r *http.Request) {
+	owner, name := r.PathValue("owner"), r.PathValue("name")
+	directory, ok := api.helperFiles(w, r, owner)
+	if !ok {
+		return
+	}
+	if !outputs.ValidName(name) {
+		writeOutputError(w, owner, outputs.ErrNotFound)
+		return
+	}
+	for _, file := range outputs.Live(directory) {
+		if file.Name != name {
+			continue
+		}
+		// The helper may change its folder at any time: serve only an ordinary
+		// file whose path has no link in it, inside its folder.
+		resolved, err := filepath.EvalSymlinks(file.Path)
+		inside := filepath.Join(directory, outputs.Dir) + string(filepath.Separator)
+		if info, statErr := os.Lstat(file.Path); err != nil || statErr != nil || resolved != file.Path ||
+			!strings.HasPrefix(resolved, inside) || !info.Mode().IsRegular() {
+			break
+		}
+		serveOutput(w, r, name, file.Path)
+		return
+	}
+	writeOutputError(w, owner, outputs.ErrNotFound)
+}
+
+// helperFiles answers a helper's directory while it is kept.
+func (api *API) helperFiles(w http.ResponseWriter, r *http.Request, owner string) (string, bool) {
+	if !api.attachmentOwner(w, r, owner) {
+		return "", false
+	}
+	work, ok := api.conversations.(outputWork)
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable, "assistant_unavailable", "the assistant is unavailable")
+		return "", false
+	}
+	directory, err := work.HelperFiles(r.Context(), owner, r.PathValue("helper"))
+	if err != nil {
+		if errors.Is(err, conversations.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "helper_not_found", "the helper has no files now")
+			return "", false
+		}
+		writeConversationError(w, err)
+		return "", false
+	}
+	resolved, err := filepath.EvalSymlinks(directory)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "helper_not_found", "the helper has no files now")
+		return "", false
+	}
+	return resolved, true
+}
+
+// serveOutput answers a file a helper made. A helper's HTML or SVG never
+// runs in the coordinator's origin: everything is served under a sandbox
+// policy, and the app shows HTML in a sandboxed frame and SVG as an image.
+func serveOutput(w http.ResponseWriter, r *http.Request, name, path string) {
 	extension := strings.ToLower(filepath.Ext(name))
 	kind, ok := outputTypes[extension]
 	if !ok {
@@ -101,17 +303,33 @@ func (api *API) readOutputHandler(w http.ResponseWriter, r *http.Request) {
 	if !shownTypes[extension] {
 		w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": name}))
 	}
+	w.Header().Set("Cache-Control", "no-store")
 	http.ServeFile(w, r, path)
 }
 
+// deleteOutputHandler removes an output with its versions; once the last of
+// a helper's files is gone, the helper lets go of its directory and session.
 func (api *API) deleteOutputHandler(w http.ResponseWriter, r *http.Request) {
 	owner, name := r.PathValue("owner"), r.PathValue("name")
 	if !api.attachmentOwner(w, r, owner) {
 		return
 	}
+	helper := ""
+	if files, err := api.outputs.List(r.Context(), owner); err == nil {
+		for _, file := range files {
+			if file.Name == name {
+				helper = file.Helper
+			}
+		}
+	}
 	if err := api.outputs.Delete(r.Context(), owner, name); err != nil {
 		writeOutputError(w, owner, err)
 		return
+	}
+	if work, ok := api.conversations.(outputWork); ok && helper != "" {
+		if err := work.OutputDeleted(r.Context(), owner, helper); err != nil {
+			log.Printf("end the helper of %s's deleted output: %v", owner, err)
+		}
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

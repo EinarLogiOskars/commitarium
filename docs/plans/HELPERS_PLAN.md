@@ -350,6 +350,44 @@ To check before building: the worker resumes a finished consultant attempt's
 provider session for a new turn (Mayka's chats already do this), and keeping
 helper directories does not collide with the test-preview cleanup (H6).
 
+Built as (2026-11-09):
+
+- **Resume works.** The worker resumes any finished attempt's provider
+  session for a new attempt in the same session (`AttemptModeResume`, as
+  Mayka's chats do), whatever its role or access. A helper's next turn is
+  `<session>:turn:N` in its kept directory, writable, with the web, and short
+  instructions: the change, and edit the files in `outputs/` rather than
+  start over. If the resumed turn fails (its provider session gone with a
+  worker rebuilt, say), a fresh helper takes it over once, by itself.
+- **`revise`** (helper: its ID or a file's name; guidance: the change) is
+  sent at once like `delegate`. While the helper works it waits and starts
+  as soon as the turn ends; once the helper's session or directory is gone it
+  continues in a fresh helper (`<id>-2`, `-3` …) given the latest versions,
+  the first brief and the changes since. Its ID stays the same, so its files
+  stay the same outputs. Tests of the app are not revised (a new test is).
+- **Versions.** The store keeps the latest in `files/` and older ones in
+  `versions/<name>/<n>`. A helper's later file of the same name (its own
+  name, even when it was stored as `-2`) is the next version; unchanged
+  files make none. Restore makes an old version the latest as a new version.
+  Older versions count toward the 200-file limit and go first.
+- **Ends.** Done (button and route), deleting the chat, deleting the last of
+  a helper's files, 14 days without a revision (checked on the follow loop),
+  and deleting the project remove its directories and forget its session;
+  Done while it works ends it once the turn ends. The versions stay. Deleting
+  one of several files keeps the helper, which still has the others.
+- **Side panel** on the chat page (the drawer and places without a chat keep
+  the overlay; one viewer component serves both). It polls the outputs list
+  and, while the helper works, its folder (`/api/v1/helper-files/…`,
+  read-only, sandboxed like outputs, no links followed), every 4 seconds.
+  It folds over the chat's right side below 1100px and can be hidden to a
+  strip.
+- **Many files fold** (asked after testing rc.2 with a 21-file test): past
+  four, documents stay chips and images become one "20 screenshots" chip
+  that opens a gallery; the Outputs card shows such a run as one row that
+  unfolds.
+- The provider session itself is not deleted on the worker (there is no
+  call for it); it is forgotten, so nothing resumes it.
+
 ### H4: release 0.14.0
 
 The version bump, then an rc on the test VPS, then the release.

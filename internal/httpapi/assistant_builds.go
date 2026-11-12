@@ -334,6 +334,30 @@ func (api *API) applyDelegate(
 	return fmt.Sprintf("A helper is working on “%s”.", action.Title), &helper, true
 }
 
+// reviser sends the user's change to a file back to the helper that made it
+// (H8).
+type reviser interface {
+	ReviseTask(ctx context.Context, scope, chat, target, change string) (string, error)
+}
+
+// applyRevise resumes the helper that made a file on the change the
+// assistant relays, or has it make the change once its turn ends.
+func (api *API) applyRevise(
+	w http.ResponseWriter, r *http.Request, scope string, action conversations.Action,
+) (string, bool) {
+	starter, ok := api.conversations.(reviser)
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable, "assistant_unavailable", "a helper needs real agents")
+		return "", false
+	}
+	result, err := starter.ReviseTask(r.Context(), scope, action.Chat, action.Helper, action.Guidance)
+	if err != nil {
+		writeError(w, http.StatusConflict, "revise_not_sent", "the change could not be sent: "+err.Error())
+		return "", false
+	}
+	return result, true
+}
+
 // helperPath is the route of a helper's session.
 func helperPath(projectID string, helper conversations.Helper) string {
 	base := "/api/v1/projects/" + url.PathEscape(projectID)

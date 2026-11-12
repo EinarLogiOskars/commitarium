@@ -17,6 +17,7 @@ import {
   uploadAttachment,
 } from "../api/attachments";
 import { Overlay } from "./Overlay";
+import { FileIcon } from "./FileIcon";
 
 // Attaching files to a message, in every composer: Cmd+V pastes a screenshot
 // from the clipboard, files drop on the composer, and the composer's + picks
@@ -174,7 +175,7 @@ export function AttachmentChips({
               </button>
             ) : (
               <span className="attachment__icon" aria-hidden>
-                📄
+                <FileIcon name={item.name} />
               </span>
             )}
             <span className="attachment__name">{item.name}</span>
@@ -211,7 +212,7 @@ export function SentAttachments({ owner, names }: { owner: string | null; names?
           ) : (
             <li key={name} className="attachment" title={name}>
               <span className="attachment__icon" aria-hidden>
-                📄
+                <FileIcon name={name} />
               </span>
               <span className="attachment__name">{name}</span>
             </li>
@@ -265,7 +266,7 @@ function SentImage({
       ) : (
         <>
           <span className="attachment__icon" aria-hidden>
-            🖼
+            <FileIcon kind="image" />
           </span>
           <span className="attachment__name">{missing ? `${name} (removed)` : name}</span>
         </>
