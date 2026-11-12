@@ -563,6 +563,17 @@ func (api *API) approveConversationActionHandler(w http.ResponseWriter, r *http.
 	case featureartifact.AssistantUpdatePlan:
 		result, ok = api.applyUpdatePlan(w, r, scope, action)
 	case featureartifact.AssistantBuildPlan:
+		if api.planBuilt(r.Context(), scope) {
+			// Built from the plan page or another chat's card first: the
+			// card settles rather than fail.
+			conversation, err := api.conversations.Settle(r.Context(), scope, actionID, conversations.AlreadyBuilt)
+			if err != nil {
+				writeConversationError(w, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, conversation, "assistant conversation")
+			return
+		}
 		result, ok = api.applyBuildPlan(w, r, scope)
 	case featureartifact.AssistantStartPlanning:
 		result, ok = api.applyStartPlanning(w, r, scope, action)

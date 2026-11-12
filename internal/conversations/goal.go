@@ -268,7 +268,7 @@ func priorityItems(plan featureartifact.VisionPlan, level int) []GoalItem {
 // its replacement with the close; the replacement is then created in the
 // same look.
 func (service *Service) autopilotActions(ctx context.Context, scope string) ([]Action, error) {
-	look := autopilotLook{builds: service.assistantBuilds(ctx, scope)}
+	look := autopilotLook{builds: service.assistantBuilds(ctx, scope), planBuilt: service.planBuilt(ctx, scope)}
 	look.ours, look.titles, look.states, look.made = service.workOrders(ctx, scope)
 	chats, err := service.chatsOf(scope)
 	if err != nil {
@@ -289,6 +289,7 @@ func (service *Service) autopilotActions(ctx context.Context, scope string) ([]A
 // one chat's actions claim, close, or start counts for the next.
 type autopilotLook struct {
 	builds           bool
+	planBuilt        bool
 	ours, made       map[string]bool
 	titles           map[string]string
 	states           map[string]feature.State
@@ -314,7 +315,7 @@ func (service *Service) autopilotChat(ctx context.Context, scope, chat string, l
 	// every mode.
 	settled := stored.settleStale(titles, states, func(workOrderID string) bool {
 		return service.config.Blocked != nil && service.config.Blocked(ctx, workOrderID)
-	}, service.config.Blocked != nil, now)
+	}, service.config.Blocked != nil, look.planBuilt, now)
 	answers := slices.ContainsFunc(stored.Actions, func(action Action) bool {
 		return sentAtOnce(action.Type) && action.Status == ActionProposed && !action.AutoTried
 	})

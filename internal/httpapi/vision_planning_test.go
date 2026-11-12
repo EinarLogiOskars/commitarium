@@ -273,3 +273,29 @@ func TestDiscardingPlanningPutsTheVisionBack(t *testing.T) {
 		t.Fatalf("removed: status %d: %s", recorder.Code, recorder.Body.String())
 	}
 }
+
+// builtPlan is a vision whose plan was already built.
+type builtPlan struct{ *planningVisions }
+
+func (stub *builtPlan) Get(_ context.Context, projectID string) (vision.Vision, error) {
+	return vision.Vision{ProjectID: projectID, Planning: &vision.Planning{Status: vision.PlanningBuilt}}, nil
+}
+
+// A Build it card pressed after the plan was built, from the plan page or
+// another chat, settles instead of building again or failing.
+func TestABuildItCardForABuiltPlanSettles(t *testing.T) {
+	stub := planningStub(featureartifact.AssistantAction{Type: featureartifact.AssistantBuildPlan, Reason: "The user said go"})
+	visions := &builtPlan{planningVisions: &planningVisions{}}
+	projects := &recordingProjectService{getByIDResult: project.Project{ID: "prj_shop", Name: "Shop sync"}}
+	handler := NewWithWorkspaceRealWorkflowDeletionAndModels(projects, &recordingFeatureService{},
+		nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, stub, testAgents(), visions)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost,
+		"/api/v1/assistant/conversations/prj_shop/actions/act_1/approve", strings.NewReader(`{}`)))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", recorder.Code, recorder.Body.String())
+	}
+	if visions.finished != 0 || len(stub.launched) != 0 || !stub.settled || stub.resolvedResult != conversations.AlreadyBuilt {
+		t.Fatalf("finished=%d launched=%v settled=%v %q", visions.finished, stub.launched, stub.settled, stub.resolvedResult)
+	}
+}

@@ -7,6 +7,7 @@ import (
 
 	"github.com/EinarLogiOskars/commitarium/internal/feature"
 	"github.com/EinarLogiOskars/commitarium/internal/featureartifact"
+	"github.com/EinarLogiOskars/commitarium/internal/vision"
 )
 
 // Stale cards: a proposed action whose work order already got where the
@@ -37,15 +38,27 @@ func StaleResult(action featureartifact.AssistantAction, state feature.State, bl
 	return ""
 }
 
+// AlreadyBuilt is the result of a Build it card whose plan was built
+// another way, from the plan page or another chat's card.
+const AlreadyBuilt = "Already built from the plan."
+
 // settleStale settles each proposed action that is no longer needed, and
 // reports whether it settled any. A queued start the user did themselves is
-// noted, since autopilot told the user it waited.
+// noted, since autopilot told the user it waited. planBuilt settles a Build
+// it card whose plan was already built.
 func (stored *record) settleStale(
-	titles map[string]string, states map[string]feature.State, blocked func(string) bool, canTell bool, at time.Time,
+	titles map[string]string, states map[string]feature.State, blocked func(string) bool, canTell, planBuilt bool,
+	at time.Time,
 ) bool {
 	settled := false
 	for index := range stored.Actions {
 		action := &stored.Actions[index]
+		if action.Status == ActionProposed && planBuilt && action.Type == featureartifact.AssistantBuildPlan {
+			action.LeftForUser = false
+			action.Status, action.Settled, action.Result, action.UpdatedAt = ActionApplied, true, AlreadyBuilt, at
+			settled = true
+			continue
+		}
 		if action.Status == ActionProposed && stored.Goal.covers(*action) {
 			action.LeftForUser = false
 			action.Status, action.Settled, action.Result, action.UpdatedAt = ActionApplied, true,
@@ -111,6 +124,16 @@ func (service *Service) Settle(ctx context.Context, scope, actionID, result stri
 		return stored.Conversation, service.write(stored)
 	}
 	return Conversation{}, ErrNotFound
+}
+
+// planBuilt reports whether the project's plan was built: Build it, from
+// any card or the plan page, already handed it to autopilot.
+func (service *Service) planBuilt(ctx context.Context, scope string) bool {
+	if service.config.Visions == nil {
+		return false
+	}
+	stored, err := service.config.Visions.Get(ctx, scope)
+	return err == nil && stored.Planning != nil && stored.Planning.Status == vision.PlanningBuilt
 }
 
 // settleIfStale settles an action that is no longer needed, as its work
