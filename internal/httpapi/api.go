@@ -301,6 +301,7 @@ type API struct {
 	installs           InstallService
 	documents          DocumentService
 	outputs            OutputService
+	testAccounts       TestAccountService
 	// now is the API's clock; nil is time.Now.
 	now func() time.Time
 	// mux serves the API's own routes, for actions that reuse them.
@@ -420,11 +421,14 @@ func newAPI(
 	var projectUsage ProjectUsageService
 	var documentService DocumentService
 	var outputService OutputService
+	var testAccountService TestAccountService
 	for _, extra := range extras {
 		if typed, ok := extra.(ProjectUsageService); ok {
 			projectUsage = typed
 		}
 		switch typed := extra.(type) {
+		case TestAccountService:
+			testAccountService = typed
 		case OutputService:
 			outputService = typed
 		case DocumentService:
@@ -493,6 +497,7 @@ func newAPI(
 		installs:           installService,
 		documents:          documentService,
 		outputs:            outputService,
+		testAccounts:       testAccountService,
 	}
 	api.artifacts, _ = workflow.(FeatureArtifactService)
 	api.projectImporter, _ = projects.(ProjectImporter)
@@ -511,6 +516,9 @@ func newAPI(
 	}
 	if outputService != nil {
 		api.registerOutputRoutes(mux)
+	}
+	if testAccountService != nil {
+		api.registerTestAccountRoutes(mux)
 	}
 	if marketplaceService != nil && installService != nil {
 		api.registerMarketplaceAppRoutes(mux)

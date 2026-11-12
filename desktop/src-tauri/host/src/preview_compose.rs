@@ -113,6 +113,10 @@ pub(crate) struct PreparedCompose {
 /// preview opens.
 const PREVIEW_DECLARATION: &str = "x-commitarium-preview";
 
+/// Where every preview container finds the project's test logins
+/// (HELPERS_PLAN.md, H3), named by `COMMITARIUM_TEST_ACCOUNTS`.
+pub(crate) const TEST_ACCOUNTS_TARGET: &str = "/run/commitarium/test-accounts.json";
+
 pub(crate) fn project_name(project_id: &str) -> Result<String, String> {
     if project_id.is_empty()
         || project_id.len() > 80
@@ -154,10 +158,13 @@ pub(crate) fn find_compose_file(checkout: &Path) -> Result<PathBuf, String> {
     )
 }
 
+/// `test_accounts` is the host file of the preview's test logins, mounted
+/// read-only into every container; deployments and checks pass none.
 pub(crate) fn normalize_and_rewrite(
     checkout: &Path,
     project_id: &str,
     open: Option<&OpenTarget>,
+    test_accounts: Option<&Path>,
 ) -> Result<PreparedCompose, String> {
     let compose_file = find_compose_file(checkout)?;
     validate_raw_compose(&compose_file)?;
@@ -182,7 +189,7 @@ pub(crate) fn normalize_and_rewrite(
     }
     let model: Value = serde_json::from_slice(&output.stdout)
         .map_err(|e| format!("decode normalized project Compose file: {e}"))?;
-    validate_and_rewrite_with(checkout, project_id, open, model)
+    validate_and_rewrite_with(checkout, project_id, open, test_accounts, model)
 }
 
 #[cfg(test)]
@@ -192,7 +199,7 @@ pub(crate) fn validate_and_rewrite(
     open: &OpenTarget,
     model: Value,
 ) -> Result<PreparedCompose, String> {
-    validate_and_rewrite_with(checkout, project_id, Some(open), model)
+    validate_and_rewrite_with(checkout, project_id, Some(open), None, model)
 }
 
 /// Validates and rewrites a normalized Compose model. Without an open target,
@@ -202,6 +209,7 @@ pub(crate) fn validate_and_rewrite_with(
     checkout: &Path,
     project_id: &str,
     open: Option<&OpenTarget>,
+    test_accounts: Option<&Path>,
     mut model: Value,
 ) -> Result<PreparedCompose, String> {
     let checkout = checkout
@@ -259,6 +267,9 @@ pub(crate) fn validate_and_rewrite_with(
         }
         rewrite_labels(service, &compose_project)?;
         mark_preview_environment(service)?;
+        if let Some(test_accounts) = test_accounts {
+            mount_test_accounts(service, test_accounts)?;
+        }
         service.insert("security_opt".into(), json!(["no-new-privileges:true"]));
         service.insert("cpus".into(), json!(2.0));
         service.insert("mem_limit".into(), json!("4g"));
@@ -659,6 +670,41 @@ fn mark_preview_environment(service: &mut Map<String, Value>) -> Result<(), Stri
     Ok(())
 }
 
+/// Mounts the preview's test logins read-only at `TEST_ACCOUNTS_TARGET` and
+/// names them in `COMMITARIUM_TEST_ACCOUNTS`, after the app's own mounts
+/// were validated. A mount of the app's at the same place gives way.
+fn mount_test_accounts(service: &mut Map<String, Value>, source: &Path) -> Result<(), String> {
+    let source = source
+        .to_str()
+        .ok_or_else(|| "the test accounts file has an unusable path".to_string())?;
+    let volumes = service.entry("volumes").or_insert_with(|| json!([]));
+    let volumes = volumes
+        .as_array_mut()
+        .ok_or_else(|| "service volumes must be an array".to_string())?;
+    volumes.retain(|mount| {
+        mount.get("target").and_then(Value::as_str) != Some(TEST_ACCOUNTS_TARGET)
+            && !mount
+                .as_str()
+                .is_some_and(|spec| spec.split(':').nth(1) == Some(TEST_ACCOUNTS_TARGET))
+    });
+    volumes.push(json!({
+        "type": "bind",
+        "source": source,
+        "target": TEST_ACCOUNTS_TARGET,
+        "read_only": true,
+        "bind": {"create_host_path": false},
+    }));
+    service
+        .get_mut("environment")
+        .and_then(Value::as_object_mut)
+        .ok_or_else(|| "service environment must be an object".to_string())?
+        .insert(
+            "COMMITARIUM_TEST_ACCOUNTS".into(),
+            Value::String(TEST_ACCOUNTS_TARGET.into()),
+        );
+    Ok(())
+}
+
 fn rewrite_labels(service: &mut Map<String, Value>, project: &str) -> Result<(), String> {
     let labels = service.entry("labels").or_insert_with(|| json!({}));
     if labels.is_array() {
@@ -1014,6 +1060,73 @@ mod tests {
         assert!(prepared.model["networks"]["default"]
             .get("labels")
             .is_none());
+    }
+
+    #[test]
+    fn every_container_gets_the_test_accounts_read_only() {
+        let root = tempfile::tempdir().unwrap();
+        let accounts = root.path().join("test-accounts.json");
+        let mut stack = full_stack(root.path());
+        // The app's own mount at the same place gives way.
+        stack["services"]["db"]["volumes"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"type": "volume", "source": "data", "target": TEST_ACCOUNTS_TARGET}));
+        let prepared = validate_and_rewrite_with(
+            root.path(),
+            "prj_test",
+            Some(&OpenTarget {
+                service: "web".into(),
+                port: 5173,
+            }),
+            Some(&accounts),
+            stack,
+        )
+        .unwrap();
+        for name in ["web", "api", "db"] {
+            let service = &prepared.model["services"][name];
+            assert_eq!(
+                service["environment"]["COMMITARIUM_TEST_ACCOUNTS"],
+                TEST_ACCOUNTS_TARGET
+            );
+            assert_eq!(service["environment"]["COMMITARIUM_PREVIEW"], "1");
+            let mounts: Vec<&Value> = service["volumes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|mount| mount["target"] == TEST_ACCOUNTS_TARGET)
+                .collect();
+            assert_eq!(mounts.len(), 1, "{name}");
+            assert_eq!(mounts[0]["type"], "bind");
+            assert_eq!(mounts[0]["source"], accounts.to_str().unwrap());
+            assert_eq!(mounts[0]["read_only"], true);
+            assert_eq!(mounts[0]["bind"]["create_host_path"], false);
+        }
+        // The app's other mounts stay.
+        assert_eq!(
+            prepared.model["services"]["db"]["volumes"][0]["target"],
+            "/var/lib/postgresql/data"
+        );
+    }
+
+    #[test]
+    fn without_test_accounts_nothing_is_mounted() {
+        let root = tempfile::tempdir().unwrap();
+        let prepared = validate_and_rewrite(
+            root.path(),
+            "prj_test",
+            &OpenTarget {
+                service: "web".into(),
+                port: 5173,
+            },
+            full_stack(root.path()),
+        )
+        .unwrap();
+        let api = &prepared.model["services"]["api"];
+        assert!(api["environment"]
+            .get("COMMITARIUM_TEST_ACCOUNTS")
+            .is_none());
+        assert!(api.get("volumes").is_none());
     }
 
     #[test]

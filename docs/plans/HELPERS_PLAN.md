@@ -1,8 +1,10 @@
 # Mayka's Helpers and Output Files: Implementation Plan (0.14.0)
 
 **Status:** scope agreed 2026-11-07 (release order after 0.12.1); plan written
-2026-11-08; H1 and H2 built; test accounts (H3) moved to the next release. Builds on ADR-035 (the assistant starts helpers) and
-the research helper.
+2026-11-08; H1 and H2 built. On 2026-11-09 the user brought test accounts,
+the preview bar and testing helpers back into 0.14.0 (H3, H5, H6), built
+overnight and tested live together before the release. Builds on ADR-035
+(the assistant starts helpers) and the research helper.
 
 Mayka can brief a helper for any task, not just the four fixed ones (vision,
 brief, stack, research). A helper researches and then writes a report or a
@@ -95,21 +97,65 @@ Each step is a PR on its own, reviewed before it merges.
 - Agents card: the helper role's label, and the card in loose chats while a
   helper works.
 
-### H3: project test accounts (moved to the next release)
+### H3: project test accounts
 
-Checked 2026-11-08: a helper cannot reach the preview yet. The preview
+Agreed 2026-11-09. The preview is a test copy with test data; the accounts
+are test logins for the user's own app, never real ones.
+
+- **Commitarium makes them, the app seeds them.** Each project keeps a list
+  of test logins (label, username, password, role, note), stored by the
+  coordinator per project next to its secrets, never in the repository or
+  the chat. Commitarium generates the username (`<label>@commitarium.test`)
+  and a strong password; the user can add, change a role, copy a password,
+  or remove one in the project's **Settings → Test accounts**, which says
+  they work only in the preview.
+- **Seeded idempotently on every preview start.** The preview gets the list
+  as a read-only file (`COMMITARIUM_TEST_ACCOUNTS=/run/commitarium/test-accounts.json`,
+  alongside `COMMITARIUM_PREVIEW=1`). A work order Mayka proposes once has the
+  app read it at start, in the preview only: create missing accounts, set
+  their password and role, and remove `@commitarium.test` accounts no longer
+  listed; nothing else in its data changes. The preview's data volume is
+  kept, so data the user or a helper made survives; after Reset data or in
+  a fresh session preview the accounts come back by themselves.
+- **Mayka** sees the labels, roles and notes, never passwords, and knows
+  whether the app seeds them yet.
+- **Built as:** `internal/testaccounts`, one 0600 file per project under
+  the coordinator's credentials directory (left out of backups, like the
+  linked repositories' tokens); routes under
+  `/api/v1/projects/{id}/test-accounts` (list without passwords, add,
+  change role or note, remove, copy one password, and `preview`, the file
+  itself). The host reads `preview` when it starts a preview (never a
+  deployment or a preview check) and writes it into the preview's own
+  directory, removed when the preview stops; a preview the coordinator
+  cannot answer for starts without the file, so the app leaves its logins
+  alone.
+
+### H5: the preview bar and two ways to open the real app
+
+- Every preview window shows a bar Commitarium draws (the app cannot hide
+  it): "Preview: a test copy with test data", with **Open in Commitarium**
+  (the real app's window) and **Open in browser** (its local address, or its
+  domain or Tailscale address on a server). The button the user used last
+  for that app comes first. The buttons show only once the app is installed
+  or deployed; before that the bar says so.
+- The Apps page cards get the same two buttons, remembered the same way.
+- Mayka calls a preview a test copy and points to the real app the same way.
+
+### H6: helpers that test the app
+
+Checked 2026-11-08: a helper cannot reach the preview today. The preview
 publishes its port on the computer's 127.0.0.1 in a Docker network of its
-own, and a helper runs in a worker container, where 127.0.0.1 is the
-container itself. The worker image also has Chromium's libraries but not
-Chromium. Test accounts without a way to use them would be hollow, so the
-user decided to ship 0.14.0 without them. They come in the next release,
-together with real testing:
-- the host connects a helper's worker to the preview's network (or gives
-  it a reachable address) for the length of the helper;
-- Chromium goes into the worker image, or is installed on demand;
-- the project's test accounts (in Settings, never in the chat) are given to
-  the helper as a file, and it reports what it found with screenshots in
-  its outputs.
+own; a helper runs in a worker container, where 127.0.0.1 is the container,
+and the worker image has Chromium's libraries but not Chromium.
+
+- Mayka's `delegate` may ask to test the app. The helper then gets a
+  throwaway session preview of the project's main branch (seeded, so the
+  test accounts work), a way to reach it for the length of the helper and
+  nothing else, a browser, and the accounts as `test-accounts.json` in its
+  directory. It reports with screenshots in its outputs; the preview is
+  removed when it finishes.
+- If reaching the preview safely turns out bigger than this, H6 stops at a
+  clear point and the rest is written down, not forced.
 
 ### H4: release 0.14.0
 

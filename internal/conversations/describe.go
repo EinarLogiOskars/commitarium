@@ -16,6 +16,7 @@ import (
 	"github.com/EinarLogiOskars/commitarium/internal/featureartifact"
 	"github.com/EinarLogiOskars/commitarium/internal/modelguide"
 	"github.com/EinarLogiOskars/commitarium/internal/project"
+	"github.com/EinarLogiOskars/commitarium/internal/testaccounts"
 	"github.com/EinarLogiOskars/commitarium/internal/toolchain"
 	"github.com/EinarLogiOskars/commitarium/internal/vision"
 )
@@ -31,6 +32,12 @@ type VisionReader interface {
 // DocumentLister lists the files attached to a project.
 type DocumentLister interface {
 	List(ctx context.Context, projectID string) ([]documents.Document, error)
+}
+
+// TestAccountLister lists a project's test logins for its preview, never
+// their passwords.
+type TestAccountLister interface {
+	List(ctx context.Context, projectID string) ([]testaccounts.Summary, error)
 }
 
 type ToolchainReader interface {
@@ -72,7 +79,9 @@ type StateDescriber struct {
 	Blockers BlockerReader
 	// Documents, when set, lists the files attached to the project.
 	Documents DocumentLister
-	Now       func() time.Time
+	// TestAccounts, when set, lists the project's test logins.
+	TestAccounts TestAccountLister
+	Now          func() time.Time
 }
 
 // maxWorkOrders bounds the work orders listed for a project.
@@ -248,6 +257,12 @@ func (describer StateDescriber) writeProject(ctx context.Context, builder *strin
 		}
 	}
 
+	if describer.TestAccounts != nil {
+		if accounts, err := describer.TestAccounts.List(ctx, current.ID); err == nil {
+			writeTestAccounts(builder, accounts)
+		}
+	}
+
 	var features []feature.Feature
 	if describer.Features != nil {
 		features, _ = describer.Features.List(ctx, current.ID)
@@ -301,6 +316,27 @@ func (describer StateDescriber) writeProject(ctx context.Context, builder *strin
 	}
 	if listed == 0 {
 		builder.WriteString("- none yet\n")
+	}
+}
+
+// writeTestAccounts names the project's test logins without their
+// passwords, which never reach the chat.
+func writeTestAccounts(builder *strings.Builder, accounts []testaccounts.Summary) {
+	if len(accounts) == 0 {
+		builder.WriteString("Test accounts: none (the user adds them in Settings → Test accounts).\n")
+		return
+	}
+	builder.WriteString("Test accounts, logins for the app's preview only, which reads them from the file named by " +
+		"COMMITARIUM_TEST_ACCOUNTS (whether the app seeds them yet shows in its code); passwords stay in Settings:\n")
+	for _, account := range accounts {
+		line := fmt.Sprintf("- %s: %s", account.Label, account.Username)
+		if account.Role != "" {
+			line += ", role " + account.Role
+		}
+		if account.Note != "" {
+			line += " — " + clip(account.Note, 200)
+		}
+		builder.WriteString(line + "\n")
 	}
 }
 

@@ -3409,6 +3409,64 @@ button.danger:not(.ghost) {
   white-space: nowrap;
 }
 
+/* Project test accounts (Settings). */
+.test-accounts__where {
+  margin-top: 0;
+}
+.test-accounts__list {
+  list-style: none;
+  margin: 12px 0 4px;
+  padding: 0;
+  border-top: 1px solid var(--border);
+}
+.test-accounts__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+}
+.test-accounts__who {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 180px;
+  flex: 1 1 180px;
+}
+.test-accounts__label {
+  font-weight: var(--weight-medium);
+}
+.test-accounts__username {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.test-accounts__fields {
+  display: flex;
+  gap: 8px;
+  flex: 2 1 280px;
+}
+.test-accounts__fields input {
+  min-width: 0;
+  flex: 1;
+}
+.test-accounts__fields input:first-child {
+  flex: 0 1 120px;
+}
+.test-accounts__actions {
+  display: flex;
+  gap: 4px;
+  flex: none;
+}
+.test-accounts__add {
+  align-items: flex-end;
+}
+.test-accounts__add input {
+  min-width: 160px;
+}
+
 /* Merge-gate validation panel. */
 .validation-panel {
   border: 1px solid var(--border);

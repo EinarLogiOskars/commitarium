@@ -533,6 +533,19 @@ pub async fn start_preview(
         }
     };
 
+    // The test logins go to previews only, never to a deployment, the
+    // real app (HELPERS_PLAN.md, H3).
+    let test_accounts = match &pinned {
+        Some(_) => None,
+        None => match crate::test_accounts::fetch(&client, &project_id).await {
+            Ok(accounts) => Some(accounts),
+            Err(error) => {
+                eprintln!("[preview] starting without test accounts: {error}");
+                None
+            }
+        },
+    };
+
     let owned = manager.clone();
     stop_project(&events, owned.clone(), &key).await?;
     let status = PreviewStatus {
@@ -560,6 +573,7 @@ pub async fn start_preview(
                 source,
                 run,
                 compose_id,
+                test_accounts,
             )
         })
         .await;
@@ -834,6 +848,7 @@ async fn cleanup_preview_data(
     .map_err(|_| "preview data cleanup task stopped unexpectedly".to_string())?
 }
 
+#[allow(clippy::too_many_arguments)]
 fn launch_preview(
     events: Events,
     manager: PreviewManager,
@@ -842,6 +857,7 @@ fn launch_preview(
     preview_source: PreviewSource,
     run: Option<RunConfig>,
     compose_id: String,
+    test_accounts: Option<crate::test_accounts::TestAccounts>,
 ) -> Option<RunOpen> {
     // `project_id` here is the preview's registry key; `root` holds the
     // generated Compose files and is removed on stop. A session's working
@@ -868,15 +884,43 @@ fn launch_preview(
         service: run.open.service.clone(),
         port: run.open.port,
     });
-    let prepared =
-        match preview_compose::normalize_and_rewrite(&source, &compose_id, configured.as_ref()) {
-            Ok(prepared) => prepared,
-            Err(error) => {
-                fail_preview(&events, &manager, &project_id, generation, &error, None);
-                remove_source(&root);
-                return None;
-            }
-        };
+    // The test logins live in the preview's directory, removed with it.
+    let accounts_file = match test_accounts
+        .as_ref()
+        .map(|accounts| crate::test_accounts::write(accounts, &root))
+        .transpose()
+    {
+        Ok(path) => path,
+        Err(error) => {
+            fail_preview(&events, &manager, &project_id, generation, &error, None);
+            remove_source(&root);
+            return None;
+        }
+    };
+    if let Some(accounts) = &test_accounts {
+        manager.append_log(
+            &project_id,
+            generation,
+            format!(
+                "[preview] The app gets {} test account(s) at {}.",
+                accounts.len(),
+                preview_compose::TEST_ACCOUNTS_TARGET
+            ),
+        );
+    }
+    let prepared = match preview_compose::normalize_and_rewrite(
+        &source,
+        &compose_id,
+        configured.as_ref(),
+        accounts_file.as_deref(),
+    ) {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            fail_preview(&events, &manager, &project_id, generation, &error, None);
+            remove_source(&root);
+            return None;
+        }
+    };
     let compose_file = root.join("preview.compose.json");
     if let Err(error) = preview_compose::write_rewritten(&prepared, &compose_file) {
         fail_preview(&events, &manager, &project_id, generation, &error, None);
