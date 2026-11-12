@@ -37,6 +37,7 @@ import (
 	"github.com/EinarLogiOskars/commitarium/internal/projectenvironment"
 	"github.com/EinarLogiOskars/commitarium/internal/release"
 	"github.com/EinarLogiOskars/commitarium/internal/testaccounts"
+	"github.com/EinarLogiOskars/commitarium/internal/testpreviews"
 	"github.com/EinarLogiOskars/commitarium/internal/toolchain"
 	"github.com/EinarLogiOskars/commitarium/internal/validation"
 	"github.com/EinarLogiOskars/commitarium/internal/vision"
@@ -284,6 +285,17 @@ func run(ctx context.Context, coordinatorConfig config) error {
 	if err != nil {
 		return fmt.Errorf("set up test accounts: %w", err)
 	}
+	// The throwaway previews helpers test the app in (HELPERS_PLAN.md, H6)
+	// are kept beside the database, which no worker mounts: the host acts on
+	// them, so a worker must not be able to write them.
+	testPreviewsPath, err := filepath.Abs(filepath.Join(filepath.Dir(coordinatorConfig.databasePath), "test-previews.json"))
+	if err != nil {
+		return fmt.Errorf("set up test previews: %w", err)
+	}
+	testPreviewStore, err := testpreviews.NewStore(testPreviewsPath)
+	if err != nil {
+		return fmt.Errorf("set up test previews: %w", err)
+	}
 	// A work order that is a slice of a written plan finds the plan in its
 	// checkouts (PLAN_MODE_PLAN.md PM6); the visions come later, with the
 	// real agents.
@@ -468,6 +480,7 @@ func run(ctx context.Context, coordinatorConfig config) error {
 			Visions: visions, Features: featureService,
 			Guide: modelGuide, Models: models, ChatUsage: executionStore,
 			SignIns: agentSignIns, Attachments: documentStore, Outputs: outputStore,
+			TestPreviews: testPreviewStore, TestAccounts: testAccountStore,
 			// A run at its round limit is the assistant's to recover too.
 			Blocked: func(ctx context.Context, workOrderID string) bool {
 				run, blocked := blockedRun(ctx, executionService, workOrderID)
@@ -684,7 +697,8 @@ func run(ctx context.Context, coordinatorConfig config) error {
 	if projectConversations != nil {
 		projectDeletionService.WithConversations(projectConversations)
 	}
-	projectDeletionService.WithDocuments(documentStore).WithOutputs(outputStore).WithTestAccounts(testAccountStore)
+	projectDeletionService.WithDocuments(documentStore).WithOutputs(outputStore).WithTestAccounts(testAccountStore).
+		WithTestPreviews(testPreviewStore)
 	var marketplaceService httpapi.MarketplaceService
 	var releaseService httpapi.ReleaseService
 	var installService httpapi.InstallService
@@ -747,6 +761,7 @@ func run(ctx context.Context, coordinatorConfig config) error {
 		documentStore,
 		outputStore,
 		testAccountStore,
+		testPreviewStore,
 	)
 
 	if assistantWatcher != nil {

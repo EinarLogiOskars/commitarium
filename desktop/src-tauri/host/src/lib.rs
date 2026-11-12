@@ -34,3 +34,4 @@ pub mod service;
 pub mod sign_in;
 pub mod tailscale;
 pub mod test_accounts;
+pub mod test_preview;

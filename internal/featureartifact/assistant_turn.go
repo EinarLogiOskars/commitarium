@@ -284,6 +284,10 @@ type AssistantAction struct {
 	// had to guess: the app then applies it at once, without asking again,
 	// unless it removes, stops, hides or moves something, or turns Homelab.
 	Asked bool `json:"asked,omitempty"`
+	// TestApp, for delegate, has the helper test the project's app: it gets
+	// a throwaway preview of the default branch with the test accounts, a
+	// headless browser, and reports with screenshots (HELPERS_PLAN.md, H6).
+	TestApp bool `json:"test_app,omitempty"`
 }
 
 // AppAddress is an address under one of the server's domains: Name is empty
@@ -505,6 +509,9 @@ func (action AssistantAction) validate() error {
 	case "", "full", "reviewed_plan", "planned", "quick":
 	default:
 		return fmt.Errorf("steps must be full, planned, or quick")
+	}
+	if action.TestApp && action.Type != AssistantDelegate {
+		return fmt.Errorf("test_app is only for delegate")
 	}
 	switch action.Type {
 	case AssistantCreateWorkOrder:

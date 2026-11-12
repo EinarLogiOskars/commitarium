@@ -51,6 +51,11 @@ type Helper struct {
 	// Chat is the chat whose action started it, where its questions and
 	// results go (ADR-038).
 	Chat string `json:"chat,omitempty"`
+	// TestApp marks a general helper that tests the app: it starts, on
+	// Model with Brief, once its test preview runs (testapp.go).
+	TestApp bool   `json:"test_app,omitempty"`
+	Model   string `json:"model,omitempty"`
+	Brief   string `json:"brief,omitempty"`
 }
 
 type HelperStatus string

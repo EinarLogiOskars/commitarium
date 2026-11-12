@@ -83,6 +83,15 @@ identity and the audit trail shows which account wrote and which approved.
 Lead and reviewer of one agent share the account's provider state but run as
 separate sessions.
 
+A helper that tests the app (HELPERS_PLAN.md, H6) is the one time a worker
+joins another network: for the length of that helper, the host connects the
+agent's worker to the network of a throwaway preview of the project's default
+branch, and disconnects it before removing the preview. While connected,
+every turn on that worker can reach the preview's containers, which hold test
+data only, and those containers can reach the worker's listening ports, whose
+API asks for its token. The worker gets no Docker access for this; the host
+picks the network and the container from validated IDs and Compose labels.
+
 A turn's role token reaches git through a credential helper that reads the
 token file only when git asks, so it is not in the agent's environment, and
 the worker redacts known token values from activity (PR #77). Agents still

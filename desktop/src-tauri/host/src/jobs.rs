@@ -13,7 +13,7 @@ use serde::Deserialize;
 use crate::preview::{coordinator_json, coordinator_url};
 use crate::runtime::block_on;
 use crate::server::Shared;
-use crate::{environment, preview_check};
+use crate::{environment, preview_check, test_preview};
 
 const POLL_EVERY: Duration = Duration::from_secs(10);
 
@@ -79,6 +79,11 @@ async fn start_pending(client: &reqwest::Client, shared: &Arc<Shared>, started: 
             thread::spawn(move || block_on(environment::run_validation_job(job_id)));
         }
     }
+
+    // Helpers' test previews (HELPERS_PLAN.md, H6) start once leftovers of
+    // an earlier run are gone, like preview checks.
+    let waiting = shared.clone();
+    test_preview::look(client, move || waiting.wait_for_sweep()).await;
 
     let Ok(checks) =
         pending::<PreviewChecks>(client, "/api/v1/preview-checks/pending", "preview checks").await

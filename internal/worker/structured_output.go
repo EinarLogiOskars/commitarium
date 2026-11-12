@@ -845,16 +845,17 @@ func assistantTurnSchema(planning bool) map[string]any {
 			"name":                 map[string]any{"type": "string", "description": "For deploy_app with a domain: the address's name under it, such as notes; empty is the domain itself, for a website. Otherwise empty."},
 			"aliases": map[string]any{"type": "array", "description": "For deploy_app with a domain: the app's extra addresses, which reach the same app, each a domain and a name (empty for the domain itself). Otherwise empty.",
 				"items": objectSchema(map[string]any{"domain": text, "name": text}, []string{"domain", "name"})},
-			"app":    map[string]any{"type": "string", "description": "For set_app_access: the app's main address, such as notes.example.com, as the server's facts list it; empty is this project's app. Otherwise empty."},
-			"groups": map[string]any{"type": "array", "items": text, "description": "For set_app_access with company: the groups that may open it; empty is anyone at the company. Otherwise empty."},
-			"asked":  map[string]any{"type": "boolean", "description": "For deploy_app, add_domain, install_authentik, set_app_access, set_apps_page and list_on_apps_page: true when the user's latest message asked for exactly this change and you guessed nothing it needs (such as an address, a domain or groups they did not give and the facts do not settle); the app then applies it at once. Otherwise false."},
+			"app":      map[string]any{"type": "string", "description": "For set_app_access: the app's main address, such as notes.example.com, as the server's facts list it; empty is this project's app. Otherwise empty."},
+			"groups":   map[string]any{"type": "array", "items": text, "description": "For set_app_access with company: the groups that may open it; empty is anyone at the company. Otherwise empty."},
+			"test_app": map[string]any{"type": "boolean", "description": "For delegate: true has the helper test the project's running app in a throwaway test copy of its main branch, with its test accounts and a browser; it reports with screenshots. Otherwise false."},
+			"asked":    map[string]any{"type": "boolean", "description": "For deploy_app, add_domain, install_authentik, set_app_access, set_apps_page and list_on_apps_page: true when the user's latest message asked for exactly this change and you guessed nothing it needs (such as an address, a domain or groups they did not give and the facts do not settle); the app then applies it at once. Otherwise false."},
 		},
 		[]string{
 			"type", "reason", "title", "description", "vision_item_id", "steps",
 			"lead_agent", "lead_model", "reviewer_agent", "reviewer_model",
 			"lead_plan_model", "lead_plan_effort", "lead_effort", "reviewer_plan_model", "reviewer_plan_effort", "reviewer_effort",
 			"work_order_id", "when", "how", "priority", "guidance", "after", "helper", "brief", "app_brief", "assumptions",
-			"attachments", "domain", "name", "aliases", "app", "groups", "asked",
+			"attachments", "domain", "name", "aliases", "app", "groups", "asked", "test_app",
 		},
 	)
 	properties := map[string]any{

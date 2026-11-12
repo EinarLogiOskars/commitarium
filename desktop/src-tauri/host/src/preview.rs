@@ -217,7 +217,7 @@ pub(crate) struct ProjectHandoff {
 pub(crate) struct ProjectHandoffSource {
     pub(crate) repository: Repository,
     default_branch: String,
-    head_commit_id: String,
+    pub(crate) head_commit_id: String,
 }
 
 #[derive(Clone, Deserialize)]
@@ -716,7 +716,11 @@ async fn prune_sessions(
     let session_prefix = format!("{PREVIEW_TEMP_PREFIX}{project_id}-");
     crate::runtime::spawn_blocking(move || {
         for project in compose_projects() {
-            if !project.starts_with(&session_prefix) || keep.contains(&project) {
+            // A helper's test preview goes when its record ends.
+            if !project.starts_with(&session_prefix)
+                || keep.contains(&project)
+                || crate::test_preview::is_test_project(&project)
+            {
                 continue;
             }
             for kind in ["container", "network", "volume", "image"] {
@@ -1543,7 +1547,15 @@ pub fn sweep_leftovers() {
         .filter(|name| name.starts_with(PREVIEW_TEMP_PREFIX))
         .map(str::to_string)
         .collect::<HashSet<_>>();
+    // A test preview may still hold a helper's worker on its network, and
+    // keeps nothing (HELPERS_PLAN.md, H6); its record says it failed.
+    for project in crate::test_preview::test_projects() {
+        crate::test_preview::tear_down(&project);
+    }
     for project in projects {
+        if crate::test_preview::is_test_project(&project) {
+            continue;
+        }
         remove_labeled_resources("container", &project);
         remove_labeled_resources("network", &project);
         // A preview check keeps no data.

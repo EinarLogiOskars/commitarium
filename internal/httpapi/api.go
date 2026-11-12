@@ -302,6 +302,7 @@ type API struct {
 	documents          DocumentService
 	outputs            OutputService
 	testAccounts       TestAccountService
+	testPreviews       TestPreviewService
 	// now is the API's clock; nil is time.Now.
 	now func() time.Time
 	// mux serves the API's own routes, for actions that reuse them.
@@ -422,11 +423,14 @@ func newAPI(
 	var documentService DocumentService
 	var outputService OutputService
 	var testAccountService TestAccountService
+	var testPreviewService TestPreviewService
 	for _, extra := range extras {
 		if typed, ok := extra.(ProjectUsageService); ok {
 			projectUsage = typed
 		}
 		switch typed := extra.(type) {
+		case TestPreviewService:
+			testPreviewService = typed
 		case TestAccountService:
 			testAccountService = typed
 		case OutputService:
@@ -498,6 +502,7 @@ func newAPI(
 		documents:          documentService,
 		outputs:            outputService,
 		testAccounts:       testAccountService,
+		testPreviews:       testPreviewService,
 	}
 	api.artifacts, _ = workflow.(FeatureArtifactService)
 	api.projectImporter, _ = projects.(ProjectImporter)
@@ -516,6 +521,9 @@ func newAPI(
 	}
 	if outputService != nil {
 		api.registerOutputRoutes(mux)
+	}
+	if testPreviewService != nil {
+		api.registerTestPreviewRoutes(mux)
 	}
 	if testAccountService != nil {
 		api.registerTestAccountRoutes(mux)

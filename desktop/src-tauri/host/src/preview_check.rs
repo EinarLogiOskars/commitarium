@@ -296,7 +296,7 @@ fn check_source(project_id: &str, root: &Path, open: Option<RunOpen>) -> (bool, 
 
 /// Why a check failed after its compose file was accepted.
 #[derive(Debug, PartialEq)]
-struct StartFailure {
+pub(crate) struct StartFailure {
     /// The build and start output, for a failure before the containers ran.
     output: String,
     reason: String,
@@ -304,6 +304,11 @@ struct StartFailure {
 }
 
 impl StartFailure {
+    /// Why it failed, in a line.
+    pub(crate) fn reason(self) -> String {
+        self.reason
+    }
+
     /// A failure while building and creating the containers is a build
     /// failure unless a container already failed: a dependency that exited
     /// or turned unhealthy also stops `docker compose up`.
@@ -326,7 +331,7 @@ impl StartFailure {
     }
 }
 
-fn start_and_watch(
+pub(crate) fn start_and_watch(
     runtime: &ComposeRuntime,
     ports: &[preview_compose::PublishedPort],
     open: &RunOpen,

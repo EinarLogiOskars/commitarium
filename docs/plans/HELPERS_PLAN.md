@@ -3,7 +3,8 @@
 **Status:** scope agreed 2026-11-07 (release order after 0.12.1); plan written
 2026-11-08; H1 and H2 built. On 2026-11-09 the user brought test accounts,
 the preview bar and testing helpers back into 0.14.0 (H3, H5, H6), built
-overnight and tested live together before the release. Builds on ADR-035
+overnight and tested live together before the release; H6 built in full,
+not yet tested live. Builds on ADR-035
 (the assistant starts helpers) and the research helper.
 
 Mayka can brief a helper for any task, not just the four fixed ones (vision,
@@ -156,6 +157,100 @@ and the worker image has Chromium's libraries but not Chromium.
   removed when it finishes.
 - If reaching the preview safely turns out bigger than this, H6 stops at a
   clear point and the rest is written down, not forced.
+
+**Built as** (2026-11-09, overnight, not yet tested live):
+
+- **Mayka asks** with `test_app` on `delegate` (validated: delegate only;
+  StartTask refuses it outside a project). The prompt says when: trying the
+  app as a user would, once its preview works, on what is merged.
+- **A test preview is a record the host acts on**, like a preview check,
+  because only the host runs Docker. `internal/testpreviews` keeps them in
+  one 0600 file beside the coordinator's database (no worker mounts it):
+  pending → starting (host claimed) → ready (address) or failed (reason) →
+  ending → gone once the host says it removed it. At most 2 at once; any
+  older than 3 hours ends by itself; deleting the project ends its own.
+  Routes for the host: `GET /api/v1/test-previews`, `POST
+  /api/v1/test-previews/{id}/claim|ready|failed|removed`.
+- **The helper waits, then starts.** `StartTask` with test_app only asks for
+  the test preview and keeps the brief and model on the helper. Following
+  it, the coordinator starts its one attempt once the preview is ready,
+  writing `test-accounts.json` into its directory and the address, the
+  login file and how to drive the browser into its brief. A preview that
+  fails ends the helper before it starts, with the host's reason, for
+  Mayka. When the attempt ends, however it ends, the test preview ends and
+  the directory (logins included) goes.
+- **The host** (`test_preview.rs`, polled with the other jobs every 10 s)
+  claims a pending one; fetches the stack, the handoff and the test
+  accounts; starts the default branch's head in a compose project of its
+  own (`commitarium-preview-<project>-tsk_<id>`, validated and rewritten
+  like any preview, test accounts mounted); waits as a preview check does;
+  connects the helper's agent worker (`agent-<id>-worker` of the stack) to
+  the open service's own network; checks with `curl` from the worker that
+  it answers; and reports `http://<the service's IP there>:<port>` (the
+  coordinator accepts only http, a private IPv4 address and a port). An IP
+  rather than a name, so no alias collides with the stack's names, and
+  dev servers that check the Host header accept it.
+- **Reach mechanism and what it opens.** `docker network connect` of the
+  worker to that network, undone with `docker network disconnect --force`
+  of every container on it that is not the test preview's own, before its
+  containers, networks, volumes, images and sources are removed. Works the
+  same on Docker Desktop and Linux (checked on Docker Desktop 29.8: no
+  reach before connect, HTTP 200 after, the network cannot be removed
+  until the worker is disconnected, and the teardown does that; an
+  ignored live test covers it). While connected:
+  - the worker reaches every container of the throwaway preview (the app
+    and its database), on any port. They hold test data only;
+  - the worker is shared by every turn on that agent, so other work orders
+    and helpers on it could reach the preview too. They already see every
+    project's checkouts under `/workspaces`, so no project boundary moves;
+  - the preview's containers (agent-written project code) can reach the
+    worker's listening ports on that network: the worker API, which wants
+    its bearer token, and anything an agent serves on 0.0.0.0. They still
+    cannot reach the coordinator, Forgejo or other workers: Docker does not
+    route between networks and the worker cannot forward (no capabilities).
+  Nothing else changes: workers still get no Docker socket, no
+  capabilities, and the same networks otherwise; the host decides the
+  network and the container from validated IDs and Compose labels, never
+  from what the coordinator or a worker says. As before, any worker can
+  call the coordinator's API; the worst it can do here is mark a test
+  preview failed or give a helper a wrong private address.
+- **Cleanup survives restarts.** A host that starts removes every test
+  preview's compose project (worker disconnected first), and reports any
+  record still starting or ready that it did not start as failed. Every 5
+  minutes it removes test previews whose records are gone or failed. A
+  coordinator that restarts keeps its records and its helpers, and a helper
+  it can no longer follow ends its preview after 3 hours. Session prunes
+  and the project's preview data leave test previews to this path.
+- **The browser** is baked into both agent worker images: Playwright 1.64.1
+  and its headless Chromium shell under `/opt/commitarium-browser`, outside
+  Playwright's default paths so projects keep their own versions. About
+  315 MB more per image uncompressed (the images are about 1.5 GB), checked
+  by building the same layer on `node:22-bookworm-slim`: it renders and
+  screenshots as uid 65532 with all capabilities dropped and
+  no-new-privileges (Playwright runs Chromium without its own sandbox by
+  default; the container is the boundary). Installing on demand would save
+  that, but each helper would then wait on a download that can fail.
+  The helper runs its script with `PLAYWRIGHT_BROWSERS_PATH` and
+  `NODE_PATH` set, and saves numbered screenshots and `test-report.md` in
+  `outputs/`.
+- **The test logins** reach the helper as a file in its directory under
+  `/workspaces`, which every worker mounts, for the length of the helper.
+  They are test-only logins for the preview, which gets the same file.
+
+**Live testing owed:** a full run on this computer (Docker Desktop) and on
+the test VPS (Linux): Mayka delegates with test_app, the test preview
+starts and the helper's worker reaches it, the helper signs in with a test
+account and leaves screenshots, and afterwards no `tsk_` compose project,
+network or worker connection is left; also quit the app mid-test and
+restart the coordinator mid-test. The worker images need rebuilding for the
+browser. The UI shows nothing new: the helper sits in the Agents card while
+it waits for its preview, as working.
+
+**Not now:** testing a work order's session before it merges (its
+checkout is a session preview; the helper would get that instead), showing
+the test preview's progress or logs in the UI, and a narrower reach (a
+proxy that forwards only the open port) if the shared worker's reach ever
+matters more.
 
 ### H4: release 0.14.0
 

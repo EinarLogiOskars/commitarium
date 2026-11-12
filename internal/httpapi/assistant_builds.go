@@ -312,7 +312,7 @@ func (api *API) applyResearch(
 
 // delegator briefs a general helper for the assistant.
 type delegator interface {
-	StartTask(ctx context.Context, scope, actionID, title, brief string) (conversations.Helper, error)
+	StartTask(ctx context.Context, scope, actionID, title, brief string, testApp bool) (conversations.Helper, error)
 }
 
 // applyDelegate starts a general helper on the action's brief, on the
@@ -326,7 +326,7 @@ func (api *API) applyDelegate(
 		writeError(w, http.StatusServiceUnavailable, "assistant_unavailable", "a helper needs real agents")
 		return "", nil, false
 	}
-	helper, err := starter.StartTask(r.Context(), scope, action.ID, action.Title, action.Description)
+	helper, err := starter.StartTask(r.Context(), scope, action.ID, action.Title, action.Description, action.TestApp)
 	if err != nil {
 		writeError(w, http.StatusConflict, "helper_not_started", "the helper could not be started: "+err.Error())
 		return "", nil, false
