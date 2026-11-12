@@ -10,6 +10,7 @@ mod git_providers;
 mod handoff;
 mod host;
 mod import;
+mod outputs;
 mod preview;
 mod preview_check;
 mod process;
@@ -59,6 +60,12 @@ pub fn run() {
         .plugin(tauri_plugin_http::init())
         // Native folder picker for project import.
         .plugin(tauri_plugin_dialog::init())
+        // Helpers' outputs exported as PDF render here, never in the main
+        // window (outputs.rs).
+        .manage(outputs::PrintPages::default())
+        .register_uri_scheme_protocol(outputs::PRINT_SCHEME, |context, request| {
+            outputs::serve_print_page(context.app_handle(), request.uri().path())
+        })
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
@@ -82,6 +89,9 @@ pub fn run() {
         // access reaches the untrusted UI.
         .invoke_handler(tauri::generate_handler![
             apps::open_app_window,
+            outputs::print_output,
+            outputs::save_output,
+            outputs::open_output,
             snapshot::webview_snapshot,
             snapshot::webview_snapshot_supported,
             cli_updates::agent_cli_status,

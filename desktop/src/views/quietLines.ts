@@ -23,6 +23,7 @@ export type QuietKind =
   | "work"
   | "plan"
   | "research"
+  | "helper"
   | "autopilot"
   | "merged"
   | "vision"
@@ -46,6 +47,8 @@ export interface QuietLine {
   accepts?: string;
   /** For update_plan: it drafted or revised the written plan (it links to it). */
   planDocument?: boolean;
+  /** Under way in the background: its text pulses, as Mayka's own line does. */
+  live?: boolean;
 }
 
 /** A chat row: a quiet line, or anything else (a message, a card), which
@@ -159,6 +162,17 @@ export function appliedLine(
         done ? "done" : "busy",
         "research",
         `${done ? "Looked up" : "Looking up"}: ${action.title}`,
+      );
+    case "delegate":
+      // The helper works in the background: while it does, the line pulses;
+      // its own event line says when it is done and carries its files.
+      if (running) {
+        return { ...line("busy", "helper", `A helper is working on: ${action.title}`), live: true };
+      }
+      return line(
+        done ? "done" : "busy",
+        "helper",
+        `${done ? "Briefed a helper" : "Briefing a helper"}: ${action.title}`,
       );
     case "design_stack":
       return line(
@@ -336,6 +350,8 @@ export function kindPhrase(kind: QuietKind, n: number): string {
       return "updated the plan";
     case "research":
       return plural(n, "looked something up", `looked up ${n} things`);
+    case "helper":
+      return plural(n, "briefed a helper", `briefed ${n} helpers`);
     case "autopilot":
       return plural(n, "autopilot update", `${n} autopilot updates`);
     case "merged":

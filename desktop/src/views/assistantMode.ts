@@ -56,6 +56,7 @@ export function appliesItself(action: AssistantAction): boolean {
     "design_stack",
     "apply_stack",
     "research",
+    "delegate",
     "update_plan",
   ];
   const leftForUser = action.status === "proposed" && !!action.auto_tried;
@@ -91,6 +92,7 @@ const BUILDS_APPLIES = new Set<AssistantAction["type"]>([
   "accept_brief",
   "answer_helper",
   "research",
+  "delegate",
   "update_plan",
 ]);
 

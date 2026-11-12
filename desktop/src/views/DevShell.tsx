@@ -31,7 +31,8 @@ import {
   type ChatWork,
 } from "./chatActivity";
 import { RECENT_PROJECTS, later, sidebarProjects } from "./sidebarProjects";
-import { ProjectCards } from "./ProjectCards";
+import { LooseAgentsCard, ProjectCards } from "./ProjectCards";
+import { OutputsCard } from "./Outputs";
 import { useRail } from "./useRail";
 import { Projects } from "./Projects";
 import { ProjectPageBody, useProjectPages } from "./ProjectPages";
@@ -1056,7 +1057,10 @@ export function DevShell({
               Make it a project
             </button>
           </section>
-        ) : (
+        ) : null}
+        {loose && <LooseAgentsCard />}
+        {loose && <OutputsCard owner={TOP} />}
+        {loose ? null : (
           <ProjectCards
             key={selection.scope}
             projectId={selection.scope}

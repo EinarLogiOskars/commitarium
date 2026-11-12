@@ -202,6 +202,7 @@ const AGENT_ROLE: Record<AgentAtWork["role"], string> = {
   vision_writer: "Vision writer",
   stack_designer: "Stack designer",
   research: "Research",
+  helper: "Helper",
 };
 
 /** An agent's job, in plain words. */

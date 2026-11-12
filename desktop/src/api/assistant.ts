@@ -22,6 +22,9 @@ export interface AssistantMessage {
   text: string;
   /** The files attached to it, among the scope's documents. */
   attachments?: string[];
+  /** The files a helper made, on the event that hands them back
+   * (HELPERS_PLAN.md). */
+  outputs?: string[];
   /** The assistant's questions with suggested answers (ADR-039), each
    * answered once. */
   questions?: AssistantQuestion[];
@@ -60,6 +63,7 @@ export type AssistantActionType =
   | "design_stack"
   | "apply_stack"
   | "research"
+  | "delegate"
   | "update_plan"
   | "build_plan"
   | "deploy_app"
@@ -201,6 +205,8 @@ export interface Conversation {
   launch?: { stage: LaunchStage; started_at: string };
   /** Research still being looked up; the user can carry on meanwhile. */
   researching?: string[];
+  /** The general helpers this chat briefed that are still at work, by task. */
+  helping?: string[];
   updated_at: string;
   /** Set while the last turn waits for its agent's login: the message is
    * kept and sent once the agent works (needs_user: the user signs in). */

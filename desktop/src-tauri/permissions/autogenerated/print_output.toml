@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-print-output"
+description = "Enables the print_output command without any pre-configured scope."
+commands.allow = ["print_output"]
+
+[[permission]]
+identifier = "deny-print-output"
+description = "Denies the print_output command without any pre-configured scope."
+commands.deny = ["print_output"]

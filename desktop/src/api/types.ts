@@ -1038,6 +1038,7 @@ export interface AgentAtWork {
     | "reviewer"
     | "session"
     | "brief_writer"
+    | "helper"
     | "vision_writer"
     | "stack_designer"
     | "research";

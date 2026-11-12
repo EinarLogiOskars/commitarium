@@ -131,6 +131,10 @@ export const updateAutonomyPolicy = (
 export const getAgentsAtWork = (id: string): Promise<{ agents: AgentAtWork[] }> =>
   request(`/api/v1/projects/${encodeURIComponent(id)}/agents-at-work`);
 
+/** The helpers at work for chats outside any project (HELPERS_PLAN.md). */
+export const getLooseAgentsAtWork = (): Promise<{ agents: AgentAtWork[] }> =>
+  request(`/api/v1/agents-at-work`);
+
 /** Imports a repository by its https URL, with a token for a private one
  * (SERVER_COMPLETE_PLAN.md, S3). A server has no folder of the user's. */
 export const importFromURL = (

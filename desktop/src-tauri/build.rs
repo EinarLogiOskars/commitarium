@@ -75,6 +75,9 @@ const COMMANDS: &[&str] = &[
     "cancel_login",
     "verify_profile",
     "disconnect_profile",
+    "print_output",
+    "save_output",
+    "open_output",
 ];
 
 fn main() {

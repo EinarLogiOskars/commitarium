@@ -76,6 +76,9 @@ permissions = [
   "allow-cancel-login",
   "allow-verify-profile",
   "allow-disconnect-profile",
+  "allow-print-output",
+  "allow-save-output",
+  "allow-open-output",
 ]
 
 [[set]]
@@ -88,6 +91,9 @@ permissions = [
   "allow-stop-preview",
   "allow-reset-preview-data",
   "allow-open-app-window",
+  "allow-print-output",
+  "allow-save-output",
+  "allow-open-output",
   "allow-webview-snapshot",
   "allow-webview-snapshot-supported",
   "allow-agent-cli-status",

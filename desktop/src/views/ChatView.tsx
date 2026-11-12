@@ -3,6 +3,8 @@ import { WorkingList } from "./WorkingList";
 import { workingOn } from "./workingOn";
 import { BuildForMeCard, FIRST_LOOK_NOTE } from "./BuildForMeCard";
 import { AttachmentChips, SentAttachments, useAttachments } from "./Attachments";
+import { OutputChips } from "./Outputs";
+import { OUTPUTS_CHANGED } from "../api/outputs";
 import { ComposerBox } from "./Composer";
 import {
   useCallback,
@@ -73,7 +75,7 @@ import {
   ServerCard,
   serverCardQuestion,
 } from "./serverCards";
-import { foldedEvent, groupTurn } from "./appliedSummary";
+import { foldedEvent, groupHelpers, groupTurn } from "./appliedSummary";
 import {
   appliedLine,
   dropRepeats,
@@ -203,6 +205,11 @@ export function ChatView({
   const shown = useRef(targetKey);
   shown.current = targetKey;
   const [conversation, setConversationState] = useState<Conversation | null>(null);
+  // A helper's files just came back: the Outputs card reads again.
+  const handedBack = conversation?.messages.filter((m) => m.outputs?.length).length ?? 0;
+  useEffect(() => {
+    if (handedBack > 0) window.dispatchEvent(new Event(OUTPUTS_CHANGED));
+  }, [handedBack]);
   // Work autopilot changed reloads the project's lists, as the user's own
   // approvals do.
   const autoApplied = useRef<number | null>(null);
@@ -605,12 +612,20 @@ export function ChatView({
       : (builds ||
           action.type === "answer_helper" ||
           action.type === "research" ||
+          action.type === "delegate" ||
           action.type === "update_plan") &&
         appliesItself(action));
-  // A turn's work actions fold into one summary line, and the autopilot
-  // lines that repeat them are not shown again.
+  // The helpers Mayka briefed that are still at work, by their task.
+  const helping = new Set(conversation?.helping ?? []);
+  const helperWorking = (action: AssistantAction) =>
+    action.type === "delegate" && helping.has(action.title);
+  // A turn's work actions fold into one summary line, and so do its helpers
+  // at work; the autopilot lines that repeat them are not shown again.
   const turnPieces = new Map(
-    [...byMessage].map(([messageId, actions]) => [messageId, groupTurn(actions, asLine)]),
+    [...byMessage].map(([messageId, actions]) => [
+      messageId,
+      groupHelpers(groupTurn(actions, asLine), (action) => asLine(action) && helperWorking(action)),
+    ]),
   );
   const groupedTitles = new Set(
     [...turnPieces.values()].flatMap((pieces) =>
@@ -637,8 +652,14 @@ export function ChatView({
   const turnEntries = (messageId: string): QuietEntry<ReactElement>[] =>
     (turnPieces.get(messageId) ?? [])
       .map((piece): QuietEntry<ReactElement> | null => {
-        if (piece.kind === "group") {
-          const line = groupLine(piece);
+        if (piece.kind === "helpers") {
+          const line: QuietLine = {
+            tone: "busy",
+            kind: "helper",
+            count: piece.items.length,
+            text: piece.summary,
+            live: true,
+          };
           return {
             quiet: line,
             node: (
@@ -646,7 +667,32 @@ export function ChatView({
                 key={piece.actions[0].id}
                 summary={piece.summary}
                 items={piece.items}
-                tone={line.tone}
+                tone="busy"
+                pulse
+              />
+            ),
+          };
+        }
+        if (piece.kind === "group") {
+          const line = groupLine(piece);
+          // Its work orders still running pulse the line, as one does alone.
+          const working = work
+            ? piece.items.filter((item) => item.workOrderId && work.running.has(item.workOrderId))
+                .length
+            : 0;
+          const summary = working > 0 ? `${piece.summary} · ${working} working` : piece.summary;
+          return {
+            quiet:
+              working > 0
+                ? { ...line, tone: "busy", text: summary.replace(/^✓ /, ""), live: true }
+                : line,
+            node: (
+              <AppliedGroup
+                key={piece.actions[0].id}
+                summary={summary}
+                items={piece.items}
+                tone={working > 0 ? "busy" : line.tone}
+                pulse={working > 0}
                 onOpenOrder={onOpenOrder}
               />
             ),
@@ -688,7 +734,9 @@ export function ChatView({
         }
         if (!asLine(action)) return { block: renderAction(action) };
         const running =
-          action.type === "research" && (conversation?.researching ?? []).includes(action.title);
+          (action.type === "research" &&
+            (conversation?.researching ?? []).includes(action.title)) ||
+          helperWorking(action);
         const change = changes.get(action.id);
         const line = appliedLine(action, change, running);
         if (action.id === latestPlanDocument) line.pinned = true;
@@ -748,6 +796,16 @@ export function ChatView({
                   }
                 />
               )}
+            </div>
+          ),
+        });
+      } else if (message.outputs?.length) {
+        // A helper's files stay under its line, to open from the chat.
+        chatEntries.push({
+          block: (
+            <div key={message.id}>
+              <QuietText line={eventLine(message.text)} />
+              <OutputChips owner={scope} names={message.outputs} />
             </div>
           ),
         });
@@ -1298,28 +1356,30 @@ function ActionCard({
                                       ? "Suggested stack"
                                       : action.type === "research"
                                         ? `Look up: ${action.title}`
-                                        : action.type === "build_plan"
-                                          ? "Build it"
-                                          : action.type === "deploy_app"
-                                            ? action.domain
-                                              ? `Deploy at ${deployAddress(action)}`
-                                              : "Deploy the latest version"
-                                            : SERVER_CARDS.has(action.type)
-                                              ? serverCardQuestion(action)[0].replace("?", "")
-                                              : action.type === "set_apps_page"
-                                                ? appsPageQuestion(
-                                                    action.how,
-                                                    action.domain,
-                                                  ).replace("?", "")
-                                                : action.type === "list_on_apps_page"
-                                                  ? action.how === "hide"
-                                                    ? "Hide this app on the apps page"
-                                                    : "List this app on the apps page"
-                                                  : action.type === "start_planning"
-                                                    ? "Plan it first"
-                                                    : action.type === "update_plan"
-                                                      ? "Update the plan"
-                                                      : "Switch models";
+                                        : action.type === "delegate"
+                                          ? `Have a helper make: ${action.title}`
+                                          : action.type === "build_plan"
+                                            ? "Build it"
+                                            : action.type === "deploy_app"
+                                              ? action.domain
+                                                ? `Deploy at ${deployAddress(action)}`
+                                                : "Deploy the latest version"
+                                              : SERVER_CARDS.has(action.type)
+                                                ? serverCardQuestion(action)[0].replace("?", "")
+                                                : action.type === "set_apps_page"
+                                                  ? appsPageQuestion(
+                                                      action.how,
+                                                      action.domain,
+                                                    ).replace("?", "")
+                                                  : action.type === "list_on_apps_page"
+                                                    ? action.how === "hide"
+                                                      ? "Hide this app on the apps page"
+                                                      : "List this app on the apps page"
+                                                    : action.type === "start_planning"
+                                                      ? "Plan it first"
+                                                      : action.type === "update_plan"
+                                                        ? "Update the plan"
+                                                        : "Switch models";
   const models = [
     action.lead_model &&
       `Lead ${action.lead_agent ? agentName(agents, action.lead_agent) + " · " : ""}${modelName(action.lead_model)}`,
@@ -1685,6 +1745,7 @@ const APPLY_LABEL: Record<AssistantAction["type"], string> = {
   design_stack: "Design stack",
   apply_stack: "Apply",
   research: "Look it up",
+  delegate: "Start",
   update_plan: "Update",
   build_plan: "Build it",
   deploy_app: "Deploy",
@@ -1830,6 +1891,7 @@ function AppliedLine({
     <QuietRow
       tone={line.tone}
       pulse={running}
+      live={line.live}
       title={
         running
           ? action.reason && `Why: ${action.reason}`
