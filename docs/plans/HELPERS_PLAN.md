@@ -337,9 +337,10 @@ something the user and Mayka keep working on until it is right.
   Outputs card shows the latest with its version count. Older versions count
   toward the store's limits.
 - **When it ends.** The helper's directory and session are kept while the
-  output is being worked on, and removed when the user marks it **Done**,
-  deletes the chat or the output, or after 14 days without a revision (the
-  versions stay). Revising after that starts a new helper that is given the
+  output is being worked on, and removed 30 minutes after its last turn, or
+  when the user deletes the chat or the output (the versions stay). There is
+  no Done button: users would have to understand it, and a fresh helper costs
+  little. Revising after that starts a new helper that is given the
   latest version and the earlier briefs, so it continues instead of starting
   over.
 - **Mayka knows what is open.** Her state lists the chat's outputs with their
@@ -370,10 +371,11 @@ Built as (2026-11-09):
   name, even when it was stored as `-2`) is the next version; unchanged
   files make none. Restore makes an old version the latest as a new version.
   Older versions count toward the 200-file limit and go first.
-- **Ends.** Done (button and route), deleting the chat, deleting the last of
-  a helper's files, 14 days without a revision (checked on the follow loop),
-  and deleting the project remove its directories and forget its session;
-  Done while it works ends it once the turn ends. The versions stay. Deleting
+- **Ends.** Deleting the chat, deleting the last of a helper's files, 30
+  minutes after its last turn (checked on the follow loop; the model's cache
+  is gone by then, so resuming would save little), and deleting the project
+  remove its directories and forget its session. A helper at work is never
+  ended by the clock. The versions stay. Deleting
   one of several files keeps the helper, which still has the others.
 - **Side panel** on the chat page (the drawer and places without a chat keep
   the overlay; one viewer component serves both). It polls the outputs list

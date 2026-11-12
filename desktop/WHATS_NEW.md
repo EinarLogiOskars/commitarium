@@ -1,6 +1,7 @@
-- **Several domains per server.** Serve apps on more than one domain from the same server, each with its own apps page and company sign-in, all from one authentik.
-- **Websites at the bare domain.** An app can live at `example.com` itself, with `www.example.com` sending people there.
-- **More than one address for an app.** For example a site in Icelandic on `.is` and in English on `.com`; the app sees which address was opened.
-- **Mayka sets up the server with you.** Ask her to add a domain, set up authentik, change who can open an app, or move the apps page, and it's done. Removing things and Homelab mode still wait for your OK.
-- **Mayka knows your server in every chat.** Your domains, apps and their addresses, so she never has to ask. When a change fails, she tells you right away what to do next.
-- **Clearer update notes.** This window now says what changed.
+- **Mayka's helpers.** Ask for a pitch deck, a report, a Word file, a logo or some research, and Mayka hands it to a helper that works on it while you carry on chatting. You get the files in the chat and in the new Outputs card.
+- **Work on a file together.** The file opens beside the chat while it's being made. Ask Mayka for changes ("make the titles blue") and the same helper makes them, as a new version you can compare with the old one or go back to.
+- **Your format.** Ask for Word, PDF, PowerPoint, JPEG or anything else and that's what you get. Without a format, decks come as PDFs you can present full screen, and logos come as an SVG plus PNGs.
+- **Helpers that try your app.** Ask Mayka to test a flow and a helper walks through it in a throwaway copy of your app, signs in with test accounts, and reports back with screenshots.
+- **Test accounts.** Each project keeps test logins in Settings, and they're put into the preview automatically, never into your real app.
+- **Preview and the real app, clearly apart.** The preview is marked as a test copy, with buttons to open the real app in Commitarium or in your browser. On your computer the real app runs as its own install with its own data.
+- **Quieter progress lines.** "N helpers working" while they work, and "has its plan ready" when Mayka is running the work for you.

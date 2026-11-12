@@ -22,13 +22,15 @@ import (
 // hands back is collected as the files' next versions. A change asked while
 // it works waits for its turn to end. Once its session or directory is gone,
 // a revise starts a fresh helper from the latest versions and the earlier
-// briefs, so the work continues. Marking an output Done, deleting the chat or
-// the output, or 14 days without a revision removes the directory and
-// forgets the session; the versions stay.
+// briefs, so the work continues. Deleting the chat or the output, or 30 minutes
+// after its last turn, removes the directory and forgets the session; the
+// versions stay.
 
-// keepFor is how long a helper's directory and session are kept without a
-// revision.
-const keepFor = 14 * 24 * time.Hour
+// keepFor is how long a helper's directory and session are kept after its
+// last turn: long enough for a sitting's changes, which then resume it while
+// its model still has the work cached. A change after that goes to a fresh
+// helper from the latest versions, so nothing piles up on disk.
+const keepFor = 30 * time.Minute
 
 // maxChanges bounds the changes a helper keeps, for a fresh helper's brief.
 const maxChanges = 8
@@ -429,28 +431,6 @@ func (service *Service) endTaskLater(ctx context.Context, scope, helperID string
 	if err := service.EndTask(ctx, scope, helperID); err != nil {
 		log.Printf("end helper %s of %s: %v", helperID, scope, err)
 	}
-}
-
-// OutputDone ends the work on an output the user marked Done: its helper's
-// directory and session go.
-func (service *Service) OutputDone(ctx context.Context, scope, name string) error {
-	lister, ok := service.config.Outputs.(outputLister)
-	if !ok {
-		return ErrUnavailable
-	}
-	files, err := lister.List(ctx, scope)
-	if err != nil {
-		return err
-	}
-	for _, file := range files {
-		if file.Name == name {
-			if file.Helper == "" {
-				return nil
-			}
-			return service.EndTask(ctx, scope, file.Helper)
-		}
-	}
-	return ErrNotFound
 }
 
 // OutputDeleted ends a helper's work once the user deleted the last of its

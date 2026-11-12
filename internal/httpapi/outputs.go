@@ -34,7 +34,6 @@ type OutputService interface {
 // assistant: ending a helper's work on its files, and where a helper's files
 // are while it builds them.
 type outputWork interface {
-	OutputDone(ctx context.Context, scope, name string) error
 	OutputDeleted(ctx context.Context, scope, helperID string) error
 	HelperFiles(ctx context.Context, scope, helperID string) (string, error)
 }
@@ -68,7 +67,6 @@ func (api *API) registerOutputRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/outputs/{owner}/{name}/versions", api.outputVersionsHandler)
 	mux.HandleFunc("GET /api/v1/outputs/{owner}/{name}/versions/{version}", api.readOutputVersionHandler)
 	mux.HandleFunc("POST /api/v1/outputs/{owner}/{name}/versions/{version}/restore", api.restoreOutputHandler)
-	mux.HandleFunc("POST /api/v1/outputs/{owner}/{name}/done", api.outputDoneHandler)
 	// What a helper has in its outputs/ folder while it works, read-only.
 	mux.HandleFunc("GET /api/v1/helper-files/{owner}/{helper}", api.listHelperFilesHandler)
 	mux.HandleFunc("GET /api/v1/helper-files/{owner}/{helper}/{name}", api.readHelperFileHandler)
@@ -191,29 +189,6 @@ func (api *API) restoreOutputHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, file, "output")
-}
-
-// outputDoneHandler ends the work on an output the user marked Done: the
-// helper that made it lets go of its directory and session.
-func (api *API) outputDoneHandler(w http.ResponseWriter, r *http.Request) {
-	owner, name := r.PathValue("owner"), r.PathValue("name")
-	if !api.attachmentOwner(w, r, owner) {
-		return
-	}
-	work, ok := api.conversations.(outputWork)
-	if !ok {
-		writeError(w, http.StatusServiceUnavailable, "assistant_unavailable", "the assistant is unavailable")
-		return
-	}
-	if err := work.OutputDone(r.Context(), owner, name); err != nil {
-		if errors.Is(err, conversations.ErrNotFound) {
-			writeOutputError(w, owner, outputs.ErrNotFound)
-			return
-		}
-		writeConversationError(w, err)
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
 }
 
 // listHelperFilesHandler lists what a helper has in its outputs/ folder
