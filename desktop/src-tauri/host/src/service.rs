@@ -122,7 +122,6 @@ pub fn serve(data_dir: PathBuf) -> Result<(), String> {
 
     wait_for_stop()?;
     shared.stop_previews_and_logins();
-    shared.deployments().stop_all();
     Ok(())
 }
 

@@ -21,6 +21,7 @@ DATA_DIR="/var/lib/commitarium"
 # The service updates itself, so it owns its own program.
 BINARY="$DATA_DIR/bin/commitarium-host"
 MINIMUM_DISK_GB=20
+UPGRADE_DISK_GB=5
 MINIMUM_MEMORY_GB=2
 READY_SECONDS=900
 # The latest release, unless --version names one.
@@ -60,8 +61,12 @@ check_machine() {
   disk_parent="$DATA_DIR"
   [ -d "$disk_parent" ] || disk_parent=/var/lib
   disk_kb=$(df -Pk "$disk_parent" | awk 'NR == 2 { print $4 }')
-  [ "$disk_kb" -ge $((MINIMUM_DISK_GB * 1000000)) ] ||
-    stop "it needs at least ${MINIMUM_DISK_GB} GB of free disk."
+  # An upgrade only needs room for the new release's images; the apps and
+  # their data already have theirs.
+  needed_gb=$MINIMUM_DISK_GB
+  [ -f "$UNIT" ] && needed_gb=$UPGRADE_DISK_GB
+  [ "$disk_kb" -ge $((needed_gb * 1000000)) ] ||
+    stop "it needs at least ${needed_gb} GB of free disk."
 }
 
 check_docker() {

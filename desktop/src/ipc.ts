@@ -972,6 +972,18 @@ export interface RealApp {
 
 export const realApp = (projectId: string): Promise<RealApp> => invoke("real_app", { projectId });
 
+/** The real app's state on this computer (HELPERS_PLAN.md H7): the
+ * project's deployment, a stack apart from the preview with data of its
+ * own; null when it is not running. Its events share
+ * onPreviewStatusChanged, with target kind "deployment". */
+export const getRealAppStatus = (projectId: string): Promise<PreviewStatus | null> =>
+  invoke("real_app_status", { projectId });
+
+/** Start the real app on this computer, or move it to the default branch's
+ * head, keeping its data. One already up at the head is left running. */
+export const startRealApp = (projectId: string): Promise<PreviewStatus> =>
+  invoke("start_real_app", { projectId });
+
 /** Opens the real app in the browser, at the address the host knows for it. */
 export const openRealAppInBrowser = (projectId: string): Promise<void> =>
   invoke("open_real_app_in_browser", { projectId });

@@ -31,7 +31,10 @@ them into one flow and gives the result a place to live.
    preview runtime: Docker Compose from a fresh copy of the default branch,
    with its data in volumes that survive restarts. A Tauri window opens a
    Commitarium page that frames the app full-size and floats the assistant's
-   round button over it, the same one as everywhere else.
+   round button over it, the same one as everywhere else. *Amended
+   2026-11-09 (HELPERS_PLAN.md H7):* the app window runs the project's
+   deployment, a stack apart from the preview with data of its own; the
+   preview is a test copy with test data.
 4. **The app never touches Commitarium.** The app's page is in a frame from
    its own local address; the button and chat belong to Commitarium's page
    around it. The app gets no Tauri commands and no coordinator access.

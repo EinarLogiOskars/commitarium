@@ -209,9 +209,12 @@ impl Shared {
         drop(block_on(self.swept.read()));
     }
 
-    /// Stops what would otherwise be orphaned when the app is gone. The stack
-    /// is the user's to stop, so it stays up.
+    /// Stops what would otherwise be orphaned when the app is gone, and the
+    /// deployments: on this computer the real apps stop with Commitarium, and
+    /// a server starts its own again when its host starts. Their data stays.
+    /// The stack is the user's to stop, so it stays up.
     pub fn stop_previews_and_logins(&self) {
+        self.deployments.stop_all();
         preview::stop_all(&self.previews);
         self.profiles.shutdown();
     }
@@ -590,6 +593,12 @@ fn respond_to_post(path: &str, body: &[u8], shared: &Shared) -> Reply {
         "/v1/deployments/stop" => with_body(body, |stop: ProjectRequest| {
             block_on(shared.deployments.stop(events(), stop.project_id))
         }),
+        // The real app on this computer: the deployment, kept on the default
+        // branch's head (HELPERS_PLAN.md, H7).
+        "/v1/deployments/follow" => with_body(body, |follow: ProjectRequest| {
+            shared.wait_for_sweep();
+            block_on(shared.deployments.follow_head(events(), follow.project_id))
+        }),
         "/v1/backups/create" => respond_with(
             shared
                 .on_a_server()
@@ -741,6 +750,12 @@ fn respond_to_post(path: &str, body: &[u8], shared: &Shared) -> Reply {
             ))
         }),
         "/v1/previews/delete-project" => with_body(body, |project: ProjectRequest| {
+            // Its deployment, the real app on this computer, goes with it.
+            block_on(
+                shared
+                    .deployments
+                    .forget(events(), project.project_id.clone()),
+            )?;
             block_on(preview::delete_project_data(
                 &events(),
                 previews.clone(),
