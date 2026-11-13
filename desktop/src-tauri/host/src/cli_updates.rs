@@ -451,20 +451,10 @@ fn install(container: &str, provider: Provider, version: &str) -> Result<(), Str
         .args([
             "exec",
             container,
-            "npm",
-            "install",
-            "--global",
-            "--prefix",
-            CLI_DIRECTORY,
+            "sh",
+            "-c",
+            &install_script(provider, version),
         ])
-        .args([
-            "--cache",
-            "/tmp/commitarium-npm-cache",
-            "--omit=dev",
-            "--no-fund",
-            "--no-audit",
-        ])
-        .arg(format!("{}@{version}", provider.package()))
         .output()
         .map_err(|e| format!("install the {} CLI: {e}", provider.executable()))?;
     if !install.status.success() {
@@ -480,6 +470,41 @@ fn install(container: &str, provider: Provider, version: &str) -> Result<(), Str
         ));
     }
     Ok(())
+}
+
+/// The `sh -c` script that installs a CLI release without a moment where
+/// workers find none: npm installs it into its own folder under `versions`,
+/// it must answer `--version`, and only then is `bin/<executable>` pointed at
+/// it, by one rename. Installing in place left `bin` empty for seconds, and a
+/// turn starting then failed with "no such file or directory". The release it
+/// replaces is kept for turns still running it; older ones, and the in-place
+/// install from before, are removed. `version` is validated by `install`.
+fn install_script(provider: Provider, version: &str) -> String {
+    let (executable, package) = (provider.executable(), provider.package());
+    format!(
+        r#"set -e
+root={CLI_DIRECTORY}; executable={executable}; version={version}
+link="$root/bin/$executable"; target="../versions/$version/bin/$executable"
+before=$(readlink "$link" 2>/dev/null || true)
+[ "$before" = "$target" ] && exit 0
+staged="$root/versions/$version"
+rm -rf "$staged.partial"
+npm install --global --prefix "$staged.partial" --cache /tmp/commitarium-npm-cache   --omit=dev --no-fund --no-audit "{package}@$version"
+"$staged.partial/bin/$executable" --version >/dev/null
+rm -rf "$staged"
+mv "$staged.partial" "$staged"
+mkdir -p "$root/bin"
+ln -sfn "$target" "$link.next"
+mv -f "$link.next" "$link"
+kept=""
+case "$before" in ../versions/*) kept=${{before#../versions/}}; kept=${{kept%%/*}}; rm -rf "$root/lib";; esac
+for old in "$root"/versions/*; do
+  name=${{old##*/}}
+  [ -e "$old" ] && [ "$name" != "$version" ] && [ "$name" != "$kept" ] && rm -rf "$old"
+done
+exit 0
+"#
+    )
 }
 
 /// Whether no worker is launching or running a turn. A worker that cannot
@@ -747,6 +772,91 @@ fn newer(candidate: &str, current: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An update is installed beside the running release and switched to by
+    /// one rename, so `bin` always holds a CLI that runs. The release it
+    /// replaced stays for running turns; older ones and the in-place install
+    /// from before go.
+    #[test]
+    fn a_cli_update_switches_over_without_a_gap() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let tools = tempfile::tempdir().unwrap();
+        // A fake npm: `--prefix <dir>` and `<package>@<version>`, laid out as
+        // npm lays out a global install.
+        let npm = tools.path().join("npm");
+        std::fs::write(
+            &npm,
+            r#"#!/bin/sh
+while [ $# -gt 0 ]; do
+  case "$1" in --prefix) prefix=$2; shift;; *@*) version=${1##*@};; esac
+  shift
+done
+mkdir -p "$prefix/lib/node_modules/cli/bin" "$prefix/bin"
+printf '#!/bin/sh\necho "%s (Claude Code)"\n' "$version" > "$prefix/lib/node_modules/cli/bin/claude.exe"
+chmod +x "$prefix/lib/node_modules/cli/bin/claude.exe"
+ln -s ../lib/node_modules/cli/bin/claude.exe "$prefix/bin/claude"
+"#,
+        )
+        .unwrap();
+        std::fs::set_permissions(&npm, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let dir = root.path().to_string_lossy().to_string();
+        let run = |version: &str| {
+            let script = install_script(Provider::Claude, version).replace(CLI_DIRECTORY, &dir);
+            let output = crate::process::command("sh")
+                .args(["-c", &script])
+                .env("PATH", format!("{}:/usr/bin:/bin", tools.path().display()))
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        };
+        let runs = || {
+            let output = crate::process::command(root.path().join("bin/claude"))
+                .arg("--version")
+                .output()
+                .unwrap();
+            String::from_utf8(output.stdout).unwrap()
+        };
+        let versions = || {
+            let mut names: Vec<String> = std::fs::read_dir(root.path().join("versions"))
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name().to_string_lossy().to_string())
+                .collect();
+            names.sort();
+            names
+        };
+        // The in-place install from before this change.
+        std::fs::create_dir_all(root.path().join("lib/node_modules/cli/bin")).unwrap();
+        std::fs::create_dir_all(root.path().join("bin")).unwrap();
+        let old = root.path().join("lib/node_modules/cli/bin/claude.exe");
+        std::fs::write(&old, "#!/bin/sh\necho \"2.1.1 (Claude Code)\"\n").unwrap();
+        std::fs::set_permissions(&old, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::os::unix::fs::symlink(
+            "../lib/node_modules/cli/bin/claude.exe",
+            root.path().join("bin/claude"),
+        )
+        .unwrap();
+        assert_eq!(runs(), "2.1.1 (Claude Code)\n");
+
+        run("2.1.2");
+        assert_eq!(runs(), "2.1.2 (Claude Code)\n");
+        // The in-place release may still run a turn.
+        assert!(root.path().join("lib").exists());
+        run("2.1.3");
+        assert_eq!(runs(), "2.1.3 (Claude Code)\n");
+        assert!(!root.path().join("lib").exists());
+        assert_eq!(versions(), ["2.1.2", "2.1.3"]);
+        run("2.1.4");
+        assert_eq!(versions(), ["2.1.3", "2.1.4"]);
+        // Installing the release already running changes nothing.
+        run("2.1.4");
+        assert_eq!(runs(), "2.1.4 (Claude Code)\n");
+        assert_eq!(versions(), ["2.1.3", "2.1.4"]);
+    }
 
     /// The host runs alone, without the desktop crate's features, and npm is
     /// on HTTPS. This does not compile if the host loses its TLS.
