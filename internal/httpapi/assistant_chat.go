@@ -782,9 +782,9 @@ func (api *API) applyCreateWorkOrder(
 		writeError(w, http.StatusInternalServerError, "internal_error", "internal server error")
 		return "", "", false
 	}
-	if action.VisionItemID != "" && api.visions != nil {
-		if _, err := api.visions.LinkWorkOrder(ctx, projectID, action.VisionItemID, created.ID); err != nil {
-			log.Printf("link work order %q to vision item %q: %v", created.ID, action.VisionItemID, err)
+	if itemID := api.itemToLink(ctx, projectID, action); itemID != "" {
+		if _, err := api.visions.LinkWorkOrder(ctx, projectID, itemID, created.ID); err != nil {
+			log.Printf("link work order %q to vision item %q: %v", created.ID, itemID, err)
 		}
 	}
 	result := "Created the work order “" + created.Title + "” (" + created.ID + ")."
@@ -798,6 +798,55 @@ func (api *API) applyCreateWorkOrder(
 		return "", "", false
 	}
 	return "Created and started the work order “" + created.Title + "” (" + created.ID + ").", created.ID, true
+}
+
+// itemToLink is the vision item a new work order of the assistant's takes
+// over: the one the action names, or else the item of a work order the same
+// message closed, which it replaces. An item keeps a work order that is
+// still open: a second one for it, such as a follow-up, does not take its
+// place, or the item would follow work that may never land.
+func (api *API) itemToLink(ctx context.Context, projectID string, action conversations.Action) string {
+	if api.visions == nil {
+		return ""
+	}
+	current, err := api.visions.Get(ctx, projectID)
+	if err != nil {
+		return ""
+	}
+	itemID := action.VisionItemID
+	if itemID == "" {
+		itemID = api.replacedItem(ctx, projectID, current.Plan, action)
+	}
+	item, _, found := vision.Find(current.Plan, itemID)
+	if !found || item.FeatureID == "" {
+		return itemID
+	}
+	linked, err := api.features.GetByID(ctx, projectID, item.FeatureID)
+	if err == nil && linked.State != feature.StateCancelled {
+		return ""
+	}
+	return itemID
+}
+
+// replacedItem is the vision item of a work order closed by a card from the
+// same message as action, the work order action replaces.
+func (api *API) replacedItem(
+	ctx context.Context, projectID string, plan featureartifact.VisionPlan, action conversations.Action,
+) string {
+	conversation, err := api.conversations.Get(ctx, projectID)
+	if err != nil {
+		return ""
+	}
+	for _, other := range conversation.Actions {
+		if other.MessageID != action.MessageID || other.Type != featureartifact.AssistantCloseWorkOrder ||
+			other.WorkOrderID == "" {
+			continue
+		}
+		if item, found := vision.ItemOf(plan, other.WorkOrderID); found {
+			return item.ID
+		}
+	}
+	return ""
 }
 
 func (api *API) applyStartWorkOrder(

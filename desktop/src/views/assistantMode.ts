@@ -121,3 +121,25 @@ export function autoAppliedInBuilds(
   // Commitarium marks what autopilot left for the user (left_for_user).
   return !action.left_for_user;
 }
+
+const AUTOPILOT_WORK = new Set<AssistantAction["type"]>([
+  "create_work_order",
+  "start_work_order",
+  "change_models",
+  "continue_work_order",
+  "recover_work_order",
+  "close_work_order",
+]);
+
+/** Whether autopilot, while it is on, handles an action in any mode: one it
+ * already took over, or work on one of its goal's items. Where Mayka only
+ * assists, these are lines like where she builds everything, not cards. */
+export function autopilotHandles(action: AssistantAction, goal?: AutopilotGoal): boolean {
+  if (action.auto_tried) return !action.left_for_user;
+  if (goal?.status !== "active" || !AUTOPILOT_WORK.has(action.type)) return false;
+  return goal.items.some(
+    (item) =>
+      (action.vision_item_id && item.id === action.vision_item_id) ||
+      (action.work_order_id && item.work_order_id === action.work_order_id),
+  );
+}
