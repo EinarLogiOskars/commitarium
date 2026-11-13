@@ -9,6 +9,7 @@ import (
 	"github.com/EinarLogiOskars/commitarium/internal/feature"
 	"github.com/EinarLogiOskars/commitarium/internal/featureartifact"
 	"github.com/EinarLogiOskars/commitarium/internal/project"
+	"github.com/EinarLogiOskars/commitarium/internal/vision"
 )
 
 // A card whose work order already got where it leads settles itself, while
@@ -168,5 +169,52 @@ func TestAnAutopilotCardSettlesOnceAutopilotTookItOn(t *testing.T) {
 		if settled != (action.Status == ActionApplied && action.Settled) {
 			t.Errorf("%s = %s settled=%v %q", action.ID, action.Status, action.Settled, action.Result)
 		}
+	}
+}
+
+type planningStub struct{ status vision.PlanningStatus }
+
+func (stub *planningStub) Get(context.Context, string) (vision.Vision, error) {
+	return vision.Vision{Planning: &vision.Planning{Status: stub.status}}, nil
+}
+
+// A Build it card waits while the plan is being made, and settles once the
+// plan was built some other way, such as from the plan page.
+func TestABuildItCardSettlesOnceThePlanIsBuilt(t *testing.T) {
+	service, _ := newTestService(t)
+	service.config.Projects = gapProjects{mode: project.AssistantModeAssists}
+	service.config.Features = &featuresStub{}
+	planning := &planningStub{status: vision.PlanningOpen}
+	service.config.Visions = planning
+	stored, err := service.read("prj_test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored.Actions = append(stored.Actions, Action{ID: "act_build", Status: ActionProposed,
+		AssistantAction: featureartifact.AssistantAction{Type: featureartifact.AssistantBuildPlan, Title: "Build it"}})
+	if err := service.write(stored); err != nil {
+		t.Fatal(err)
+	}
+	build := func() Action {
+		t.Helper()
+		if _, err := service.autopilotActions(t.Context(), "prj_test"); err != nil {
+			t.Fatal(err)
+		}
+		conversation, _ := service.Get(t.Context(), "prj_test")
+		for _, action := range conversation.Actions {
+			if action.ID == "act_build" {
+				return action
+			}
+		}
+		t.Fatal("the Build it card is gone")
+		return Action{}
+	}
+	if action := build(); action.Status != ActionProposed {
+		t.Fatalf("while planning, the card = %s %q, want it waiting", action.Status, action.Result)
+	}
+	planning.status = vision.PlanningBuilt
+	if action := build(); action.Status != ActionApplied || !action.Settled || action.Result != AlreadyBuilt {
+		t.Fatalf("after building, the card = %s settled=%v %q, want settled %q",
+			action.Status, action.Settled, action.Result, AlreadyBuilt)
 	}
 }

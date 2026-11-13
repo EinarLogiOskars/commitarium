@@ -309,6 +309,15 @@ func (api *API) applyUpdatePlan(
 	return "Updated the plan.", true
 }
 
+// planBuilt reports whether the project's plan was already built.
+func (api *API) planBuilt(ctx context.Context, projectID string) bool {
+	if api.visions == nil {
+		return false
+	}
+	stored, err := api.visions.Get(ctx, projectID)
+	return err == nil && stored.Planning != nil && stored.Planning.Status == vision.PlanningBuilt
+}
+
 // applyBuildPlan is Build it, from the assistant's card: the vision is
 // finished and autopilot builds it.
 func (api *API) applyBuildPlan(w http.ResponseWriter, r *http.Request, projectID string) (string, bool) {
