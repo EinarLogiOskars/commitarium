@@ -148,6 +148,14 @@ export function useAttachments(owner: string | null) {
   return { items, add, remove, clear, upload, onPaste, dropProps, dragging, problem };
 }
 
+/** While a message with files is sent: how far their upload is, so the
+ * composer does not look stuck. */
+export function uploadProgress(items: { stored?: string }[]): string {
+  const done = items.filter((item) => item.stored).length;
+  if (items.length === 0 || done === items.length) return "Sending…";
+  return `Uploading ${done + 1} of ${items.length} ${items.length === 1 ? "file" : "files"}…`;
+}
+
 /** The files waiting to be sent, above the composer's text. */
 export function AttachmentChips({
   items,

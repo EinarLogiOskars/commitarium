@@ -5445,8 +5445,9 @@ func checkImplementationChecklist(
 	last := checklist.Steps[len(checklist.Steps)-1]
 	if last.CommitID != publishedCommit {
 		return fmt.Errorf("%w: the last step %q is recorded at commit %s but the published commit is %s; "+
-			"the published head must be the commit recorded for the last step",
-			errImplementationChecklist, last.ID, last.CommitID, publishedCommit)
+			"the published head must be the commit recorded for the last step: if the head moved after it "+
+			"(for example a merge of main), record it with 'commitarium-artifact plan complete %s %s'",
+			errImplementationChecklist, last.ID, last.CommitID, publishedCommit, last.ID, strings.ToLower(publishedCommit))
 	}
 	return nil
 }

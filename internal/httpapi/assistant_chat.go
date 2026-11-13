@@ -881,6 +881,10 @@ func (api *API) applyChangeModels(
 		writeError(w, http.StatusConflict, "run_not_changeable", "the work order's run has ended")
 		return "", false
 	}
+	if refusal := agentChange(latest.AgentProviders, action.LeadAgent, action.ReviewerAgent); refusal != "" {
+		writeError(w, http.StatusConflict, "agent_change_unavailable", refusal)
+		return "", false
+	}
 	models := project.AgentModels{Lead: action.LeadModel, Reviewer: action.ReviewerModel}
 	if api.modelCatalog != nil {
 		selection := latest.AgentModels
@@ -901,6 +905,31 @@ func (api *API) applyChangeModels(
 	}
 	api.dropPlanModels(ctx, stored.ID, models)
 	return fmt.Sprintf("Switched the models of “%s”.", stored.Title), true
+}
+
+// agentChange says why change_models cannot do what it names: a started
+// run keeps its agents and switches only models within them. Empty when the
+// action keeps them.
+func agentChange(providers project.AgentProviders, lead, reviewer string) string {
+	for _, role := range []struct {
+		name, wanted, agent string
+		provider            project.AgentProvider
+	}{
+		{"lead", lead, providers.LeadAgent, providers.Lead},
+		{"reviewer", reviewer, providers.ReviewerAgent, providers.Reviewer},
+	} {
+		if role.wanted == "" || role.wanted == role.agent || role.wanted == string(role.provider) {
+			continue
+		}
+		current := role.agent
+		if current == "" {
+			current = string(role.provider)
+		}
+		return fmt.Sprintf("a started work order keeps its agents: its %s is %s, and change_models switches only "+
+			"models within them. To use %s instead, close the work order and create its replacement with that agent, "+
+			"or keep %s and pick one of its models.", role.name, current, role.wanted, current)
+	}
+	return ""
 }
 
 // premiumModels lists the models an action would run on that need the

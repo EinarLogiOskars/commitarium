@@ -449,7 +449,10 @@ func (s *Service) TransitionImplementationPlanStep(
 		if step.Status == featureartifact.StepCompleted && step.CommitID == commitID {
 			return current, nil
 		}
-		if step.Status != featureartifact.StepInProgress || commitID == "" {
+		// The last step may move to a newer head, such as the lead's merge of
+		// main after it, so the published commit can still be the last step's.
+		moved := step.Status == featureartifact.StepCompleted && stepIndex == len(plan.Steps)-1
+		if (step.Status != featureartifact.StepInProgress && !moved) || commitID == "" {
 			return FeatureArtifact{}, featureartifact.ErrInvalidArtifact
 		}
 		now := s.now().UTC()

@@ -11,7 +11,8 @@ import { getProjectValidation } from "../api/projects";
 import { openExternal, runValidationJob } from "../ipc";
 import { ApiError } from "../api/client";
 import { NoValidationWarning } from "./NoValidationWarning";
-import type { ValidationJob, Workspace } from "../api/types";
+import { InterveneBar } from "./InterveneBar";
+import type { Run, ValidationJob, Workspace } from "../api/types";
 
 const POLL_MS = 2000;
 
@@ -48,10 +49,14 @@ export function MergeView({
   // Without code review the lead alone approved the revision (ADR-018,
   // ADR-031).
   const [reviewed, setReviewed] = useState(true);
+  // The run itself: one paused or blocked here needs its Continue on this
+  // page, since the merge stage has no other.
+  const [run, setRun] = useState<Run | null>(null);
 
   const poll = useCallback(async () => {
     try {
       const run = await getRun(runId);
+      setRun(run);
       setReviewed(run.steps?.reviewer !== false && run.steps?.code_review !== false);
       setWorkspace(await getWorkspace(projectId, featureId));
     } catch (e) {
@@ -154,6 +159,7 @@ export function MergeView({
         {!gateOpen && openPr}
       </div>
       {error && <div className="banner banner--error">{error}</div>}
+      {live && run && stopped(run) && <InterveneBar run={run} onChanged={onAdvanced} />}
 
       <dl className="detail">
         <dt>Pull request</dt>
@@ -312,4 +318,10 @@ function ValidationPanel({
       </div>
     </div>
   );
+}
+
+/** A run at the merge stage that waits on the user for more than the merge:
+ * paused, or blocked. */
+export function stopped(run: Run): boolean {
+  return run.status === "waiting_for_user" && (run.paused === true || run.wait_kind === "blocker");
 }
