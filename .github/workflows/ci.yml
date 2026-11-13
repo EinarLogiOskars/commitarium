@@ -118,6 +118,16 @@ jobs:
         working-directory: desktop
         run: pnpm build:host
 
+      # tauri-build copies the host sidecar to target/debug/commitarium-host
+      # and can only replace a file there; a restored cache has left a
+      # directory at that path, which fails every desktop build.
+      - name: Clear a cached directory at the sidecar's path
+        working-directory: desktop/src-tauri
+        run: |
+          for path in target/debug/commitarium-host target/release/commitarium-host; do
+            if [ -d "$path" ]; then rm -rf "$path"; fi
+          done
+
       - name: Check Rust formatting
         working-directory: desktop/src-tauri
         run: cargo fmt --all -- --check
