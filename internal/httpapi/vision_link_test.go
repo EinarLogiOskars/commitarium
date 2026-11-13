@@ -40,7 +40,7 @@ func TestANewWorkOrderTakesOverAVisionItemOnlyFromWorkThatEnded(t *testing.T) {
 		action conversations.Action
 		want   string
 	}{
-		"a follow-up on an item whose work is open": {feature.StateImplementing, create("msg_1", "stock"), ""},
+		"a follow-up on an item whose work is open":   {feature.StateImplementing, create("msg_1", "stock"), ""},
 		"a new one for an item whose work was closed": {feature.StateCancelled, create("msg_1", "stock"), "stock"},
 		"a replacement proposed with the close":       {feature.StateCancelled, create("msg_2", ""), "stock"},
 		"a replacement whose close is not applied":    {feature.StateImplementing, create("msg_2", ""), ""},
