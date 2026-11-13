@@ -186,6 +186,46 @@ pub(crate) struct ServiceEvidence {
     pub(crate) logs: String,
 }
 
+/// The last log lines shown for each stopped service in a failure.
+const STOPPED_LOG_LINES: usize = 12;
+
+/// A log without stack frames ("at …", "... 15 common frames omitted"),
+/// which would otherwise push the error itself out of the last lines.
+fn without_stack_frames(logs: &str) -> String {
+    logs.lines()
+        .filter(|line| {
+            let line = line.trim_start();
+            !(line.starts_with("at ") || (line.starts_with("... ") && line.ends_with("omitted")))
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Each service whose container exited with an error or keeps restarting,
+/// with its last log lines: "credentials-init exited with 1: …".
+fn stopped_services(services: &[ServiceEvidence]) -> String {
+    services
+        .iter()
+        .filter(|service| {
+            service.state == "restarting" || (service.state == "exited" && service.exit_code != 0)
+        })
+        .map(|service| {
+            let what = if service.state == "restarting" {
+                "keeps restarting".to_string()
+            } else {
+                format!("exited with {}", service.exit_code)
+            };
+            let logs = last_lines(&without_stack_frames(&service.logs), STOPPED_LOG_LINES);
+            if logs.trim().is_empty() {
+                format!("{} {what}.", service.service)
+            } else {
+                format!("{} {what}:\n{}", service.service, logs.trim_end())
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
 /// The last log lines kept for each service.
 pub(crate) const EVIDENCE_LOG_LINES: usize = 60;
 
@@ -403,6 +443,14 @@ impl PreviewManager {
             } else {
                 format!("{fallback}\n\n{recent}")
             }
+        };
+        // A container that stopped says why in its own log, which is gone
+        // once the stack is taken down: it leads the error.
+        let stopped = stopped_services(&services);
+        let detail = if stopped.is_empty() {
+            detail
+        } else {
+            format!("{stopped}\n\n{detail}")
         };
         record.status.state = PreviewState::Failed;
         record.status.error = Some(detail);
@@ -1830,6 +1878,39 @@ pub(crate) fn bounded(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_stopped_container_says_why_first() {
+        let service = |name: &str, state: &str, exit_code: i64, logs: &str| ServiceEvidence {
+            service: name.into(),
+            state: state.into(),
+            exit_code,
+            health: String::new(),
+            logs: logs.into(),
+        };
+        let stopped = stopped_services(&[
+            service("api", "created", 0, ""),
+            service(
+                "credentials-init",
+                "exited",
+                1,
+                "credentials-init: Existing SQL Server database without credentials failed.",
+            ),
+            service("mssql-init", "exited", 0, "done"),
+            service("worker", "exited", 2, ""),
+            service(
+                "api",
+                "restarting",
+                0,
+                "Cannot lock composition import FRIDA 5.5",
+            ),
+        ]);
+        assert_eq!(
+            stopped,
+            "credentials-init exited with 1:\ncredentials-init: Existing SQL Server database without credentials failed.\n\nworker exited with 2.\n\napi keeps restarting:\nCannot lock composition import FRIDA 5.5"
+        );
+        assert_eq!(stopped_services(&[service("api", "running", 0, "up")]), "");
+    }
     use super::*;
 
     #[test]
