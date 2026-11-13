@@ -7119,6 +7119,8 @@ button.shell-agent:hover {
 }
 .sync-card__error {
   margin: 6px 0 0;
+  /* A failed deploy's error keeps its lines: the stopped container's log. */
+  white-space: pre-wrap;
   padding: 6px 8px;
   border: 1px solid color-mix(in srgb, var(--bad) 40%, transparent);
   border-radius: var(--radius-s);
