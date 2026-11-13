@@ -2,7 +2,7 @@ import { SCREENSHOT_PROMPT, captureScreenshot, nextPaint } from "./screenshot";
 import { WorkingList } from "./WorkingList";
 import { workingOn } from "./workingOn";
 import { BuildForMeCard, FIRST_LOOK_NOTE } from "./BuildForMeCard";
-import { AttachmentChips, SentAttachments, useAttachments } from "./Attachments";
+import { AttachmentChips, uploadProgress, SentAttachments, useAttachments } from "./Attachments";
 import { OutputChips } from "./Outputs";
 import {
   OPEN_OUTPUT,
@@ -1174,6 +1174,11 @@ export function ChatView({
           onRemove={attachments.remove}
           disabled={sending}
         />
+        {sending && attachments.items.length > 0 && (
+          <p className="muted note composer__hint" aria-live="polite">
+            {uploadProgress(attachments.items)}
+          </p>
+        )}
         {planInComposer && draft.startsWith("/") && (
           <p className="muted note composer__hint">
             <code>/plan</code> turns plan mode {planning.kind === "here" ? "off" : "on"};{" "}
