@@ -51,7 +51,12 @@ describe("the chat's live line", () => {
       "Waiting on work orders · 3 active · autopilot 1 of 2 done",
     );
     const merged = { id: "m1", role: "event" as const, text: "“Editor” merged.", occurred_at: "" };
-    const answer = { id: "m2", role: "assistant" as const, text: "Tell me which you want.", occurred_at: "" };
+    const answer = {
+      id: "m2",
+      role: "assistant" as const,
+      text: "Tell me which you want.",
+      occurred_at: "",
+    };
     expect(liveLabel(chat({ goal, messages: [merged] }), [])).toBe(
       "Autopilot is picking the next work order · autopilot 1 of 2 done",
     );
