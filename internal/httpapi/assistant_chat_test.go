@@ -40,6 +40,8 @@ type conversationStub struct {
 	queued map[string]string
 	// developer is whether the user's app shows Developer mode.
 	developer bool
+	// actions are the conversation's cards.
+	actions []conversations.Action
 	// retries counts RetryTurn calls; retryErr is what they answer.
 	retries  int
 	retryErr error
@@ -87,7 +89,7 @@ func (stub *conversationStub) SaveSettings(_ context.Context, settings conversat
 }
 
 func (stub *conversationStub) Get(context.Context, string) (conversations.Conversation, error) {
-	return conversations.Conversation{Goal: stub.goal, Developer: stub.developer}, nil
+	return conversations.Conversation{Goal: stub.goal, Developer: stub.developer, Actions: stub.actions}, nil
 }
 
 func (stub *conversationStub) Send(context.Context, string, string, string) (conversations.Conversation, error) {

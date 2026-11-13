@@ -280,6 +280,28 @@ func Find(plan featureartifact.VisionPlan, itemID string) (featureartifact.Visio
 	return featureartifact.VisionItem{}, "", false
 }
 
+// ItemOf finds the item a work order is linked to.
+func ItemOf(plan featureartifact.VisionPlan, featureID string) (featureartifact.VisionItem, bool) {
+	var walk func([]featureartifact.VisionItem) (featureartifact.VisionItem, bool)
+	walk = func(items []featureartifact.VisionItem) (featureartifact.VisionItem, bool) {
+		for _, item := range items {
+			if item.FeatureID == featureID {
+				return item, true
+			}
+			if found, ok := walk(item.Items); ok {
+				return found, true
+			}
+		}
+		return featureartifact.VisionItem{}, false
+	}
+	for _, priority := range plan.Priorities {
+		if item, found := walk(priority.Items); found {
+			return item, true
+		}
+	}
+	return featureartifact.VisionItem{}, false
+}
+
 func findIn(items []featureartifact.VisionItem, itemID, prefix string) (featureartifact.VisionItem, string, bool) {
 	for index, item := range items {
 		label := fmt.Sprintf("%s.%d", prefix, index+1)

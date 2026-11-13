@@ -100,7 +100,8 @@ export function TurnFailureControls({
 }
 
 /** What goes on in the chat's project while Mayka is not answering: the new
- * app's launch, its work orders running, or autopilot between them. Empty
+ * app's launch, its work orders running, or autopilot between them, picking
+ * the next or waiting on the user once Mayka answered what happened. Empty
  * when nothing does. Running titles are the work orders under way. */
 export function liveLabel(conversation: Conversation, runningTitles: string[]): string {
   const stage = conversation.launch?.stage;
@@ -113,8 +114,13 @@ export function liveLabel(conversation: Conversation, runningTitles: string[]): 
   if (runningTitles.length === 1) return `Waiting on “${runningTitles[0]}”${progress}`;
   if (runningTitles.length > 1)
     return `Waiting on work orders · ${runningTitles.length} active${progress}`;
-  if (goal) return `Autopilot is picking the next work order${progress}`;
-  return "";
+  if (!goal) return "";
+  // Autopilot picks only after news reaches the chat: once Mayka has
+  // answered it and nothing runs, what is left waits on the user.
+  const messages = conversation.messages ?? [];
+  const last = messages[messages.length - 1];
+  if (last?.role === "event") return `Autopilot is picking the next work order${progress}`;
+  return `Autopilot is waiting on you${progress}`;
 }
 
 // The chat's live line while Mayka is not answering, in the same look as
