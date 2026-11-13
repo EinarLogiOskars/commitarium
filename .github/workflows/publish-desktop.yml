@@ -62,8 +62,9 @@ jobs:
           cache-dependency-path: desktop/pnpm-lock.yaml
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: "1.99.1"
           targets: ${{ matrix.rust_targets }}
 
       - name: Cache Rust build artifacts
@@ -136,8 +137,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: "1.99.1"
           targets: ${{ matrix.target }}
 
       - name: Install the musl toolchain
