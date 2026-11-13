@@ -5,6 +5,7 @@ import {
   assistantMode,
   assistantModeNote,
   autoAppliedInBuilds,
+  autopilotHandles,
 } from "./assistantMode";
 import type { AutopilotGoal } from "../api/assistant";
 
@@ -94,5 +95,44 @@ describe("assistant mode", () => {
     ).toBe(false);
     expect(autoAppliedInBuilds(action({ type: "start_autopilot" }), { goal })).toBe(false);
     expect(autoAppliedInBuilds(action({ type: "start_autopilot" }), none)).toBe(true);
+  });
+
+  it("says which actions autopilot handles where Mayka only assists", () => {
+    const goal = {
+      title: "Finish the vision",
+      level: -1,
+      status: "active" as const,
+      started_at: "",
+      items: [
+        {
+          id: "overview",
+          label: "P0.2",
+          title: "Overview",
+          work_order_id: "fea_overview",
+          done: false,
+        },
+      ],
+    };
+    const start = action({ type: "start_work_order", work_order_id: "fea_overview" });
+    expect(autopilotHandles(start, goal)).toBe(true);
+    expect(
+      autopilotHandles(action({ type: "create_work_order", vision_item_id: "overview" }), goal),
+    ).toBe(true);
+    // Outside the goal, or with autopilot off: the user's card.
+    expect(
+      autopilotHandles(action({ type: "start_work_order", work_order_id: "fea_other" }), goal),
+    ).toBe(false);
+    expect(autopilotHandles(start, { ...goal, status: "stopped" })).toBe(false);
+    expect(autopilotHandles(action({ type: "write_vision" }), goal)).toBe(false);
+    // Taken over: autopilot's, unless it left it for the user.
+    expect(
+      autopilotHandles(action({ type: "start_work_order", auto_tried: true }), undefined),
+    ).toBe(true);
+    expect(
+      autopilotHandles(
+        action({ type: "start_work_order", auto_tried: true, left_for_user: true }),
+        goal,
+      ),
+    ).toBe(false);
   });
 });

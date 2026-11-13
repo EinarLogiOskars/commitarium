@@ -60,6 +60,7 @@ import {
   assistantMode,
   assistantModeNote,
   autoAppliedInBuilds,
+  autopilotHandles,
 } from "./assistantMode";
 import { Markdown } from "./Markdown";
 import { useCatalogModels, useModelName } from "./useModelName";
@@ -680,14 +681,15 @@ export function ChatView({
   const held = heldCards(conversation?.messages ?? [], conversation?.actions ?? [], running);
 
   // A created app or project that did not start keeps its card, with Try
-  // again. Where Mayka builds everything, what Commitarium applies by itself
-  // is a line from the moment she proposes it, with no card to approve in
-  // the gap before it is applied.
+  // again. Where Mayka builds everything, or autopilot handles the action in
+  // any mode, what Commitarium applies by itself is a line from the moment
+  // she proposes it, with no card to approve in the gap before it is applied.
+  const lines = (action: AssistantAction) => builds || autopilotHandles(action, conversation?.goal);
   const asLine = (action: AssistantAction) =>
     !action.start_failed &&
-    (builds && action.status === "proposed"
+    (lines(action) && action.status === "proposed"
       ? autoAppliedInBuilds(action, { goal: conversation?.goal })
-      : (builds ||
+      : (lines(action) ||
           action.type === "answer_helper" ||
           action.type === "research" ||
           action.type === "delegate" ||
