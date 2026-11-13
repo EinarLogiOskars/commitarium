@@ -40,14 +40,14 @@ const CADDY_ADMIN: &str = "unix//tmp/caddy-admin.sock";
 /// How often the routes are checked against the running deployments.
 const SYNC_EVERY: Duration = Duration::from_secs(5);
 /// Names that read as the server's own, or as something else's, on every
-/// domain. `www` is a bare-domain app's redirect.
+/// domain. `www` is a bare-domain app's redirect. `api` stays free: it is
+/// the name a deployed backend wants, and nothing of Commitarium's uses it.
 const RESERVED: &[&str] = &[
     "www",
     "mail",
     "smtp",
     "imap",
     "ftp",
-    "api",
     "admin",
     "app",
     "apps",
@@ -2161,6 +2161,15 @@ fn set_private(_path: &Path) -> std::io::Result<()> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_backend_may_take_api_as_its_name() {
+        assert_eq!(valid_name("API").unwrap(), "api");
+        assert!(valid_name("admin")
+            .unwrap_err()
+            .contains("kept for other uses"));
+    }
+
     use super::*;
 
     fn app(domain: &str, name: &str, access: Access) -> AppRoute {
