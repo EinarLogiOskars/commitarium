@@ -2,6 +2,7 @@ package database
 
 import (
 	"errors"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -378,5 +379,57 @@ func TestExecutionStoreDeliversAndCompletesInterventionWithoutUnpausingRun(t *te
 	conflictingResolution.InterventionID = "int_other"
 	if _, _, err := store.ResolveInterventionGuidance(t.Context(), conflictingResolution); !errors.Is(err, execution.ErrRunActionConflict) {
 		t.Fatalf("expected reused action ID to conflict, got %v", err)
+	}
+}
+
+// An answered intervention hands the session's checkpoint back to the
+// workflow turn before it, so the next workflow step matches its rounds
+// against that turn and not against the user's message.
+func TestAnAnsweredInterventionRestoresTheWorkflowCheckpoint(t *testing.T) {
+	db, store := newTestExecutionStore(t)
+	run, original := createExecutionRecords(t, db, store)
+	now := run.UpdatedAt.Add(time.Second)
+	reviewer := original
+	reviewer.ID = run.ID + ":reviewer"
+	reviewer.Role = worker.RoleReviewer
+	reviewer.Status = execution.SessionStatusWaitingForUser
+	reviewer.StartedAt, reviewer.UpdatedAt, reviewer.EndedAt = now, now, nil
+	if err := store.CreateSession(t.Context(), reviewer); err != nil {
+		t.Fatalf("create reviewer: %v", err)
+	}
+	intervention := reviewer.ID + ":intervention:abc"
+	if _, _, err := store.CreateWorkerAttempt(t.Context(), execution.WorkerAttemptCheckpoint{
+		SessionID: reviewer.ID, AttemptID: intervention, LastEventSequence: 0, CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("create checkpoint: %v", err)
+	}
+	for index, event := range []struct {
+		attempt  string
+		sequence int
+	}{
+		{reviewer.ID + ":review:9", 6}, {reviewer.ID + ":review:10", 5}, {reviewer.ID + ":review:10", 6},
+		{reviewer.ID + ":intervention:earlier", 3}, {intervention, 3},
+	} {
+		if _, err := db.ExecContext(t.Context(),
+			`INSERT INTO session_events (id, session_id, sequence, event_type, text, occurred_at, worker_attempt_id, worker_event_sequence)
+			 VALUES (?, ?, ?, 'activity', 'x', ?, ?, ?)`,
+			fmt.Sprintf("evt_%d", index), reviewer.ID, index+1, formatExecutionTime(now), event.attempt, event.sequence,
+		); err != nil {
+			t.Fatalf("insert event: %v", err)
+		}
+	}
+	tx, err := db.BeginTx(t.Context(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := restoreWorkflowCheckpoint(t.Context(), tx, reviewer.ID, intervention); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	checkpoint, err := store.GetWorkerAttempt(t.Context(), reviewer.ID)
+	if err != nil || checkpoint.AttemptID != reviewer.ID+":review:10" || checkpoint.LastEventSequence != 6 {
+		t.Fatalf("checkpoint = %+v, %v", checkpoint, err)
 	}
 }

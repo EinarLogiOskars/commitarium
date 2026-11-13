@@ -219,10 +219,10 @@ type roundCapWorkflow interface {
 	ContinueRoundCap(ctx context.Context, runID, actionID, guidance string, fromAssistant bool) (execution.Run, bool, error)
 }
 
-// continueRoundCap continues a work order whose run reached its planning
-// round limit, with a few more rounds and the assistant's guidance: the
-// assistant handles a work order's first round limit before the user does
-// (ADR-032). A review round limit cannot be continued.
+// continueRoundCap continues a work order whose run reached its planning or
+// code-review round limit, with a few more rounds and the assistant's
+// guidance: the assistant handles a work order's first round limit before
+// the user does (ADR-032).
 func (api *API) continueRoundCap(
 	w http.ResponseWriter, r *http.Request, stored feature.Feature, latest execution.Run,
 	action conversations.Action, how execution.RecoveryHow,
@@ -247,7 +247,7 @@ func (api *API) continueRoundCap(
 	if _, _, err := continuing.ContinueRoundCap(ctx, latest.ID, actionID, action.Guidance, true); err != nil {
 		if errors.Is(err, orchestration.ErrRoundCapNotContinuable) {
 			writeError(w, http.StatusConflict, "recovery_refused", fmt.Sprintf(
-				"“%s” stopped at its review round limit, which cannot be continued: send it back to Ready "+
+				"“%s” stopped at a round limit that cannot be continued now: send it back to Ready "+
 					"(back_to_ready) when the work went the wrong way, or tell the user plainly the one point its "+
 					"agents disagree on and ask for their decision.", stored.Title))
 			return "", false
@@ -266,7 +266,11 @@ func (api *API) continueRoundCap(
 			log.Printf("record the round-limit continuation of run %q: %v", latest.ID, err)
 		}
 	}
-	return fmt.Sprintf("Continued “%s” with %d more planning rounds.", stored.Title, orchestration.RoundCapExtraRounds), true
+	rounds := "planning"
+	if stored.State == feature.StateReviewing {
+		rounds = "review"
+	}
+	return fmt.Sprintf("Continued “%s” with %d more %s rounds.", stored.Title, orchestration.RoundCapExtraRounds, rounds), true
 }
 
 // roundCapHandled reports whether the assistant already handled a round

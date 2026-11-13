@@ -113,7 +113,9 @@ func (run *packageRequestRun) intervene(t *testing.T) {
 		t.Fatalf("resume: %v", err)
 	}
 	blocked := run.waitBlocked(t, "")
-	if !strings.Contains(blocked.Reason, "docker.io") || run.leadCheckpoint(t).AttemptID != answer.AttemptID {
+	// The answered intervention hands the checkpoint back to the turn before
+	// it, which the workflow continues.
+	if !strings.Contains(blocked.Reason, "docker.io") || run.leadCheckpoint(t).AttemptID != run.attempt(1).AttemptID {
 		t.Fatalf("the answered intervention did not leave the package request blocked: run=%+v checkpoint=%+v",
 			blocked, run.leadCheckpoint(t))
 	}

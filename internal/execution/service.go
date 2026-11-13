@@ -426,6 +426,23 @@ func (s *Service) ExtendPlanningRoundLimit(
 	return run, applied, nil
 }
 
+// ExtendImplementationReviewRoundLimit records one extra code-review round
+// for a run waiting at its review round limit.
+func (s *Service) ExtendImplementationReviewRoundLimit(
+	ctx context.Context,
+	id string,
+	runID string,
+	expectedLimit int,
+) (Run, bool, error) {
+	run, applied, err := s.store.ExtendPlanningRoundLimit(ctx, PlanningRoundExtension{
+		ID: id, RunID: runID, ExpectedLimit: expectedLimit, OccurredAt: s.now().UTC(), Review: true,
+	})
+	if err != nil {
+		return Run{}, false, fmt.Errorf("extend review round limit for run %q: %w", runID, err)
+	}
+	return run, applied, nil
+}
+
 // QueueIntervention persists the user's message and arms the run pause in one
 // store transaction. Orchestration may then deliver it once the durable run is
 // at a safe boundary.
