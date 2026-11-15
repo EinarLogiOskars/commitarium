@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -357,6 +358,10 @@ func TestAutopilotLeavesTheUsersWorkOrdersToTheUser(t *testing.T) {
 	stub.action.Asked = true
 	if err := apply(t.Context(), "prj_test", "act_1"); err != nil || workflow.receivedRunID != "run_1" {
 		t.Fatalf("an asked continue: %v (run %q)", err, workflow.receivedRunID)
+	}
+	// Asking her hands the work order over: it is hers to drive from now on.
+	if !slices.Equal(features.handedOver, []string{"fea_users"}) {
+		t.Fatalf("handed over = %v, want the asked work order", features.handedOver)
 	}
 }
 

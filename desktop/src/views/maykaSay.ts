@@ -1,9 +1,10 @@
 import type { AssistantAction } from "../api/assistant";
 import type { AssistantMode, Project } from "../api/types";
 
-// How much Mayka does in a project, the level of her say (ADR-041), in the
-// user's words. The project's assistant mode carries it.
-export const ASSISTANT_MODES: { value: AssistantMode; label: string; description: string }[] = [
+// How much Mayka does in a project: the level of her say (ADR-041), in the
+// user's words. The project's assistant_mode field carries it; the rest of
+// her say is her own words.
+export const SAY_LEVELS: { value: AssistantMode; label: string; description: string }[] = [
   {
     value: "builds",
     label: "Build everything",
@@ -18,21 +19,21 @@ export const ASSISTANT_MODES: { value: AssistantMode; label: string; description
   },
 ];
 
-/** The project's mode; older coordinators send none, so it follows the app
- * flag as they did. */
-export function assistantMode(project: Pick<Project, "app" | "assistant_mode">): AssistantMode {
+/** The level of Mayka's say in the project; older coordinators send none,
+ * so it follows the app flag as they did. */
+export function sayLevel(project: Pick<Project, "app" | "assistant_mode">): AssistantMode {
   return project.assistant_mode ?? (project.app ? "builds" : "assists");
+}
+
+/** A level as Project settings names it, and what it means. */
+export function sayLevelInWords(level: AssistantMode): { label: string; description: string } {
+  return SAY_LEVELS.find((option) => option.value === level) ?? SAY_LEVELS[1];
 }
 
 /** Whether the Vision page offers to hand Mayka a priority as an autopilot
  * goal: not where she builds everything already. */
-export function offersAutopilot(mode: AssistantMode): boolean {
-  return mode !== "builds";
-}
-
-/** The drawer's note on how the assistant works here. */
-export function assistantModeNote(mode: AssistantMode): string {
-  return mode === "builds" ? "Build everything" : "Ask first";
+export function offersAutopilot(level: AssistantMode): boolean {
+  return level !== "builds";
 }
 
 /** Whether an action shows as a quiet line rather than a card: one Mayka
@@ -45,4 +46,14 @@ export function appliesItself(action: AssistantAction): boolean {
   const taken = !!action.take || !!action.auto_tried;
   if (action.status === "proposed") return taken && (action.premium ?? []).length === 0;
   return taken;
+}
+
+/** The says Mayka recorded that applied, as a key: it changes once one
+ * applies, so the chat reads the level again, which her say may have
+ * changed without the user's approval. */
+export function saysApplied(actions: AssistantAction[]): string {
+  return actions
+    .filter((action) => action.type === "set_say" && action.status === "applied")
+    .map((action) => action.id)
+    .join(",");
 }

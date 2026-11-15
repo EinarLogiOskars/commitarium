@@ -118,16 +118,16 @@ func TestAFailingPreviewIsAFactUntilAFixMerges(t *testing.T) {
 	}
 }
 
-// A start card the user dismissed while the assistant assisted does not
-// keep the work order out of the facts after the switch; one dismissed
-// while it builds everything does.
+// A start card the user dismissed before her say became Build everything
+// does not keep the work order out of the facts after; one dismissed since
+// does.
 func TestACardDismissedBeforeTheSwitchDoesNotBlockTakingOver(t *testing.T) {
 	switched := time.Date(2026, 10, 14, 12, 0, 0, 0, time.UTC)
 	state := projectState{StackReady: true, Vision: &featureartifact.VisionPlan{}, Features: []feature.Feature{
 		{ID: "fea_ready", Title: "Add sort by", State: feature.StateReady},
 	}}
 	dismissed := func(at time.Time) record {
-		return record{BuildsSince: &switched, Conversation: Conversation{Actions: []Action{{
+		return record{BuildEverythingSince: &switched, Conversation: Conversation{Actions: []Action{{
 			ID: "act_start", Status: ActionDismissed, UpdatedAt: at,
 			AssistantAction: featureartifact.AssistantAction{Type: featureartifact.AssistantStartWorkOrder, WorkOrderID: "fea_ready"},
 		}}}}
@@ -140,6 +140,10 @@ func TestACardDismissedBeforeTheSwitchDoesNotBlockTakingOver(t *testing.T) {
 	}
 	if text := recentActions(dismissed(switched.Add(-time.Hour)).Actions, &switched); !strings.Contains(text, "no longer stands") {
 		t.Fatalf("the assistant does not hear the dismissal no longer stands: %q", text)
+	}
+	// Once her say is back to Ask first, the user's dismissal stands again.
+	if text := recentActions(dismissed(switched.Add(-time.Hour)).Actions, nil); strings.Contains(text, "no longer stands") {
+		t.Fatalf("under Ask first a dismissal is said not to stand: %q", text)
 	}
 }
 
@@ -303,7 +307,7 @@ func TestHandingOverWakesTheAssistant(t *testing.T) {
 		t.Fatal(err)
 	}
 	stored, err := service.read("prj_test")
-	if err != nil || stored.BuildsSince == nil || len(stored.PendingEvents) != 1 ||
+	if err != nil || stored.BuildEverythingSince == nil || len(stored.PendingEvents) != 1 ||
 		!strings.Contains(stored.PendingEvents[0], "dismissed before this switch no longer stand") {
 		t.Fatalf("handed over = %+v err=%v", stored.PendingEvents, err)
 	}

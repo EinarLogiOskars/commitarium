@@ -19,12 +19,11 @@ import (
 	"github.com/EinarLogiOskars/commitarium/internal/vision"
 )
 
-// Building everything (ADR-027), the assistant owns the project but acts
-// only when woken. What the user does there wakes it: switching the project
-// to building everything hands it over, and a work order the user creates by
-// hand is one the assistant suggests how to run; it stays the user's
-// (ADR-041). The watcher's gap check
-// (conversations/gaps.go) wakes it for what is still missing.
+// Under Build everything (her say's level, ADR-041) Mayka drives the
+// project but acts only when woken. What the user does there wakes her:
+// raising her say to Build everything hands the project over, and a work
+// order the user creates by hand is news to her; it stays the user's. The
+// watcher's idle look (conversations/idle.go) wakes her for what is open.
 
 // assistantWaker wakes a project's assistant for what the user did.
 type assistantWaker interface {
@@ -41,8 +40,8 @@ func inOwnSetup(ctx context.Context) bool {
 	return marked
 }
 
-// handOverToAssistant wakes the assistant of a project the user just
-// switched to building everything.
+// handOverToAssistant wakes the assistant of a project whose say just
+// became Build everything.
 func (api *API) handOverToAssistant(ctx context.Context, projectID string) {
 	waker, ok := api.conversations.(assistantWaker)
 	if !ok || inOwnSetup(ctx) {
@@ -53,21 +52,20 @@ func (api *API) handOverToAssistant(ctx context.Context, projectID string) {
 	}
 }
 
-// wakeForUsersWorkOrder wakes the assistant of a project it builds
-// everything in for a work order the user created by hand.
+// wakeForUsersWorkOrder tells the assistant of a project whose say is Build
+// everything of a work order the user created by hand.
 func (api *API) wakeForUsersWorkOrder(ctx context.Context, created feature.Feature) {
 	waker, ok := api.conversations.(assistantWaker)
 	if !ok || api.projects == nil || created.Kind == feature.KindSession || created.Background {
 		return
 	}
 	owner, err := api.projects.GetByID(ctx, created.ProjectID)
-	if err != nil || !owner.AssistantBuilds() {
+	if err != nil || !owner.BuildsEverything() {
 		return
 	}
-	note := fmt.Sprintf("You added “%s”; Mayka suggests how to run it.", created.Title)
-	text := fmt.Sprintf("The user created the work order “%s” (%s) by hand. It is theirs: ask to start it (take "+
-		"false) with the agents and models you choose, or with after when it changes the same part of the app as "+
-		"running work. Unless the user started it already.", created.Title, created.ID)
+	note := fmt.Sprintf("You added “%s”.", created.Title)
+	text := fmt.Sprintf("The user created the work order “%s” (%s) by hand. It is theirs: whatever you do with it "+
+		"waits for them as a card, unless they ask you in the chat to act on it.", created.Title, created.ID)
 	if err := waker.Wake(ctx, created.ProjectID, note, text); err != nil {
 		log.Printf("tell the assistant of project %q about work order %q: %v", created.ProjectID, created.ID, err)
 	}

@@ -523,15 +523,16 @@ type assistantModeRequest struct {
 	AssistantMode project.AssistantMode `json:"assistant_mode"`
 }
 
-// updateProjectAssistantModeHandler sets how the assistant works in a
-// project: it builds everything, or it assists (ADR-027).
+// updateProjectAssistantModeHandler sets the level of Mayka's say in a
+// project: Build everything (builds) or Ask first (assists) (ADR-041). The
+// path and field keep ADR-027's name.
 func (api *API) updateProjectAssistantModeHandler(w http.ResponseWriter, r *http.Request) {
 	request := assistantModeRequest{}
 	if !decodeSingleJSON(w, r, &request) {
 		return
 	}
 	if _, ok := api.projects.(ProjectAssistantModeService); !ok {
-		writeError(w, http.StatusServiceUnavailable, "assistant_mode_unavailable", "the assistant's mode cannot be changed")
+		writeError(w, http.StatusServiceUnavailable, "assistant_mode_unavailable", "how much Mayka does here cannot be changed")
 		return
 	}
 	updated, err := api.setAssistantMode(r.Context(), r.PathValue("id"), request.AssistantMode)
@@ -551,8 +552,8 @@ func (api *API) updateProjectAssistantModeHandler(w http.ResponseWriter, r *http
 }
 
 // setAssistantMode sets a project's assistant mode, the level of Mayka's say
-// (ADR-041), from the Project settings switcher or her set_say. Switching to
-// building everything also runs the project's work to completion and merges
+// (ADR-041), from the Project settings switcher or her set_say. Raising it to
+// Build everything also runs the project's work to completion and merges
 // it after its gates, and hands the project over to her.
 func (api *API) setAssistantMode(ctx context.Context, projectID string, mode project.AssistantMode) (project.Project, error) {
 	settings, ok := api.projects.(ProjectAssistantModeService)
@@ -564,7 +565,7 @@ func (api *API) setAssistantMode(ctx context.Context, projectID string, mode pro
 		log.Printf("read project %q before its assistant mode: %v", projectID, err)
 	}
 	updated, err := settings.UpdateAssistantMode(ctx, projectID, mode)
-	if err == nil && updated.AssistantBuilds() && !before.AssistantBuilds() {
+	if err == nil && updated.BuildsEverything() && !before.BuildsEverything() {
 		// Building everything runs on its own: runs go through to the merge
 		// gate and merge once every gate passes, as a new app's do, so no
 		// phase or merge waits on a user who handed the project over.
@@ -578,14 +579,14 @@ func (api *API) setAssistantMode(ctx context.Context, projectID string, mode pro
 		} else {
 			log.Printf("merge project %q after its gates: %v", updated.ID, autoErr)
 		}
-		// Switching to building everything hands the project over: the
-		// assistant takes it from here at once.
+		// Raising her say to Build everything hands the project over:
+		// she takes it from here at once.
 		api.handOverToAssistant(ctx, updated.ID)
 	}
 	return updated, err
 }
 
-var errAssistantModeUnavailable = errors.New("the assistant's mode cannot be changed")
+var errAssistantModeUnavailable = errors.New("how much Mayka does here cannot be changed")
 
 func (api *API) updateProjectAutonomyPolicyHandler(w http.ResponseWriter, r *http.Request) {
 	request := autonomyPolicyRequest{}

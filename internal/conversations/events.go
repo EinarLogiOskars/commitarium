@@ -587,7 +587,7 @@ func (service *Service) observe(
 		return err
 	}
 	current := seen.Work
-	driving := service.assistantBuilds(ctx, scope)
+	driving := service.buildsEverything(ctx, scope)
 	routed := map[string][]Event{}
 	// before keeps the signatures the events replaced, so a chat that could
 	// not be told hears of them on the next look instead of never.
@@ -776,12 +776,12 @@ func (service *Service) Report(_ context.Context, scope, text string) error {
 // failed to start, so the facts say it fails until a fix merges.
 const PreviewFailure = "The app's preview failed to start"
 
-// Wake tells a project's assistant about something the user did that it
-// acts on where it builds everything (ADR-027), such as a work order the user
-// created by hand, and wakes it for one turn. Unlike Report, it starts the
-// project's conversation when there is none yet: building everything, the
-// assistant owns the project whether or not the user opened it. note is the
-// line the user sees; text what the assistant hears.
+// Wake tells a project's assistant about something the user did, such as a
+// work order they created by hand where her say is Build everything
+// (ADR-041), and wakes it for one turn. Unlike Report, it starts the
+// project's conversation when there is none yet, since she may own the
+// project whether or not the user opened it. note is the line the user
+// sees; text what the assistant hears.
 func (service *Service) Wake(ctx context.Context, scope, note, text string) error {
 	return service.wake(ctx, scope, "", note, text, false)
 }
@@ -806,14 +806,14 @@ func (service *Service) TellChat(ctx context.Context, scope, chat, note, text st
 	return service.wakeQuietly(ctx, scope, chat, note, text, false, false)
 }
 
-// HandOver records that the user switched the project to building
-// everything and wakes the assistant to take the project over. Cards the
-// user dismissed before no longer stand: switching hands the work over.
+// HandOver records that Mayka's say became Build everything and wakes her
+// to take the project over. Cards the user dismissed before no longer
+// stand: raising her say hands that work back to her.
 func (service *Service) HandOver(ctx context.Context, scope string) error {
 	return service.wake(ctx, scope, "", "You handed the project to Mayka: she builds everything from here.",
-		"The user switched this project to Build everything: you own it now, the work orders waiting in it "+
-			"too. Cards the user dismissed before this switch no longer stand. Your state lists what the "+
-			"project still lacks to run.", true)
+		"Your say here became Build everything: you own the project now, though work orders the user created "+
+			"by hand stay theirs. Cards the user dismissed before this switch no longer stand. Your state lists "+
+			"what the project still lacks to run.", true)
 }
 
 func (service *Service) wake(ctx context.Context, scope, chat, note, text string, handOver bool) error {
@@ -841,7 +841,7 @@ func (service *Service) wakeQuietly(ctx context.Context, scope, chat, note, text
 	}
 	now := service.now()
 	if handOver {
-		stored.BuildsSince = &now
+		stored.BuildEverythingSince = &now
 		// What is open is told afresh to the new owner.
 		stored.IdleLook = ""
 	}

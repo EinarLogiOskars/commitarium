@@ -74,6 +74,13 @@ describe("applied lines", () => {
     expect(
       appliedLine(action({ type: "start_autopilot", result: "Autopilot is on: finish P1." })),
     ).toMatchObject({ tone: "done", kind: "autopilot", text: "Autopilot is on: finish P1." });
+    expect(
+      appliedLine(action({ type: "set_say", result: "Noted: Deploy after each change." })),
+    ).toMatchObject({ tone: "done", kind: "note", text: "Noted: Deploy after each change." });
+    expect(appliedLine(action({ type: "set_say", status: "proposed" }))).toMatchObject({
+      tone: "busy",
+      text: "Noting how much Mayka does here…",
+    });
     expect(appliedLine(action({ type: "start_work_order", title: "Sort" }))).toMatchObject({
       tone: "done",
       kind: "started",

@@ -1,7 +1,7 @@
 # One Mayka and Workspaces: Design Note
 
 **Status:** agreed 2026-11-15, [ADR-041](../adr/0041-one-mayka-with-her-own-say.md);
-Phase 1 in progress (slices 1–4 built). Order: one Mayka, workspaces, across projects, then
+Phase 1 built (slices 1–5). Order: one Mayka, workspaces, across projects, then
 actions as tools after a spike.
 
 ## Why
@@ -82,7 +82,9 @@ backend; the desktop reads each action's outcome instead of re-deriving it.
 - **The user's own work:** acting on a work order the user made by hand,
   unless the user asked for that action in this chat.
 - **Removals:** closing or deleting work she did not create, deleting a
-  project, removing a domain or address.
+  project, removing a domain or address. Closing the user's own work order
+  is theirs to ask for: once they ask in the chat, it is hers like any
+  other action on it.
 - **The server:** Homelab, sign-in gates, app access, the apps page, and a
   deploy that moves or drops an address (the current server-card
   exceptions, unchanged).
@@ -137,6 +139,20 @@ whether both providers allow named MCP tools in those modes, how a tool
 call applies with the coordinator's hard limits (asked actions still return
 "waiting for the user's approval"), and the cost of longer turns. If the
 spike fails, Decision 1 alone still delivers most of the gain.
+
+**Trial, 2026-11-15.** Codex 0.153.4 works: an MCP server or the
+app-server's dynamic tools run in the read-only sandbox (MCP tools need
+`default_tools_approval_mode: "approve"` or `readOnlyHint`), structured
+output holds, and a card comes back as "waiting for the user's approval".
+Claude Code loads a per-run MCP server in plan mode with `--mcp-config`,
+`--strict-mcp-config` and `--allowedTools`; plan mode allows only tools
+marked `readOnlyHint` (or her turns move to `dontAsk` with only Read, Grep
+and Glob). A live Claude turn on the image's 2.1.270 is still owed. The
+simplest path: the worker relays each tool call to the coordinator over its
+existing event stream and command channel, which applies it through the
+approve path and answers; nothing in the agent's container calls the
+coordinator. Guard against applying an action twice (turn and call ID as
+the key), cap calls per turn, and always answer before the tool times out.
 
 ## Decision 3: workspaces
 
@@ -201,6 +217,8 @@ notes and say. Projects stay as they are.
 7. The workspace chat: multi-project state, actions naming a project,
    creating projects inside, event routing, notes and say inheritance.
 8. The sidebar and the desktop views.
+
+The live-test checklist for Phase 1 is [MAYKA_SCENARIOS.md](../MAYKA_SCENARIOS.md).
 
 **Phase 3: across projects**
 

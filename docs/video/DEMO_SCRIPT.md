@@ -101,9 +101,9 @@ on, and you see the workshop behind them."
 2. The sidebar: projects and their chats. The plant app is a project.
 3. The chat with Mayka in the centre; the cards beside it: plan, work
    orders, agents at work, preview, sync.
-4. The two modes: Assists me (you approve each step) and Builds everything
-   for me (Mayka owns it). Apps start in Build for me. Project settings: merge
-   policy, autonomy.
+4. How much Mayka does: Ask first (she asks before work starts) or Build
+   everything (she owns it), plus anything you tell her. Apps start on Build
+   everything. Project settings: merge policy, autonomy.
 5. A work order from part 3: its plan, the reviewer's objections, the code
    review, the merge.
 
@@ -119,7 +119,7 @@ Opens with: "For something bigger than a tweak, think it through first."
    plants with my partner, so we both see what needs water."
 2. Mayka asks what she needs, then writes a plan in commit-sized slices.
 3. Build it: autopilot starts the slices; two run side by side.
-4. Switch the project to Assists me for a moment: a merge waits for you;
+4. Switch the project to Ask first for a moment: a merge waits for you;
    approve it.
 
 Check: the plan is written, the slices run and merge, the preview shows
@@ -134,7 +134,7 @@ project."
 
 1. Projects > Import project: the public repository's folder.
 2. Mayka's first look: what it is, the stack, a numbered list of what
-   could come next, how the project is set up, and the Build for me card.
+   could come next, how the project is set up, and the Build everything card.
 3. Ask her to do one item from the list.
 4. Sync: the change comes back to the folder only when you ask.
 

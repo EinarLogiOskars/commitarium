@@ -18,7 +18,7 @@ var _ firstLooker = (*conversations.Service)(nil)
 // firstLooker wakes a project's assistant for its first look at a project
 // just imported (SERVER_COMPLETE_PLAN.md, S7).
 type firstLooker interface {
-	FirstLook(ctx context.Context, scope string, settings []string, builds bool) error
+	FirstLook(ctx context.Context, scope string, settings []string) error
 }
 
 // firstLookHandler serves POST /api/v1/projects/{id}/first-look.
@@ -45,7 +45,7 @@ func (api *API) firstLook(ctx context.Context, projectID string) error {
 	if err != nil {
 		return err
 	}
-	return looker.FirstLook(ctx, projectID, api.settingsInWords(ctx, found), found.AssistantBuilds())
+	return looker.FirstLook(ctx, projectID, api.settingsInWords(ctx, found))
 }
 
 // lookFirstAfterImport starts the first look of a project an import just

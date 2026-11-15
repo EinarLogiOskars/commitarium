@@ -478,18 +478,20 @@ func (api *API) approveConversationActionHandler(w http.ResponseWriter, r *http.
 		writeConversationError(w, err)
 		return
 	}
+	// The work order is the user's own: the watcher's approval stops there
+	// unless the user asked for the action, and then it becomes hers.
+	theirs, err := api.usersWorkOrder(r.Context(), scope, action)
+	if err != nil {
+		writeConversationError(w, err)
+		return
+	}
 	// The user's approval may act on any work order and model; the
 	// watcher's, for an action Mayka took, stops at the hard limits
 	// (ADR-041).
 	if approvedByAutopilot(r.Context()) {
-		theirs, err := api.usersWorkOrder(r.Context(), scope, action)
-		if err != nil {
-			writeConversationError(w, err)
-			return
-		}
 		builds := false
 		if owner, err := api.projects.GetByID(r.Context(), scope); err == nil {
-			builds = owner.AssistantBuilds()
+			builds = owner.BuildsEverything()
 		}
 		if reason := conversations.HardLimit(action, conversations.Limits{
 			Builds: builds, Theirs: theirs, Premium: premium,
@@ -620,6 +622,9 @@ func (api *API) approveConversationActionHandler(w http.ResponseWriter, r *http.
 	if !ok {
 		return
 	}
+	if theirs != "" && action.Asked && status == conversations.ActionApplied {
+		api.handOver(r.Context(), scope, action.WorkOrderID)
+	}
 	if len(chosen) > 0 {
 		result += " The user chose " + strings.Join(chosen, " and ") + "."
 	}
@@ -690,6 +695,19 @@ func (api *API) staleResult(ctx context.Context, scope string, action conversati
 		}
 	}
 	return conversations.StaleResult(action.AssistantAction, stored.State, blocked, canTell), nil
+}
+
+// handOver makes the user's work order Mayka's once they asked her in the
+// chat to act on it ("get it going"): from then on she drives it as her own,
+// every step of it, under her say (ADR-041). A failure only leaves it theirs.
+func (api *API) handOver(ctx context.Context, scope, workOrderID string) {
+	marker, ok := api.features.(conversations.CreatorMarker)
+	if !ok || workOrderID == "" {
+		return
+	}
+	if err := marker.MarkCreatedByAssistant(ctx, scope, []string{workOrderID}); err != nil {
+		log.Printf("hand work order %s to Mayka: %v", workOrderID, err)
+	}
 }
 
 // usersWorkOrder is the title of the work order an action acts on when the

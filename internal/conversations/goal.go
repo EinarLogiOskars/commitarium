@@ -343,7 +343,7 @@ func priorityItems(plan featureartifact.VisionPlan, level int) []GoalItem {
 // hard limit stops is left for the user, with the reason on its card. Work
 // that follows other work, or past the safety cap, waits.
 func (service *Service) autopilotActions(ctx context.Context, scope string) ([]Action, error) {
-	look := autopilotLook{builds: service.assistantBuilds(ctx, scope), planBuilt: service.planBuilt(ctx, scope)}
+	look := autopilotLook{builds: service.buildsEverything(ctx, scope), planBuilt: service.planBuilt(ctx, scope)}
 	look.ours, look.titles, look.states = service.workOrders(ctx, scope)
 	chats, err := service.chatsOf(scope)
 	if err != nil {
@@ -494,6 +494,26 @@ func (service *Service) autopilotChat(ctx context.Context, scope, chat string, l
 		if !taken(*action) && !inGoal {
 			continue
 		}
+		// The hard limits first, so an action they stop is neither queued
+		// nor takes a slot. A work order the user made stays theirs to close
+		// even when a goal handed it to her, unless its recovery ran out and
+		// the goal replaces it: closing is a removal of work she did not
+		// create (ADR-041).
+		handedClose := action.Type == featureartifact.AssistantCloseWorkOrder && target != "" &&
+			!stored.made(target, ours) && !(orders[target] && exhausted(target))
+		theirs := ""
+		if target != "" && (!stored.mayAct(target, ours) || handedClose) {
+			if theirs = titles[target]; theirs == "" {
+				theirs = target
+			}
+		}
+		if reason := HardLimit(*action, Limits{Builds: builds, Theirs: theirs, Premium: action.Premium}); reason != "" {
+			action.Queued, action.AutoTried = false, true
+			action.LeftForUser, action.LeftReason = true, capitalized(reason)
+			stored.addEvent(fmt.Sprintf("Mayka left %s for you: %s", actionName(action.AssistantAction), reason), now)
+			noted = true
+			continue
+		}
 		// Work that needs other work's code or result waits until that has
 		// merged. A new work order is created at once, so it shows as a
 		// draft; only its start waits.
@@ -549,18 +569,6 @@ func (service *Service) autopilotChat(ctx context.Context, scope, chat string, l
 		}
 		action.Queued = false
 		action.AutoTried = true
-		theirs := ""
-		if target != "" && !stored.mayAct(target, ours) {
-			if theirs = titles[target]; theirs == "" {
-				theirs = target
-			}
-		}
-		if reason := HardLimit(*action, Limits{Builds: builds, Theirs: theirs, Premium: action.Premium}); reason != "" {
-			action.LeftForUser, action.LeftReason = true, capitalized(reason)
-			stored.addEvent(fmt.Sprintf("Mayka left %s for you: %s", actionName(action.AssistantAction), reason), now)
-			noted = true
-			continue
-		}
 		if action.Type == featureartifact.AssistantContinueWorkOrder || action.Type == featureartifact.AssistantRecoverWorkOrder {
 			if stored.AutoContinues[action.WorkOrderID] >= maxAutoContinues {
 				action.LeftForUser = true
@@ -846,7 +854,13 @@ func (service *Service) MarkCreatedWork(ctx context.Context, marker CreatorMarke
 // (ours) or as its applied create shows, or one the user handed it with the
 // goal. Every other work order is the user's.
 func (stored record) mayAct(workOrderID string, ours map[string]bool) bool {
-	if ours[workOrderID] || stored.Goal.Hands(workOrderID) {
+	return stored.Goal.Hands(workOrderID) || stored.made(workOrderID, ours)
+}
+
+// made reports whether the assistant created a work order, as stored with
+// it (ours) or as its applied create shows.
+func (stored record) made(workOrderID string, ours map[string]bool) bool {
+	if ours[workOrderID] {
 		return true
 	}
 	for _, action := range stored.everyAction() {
@@ -867,7 +881,7 @@ func (stored record) mayAct(workOrderID string, ours map[string]bool) bool {
 // answered without one, or left one for the user, the work order needs the
 // user.
 func (service *Service) AutopilotHandles(ctx context.Context, scope, workOrderID string, blockedAt time.Time) bool {
-	builds := service.assistantBuilds(ctx, scope)
+	builds := service.buildsEverything(ctx, scope)
 	ours, _, _ := service.workOrders(ctx, scope)
 	if _, err := service.Readiness(ctx); err != nil {
 		return false
@@ -889,16 +903,20 @@ func (service *Service) AutopilotHandles(ctx context.Context, scope, workOrderID
 			inGoal = inGoal || item.WorkOrderID == workOrderID
 		}
 	}
-	if !inGoal || !stored.mayAct(workOrderID, ours) {
+	if !stored.mayAct(workOrderID, ours) {
 		return false
 	}
 	for _, action := range stored.everyAction() {
 		if (action.Type == featureartifact.AssistantContinueWorkOrder || action.Type == featureartifact.AssistantRecoverWorkOrder) &&
 			action.WorkOrderID == workOrderID &&
 			action.Status == ActionProposed {
-			// Not yet tried, autopilot applies it; tried, it waits for the user.
-			return !action.AutoTried
+			// One she took, or the goal's, applies once tried; one she asks
+			// about, or one tried already, waits for the user (ADR-041).
+			return !action.AutoTried && (taken(action) || stored.Goal.drivesItem(action.AssistantAction))
 		}
+	}
+	if !inGoal {
+		return false
 	}
 	if service.busy(scope, chats) {
 		return true
@@ -979,14 +997,14 @@ func (service *Service) isApp(ctx context.Context, scope string) bool {
 	return err == nil && stored.App
 }
 
-// assistantBuilds reports whether the assistant builds everything in a
-// project (ADR-027): its actions apply without cards, as on autopilot.
-func (service *Service) assistantBuilds(ctx context.Context, scope string) bool {
+// buildsEverything reports whether Mayka's say in a project is Build
+// everything (ADR-041).
+func (service *Service) buildsEverything(ctx context.Context, scope string) bool {
 	if scope == TopLevel {
 		return false
 	}
 	stored, err := service.config.Projects.GetByID(ctx, scope)
-	return err == nil && stored.AssistantBuilds()
+	return err == nil && stored.BuildsEverything()
 }
 
 // note adds an event line to a scope's most recently used chat.
@@ -1085,8 +1103,8 @@ func goalInstructions(goal *Goal) string {
 		"what it needs. When autopilot made a duplicate work order for an item, propose close_work_order for the one that " +
 		"does not deliver it; autopilot closes its own duplicates. When a goal item's work order has run out of " +
 		"recovery, propose close_work_order for it together with create_work_order for the same vision_item_id; " +
-		"autopilot replaces it. Propose nothing outside the goal unless the " +
-		"user asks; such actions still wait for approval. A work order the user created by hand after the goal " +
-		"started is theirs, even on a goal item: actions on it wait for their approval.")
+		"autopilot replaces it. Outside the goal, take or ask as your say says. A work order the user created by " +
+		"hand after the goal started is theirs, even on a goal item: actions on it wait for their approval unless " +
+		"they ask you in the chat to act on it.")
 	return builder.String()
 }

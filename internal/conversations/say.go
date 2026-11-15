@@ -97,18 +97,21 @@ func HardLimit(action Action, limits Limits) string {
 	if len(limits.Premium) > 0 {
 		return fmt.Sprintf("it uses %s, which needs your approval.", strings.Join(limits.Premium, " and "))
 	}
-	if limits.Theirs != "" {
-		if action.Type == featureartifact.AssistantCloseWorkOrder {
-			return fmt.Sprintf("“%s” is your work order, and closing it is yours to decide.", limits.Theirs)
-		}
-		if !action.Asked {
-			return fmt.Sprintf("“%s” is your work order, so it waits for you.", limits.Theirs)
-		}
+	if limits.Theirs != "" && !action.Asked {
+		// The user's own work order waits for them, unless they asked her in
+		// the chat to act on it: that hands it to her (handOver).
+		return fmt.Sprintf("“%s” is your work order, so it waits for you.", limits.Theirs)
 	}
-	if action.Type == featureartifact.AssistantRecoverWorkOrder && action.How == "back_to_ready" && !limits.Builds {
-		// Back to Ready throws work away: the user's call, unless she builds
-		// everything here, where she may start stuck work over as she may
-		// close and replace it.
+	if action.Type == featureartifact.AssistantSetSay && action.Level == featureartifact.SayBuildEverything &&
+		!limits.Builds && !action.Asked {
+		// Build everything lets her start and merge work on her own: she
+		// raises it only when the user plainly asked; otherwise she asks.
+		return "building everything here waits for your yes."
+	}
+	if action.Type == featureartifact.AssistantRecoverWorkOrder && action.How == "back_to_ready" && !limits.Builds && !action.Asked {
+		// Back to Ready throws work away: the user's call, unless they asked
+		// for it or she builds everything here, where she may start stuck
+		// work over as she may close and replace it.
 		return "sending work back to Ready needs your approval."
 	}
 	return ""

@@ -14,11 +14,10 @@ type firstLookConversations struct {
 	*conversationStub
 	scope    string
 	settings []string
-	builds   bool
 }
 
-func (stub *firstLookConversations) FirstLook(_ context.Context, scope string, settings []string, builds bool) error {
-	stub.scope, stub.settings, stub.builds = scope, settings, builds
+func (stub *firstLookConversations) FirstLook(_ context.Context, scope string, settings []string) error {
+	stub.scope, stub.settings = scope, settings
 	return nil
 }
 
@@ -34,8 +33,8 @@ func TestAFirstLookTellsTheAssistantTheProjectsSettings(t *testing.T) {
 		nil, nil, nil, nil, nil, stub)
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/v1/projects/prj_test/first-look", nil))
-	if response.Code != http.StatusAccepted || stub.scope != "prj_test" || stub.builds {
-		t.Fatalf("status %d, scope %q, builds %t", response.Code, stub.scope, stub.builds)
+	if response.Code != http.StatusAccepted || stub.scope != "prj_test" {
+		t.Fatalf("status %d, scope %q", response.Code, stub.scope)
 	}
 	want := []string{
 		"Each work order stops for the user's review after its plan and after its implementation.",

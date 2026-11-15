@@ -5,18 +5,19 @@ import (
 	"testing"
 )
 
-func TestTheFirstLookBriefCarriesTheSettingsAndTheMode(t *testing.T) {
-	assists := firstLookBrief([]string{"Nothing merges into main until you approve it."}, false)
+// One brief for every level: it carries the settings and tells her to close
+// from her say, offering Build everything under Ask first (ADR-041).
+func TestTheFirstLookBriefCarriesTheSettingsAndHerSay(t *testing.T) {
+	brief := firstLookBrief([]string{"Nothing merges into main until you approve it."})
 	for _, want := range []string{"design_stack", "Do not propose set_up_preview",
-		"     - Nothing merges into main until you approve it.", "propose none now", "Build for me",
+		"     - Nothing merges into main until you approve it.", "from your say in the state",
+		"Under Build everything you start on the list without asking", "proposing none now",
 		"a card under your message"} {
-		if !strings.Contains(assists, want) {
-			t.Errorf("assists brief lacks %q:\n%s", want, assists)
+		if !strings.Contains(brief, want) {
+			t.Errorf("brief lacks %q:\n%s", want, brief)
 		}
 	}
-	builds := firstLookBrief(nil, true)
-	if !strings.Contains(builds, "you build everything") || !strings.Contains(builds, "propose work orders") ||
-		strings.Contains(builds, "a card under your message") {
-		t.Errorf("builds brief:\n%s", builds)
+	if strings.Contains(brief, "Assists me") || strings.Contains(brief, "Build for me") {
+		t.Errorf("brief still names the old modes:\n%s", brief)
 	}
 }

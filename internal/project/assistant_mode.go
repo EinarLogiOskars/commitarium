@@ -2,12 +2,12 @@ package project
 
 import "errors"
 
-// AssistantMode is how the assistant works in a project (ADR-027). It
-// assists by default: it proposes cards the user approves and acts on its own
-// only on work it created or was handed. Building everything is opt-in, and on
-// for a project or app the user asked the top-level assistant to create: it
-// owns the whole project, applies its actions without cards, and takes over
-// work orders the user creates too.
+// AssistantMode is the level of Mayka's say in a project (ADR-041): Ask
+// first (assists, the default) or Build everything (builds, on for a project
+// or app the user asked the top-level assistant to create). It is stored in
+// projects.assistant_mode, a name kept from ADR-027; the rest of her say is
+// her own words, kept with her chats. The level is a fact she reads when
+// choosing to take or ask; it is not a mode the code branches on.
 type AssistantMode string
 
 const (
@@ -17,8 +17,7 @@ const (
 
 var ErrInvalidAssistantMode = errors.New("assistant mode must be builds or assists")
 
-// DefaultAssistantMode is the mode a project starts with: the assistant
-// assists.
+// DefaultAssistantMode is the level a project starts with: Ask first.
 func DefaultAssistantMode() AssistantMode {
 	return AssistantModeAssists
 }
@@ -27,7 +26,7 @@ func (mode AssistantMode) IsValid() bool {
 	return mode == AssistantModeBuilds || mode == AssistantModeAssists
 }
 
-// Assistant is how the assistant works in the project: its stored mode, or
+// Assistant is the level of Mayka's say in the project: the stored one, or
 // the default when none is stored.
 func (project Project) Assistant() AssistantMode {
 	if project.AssistantMode.IsValid() {
@@ -36,8 +35,8 @@ func (project Project) Assistant() AssistantMode {
 	return DefaultAssistantMode()
 }
 
-// AssistantBuilds reports whether the assistant builds everything in the
-// project.
-func (project Project) AssistantBuilds() bool {
+// BuildsEverything reports whether Mayka's say in the project is Build
+// everything.
+func (project Project) BuildsEverything() bool {
 	return project.Assistant() == AssistantModeBuilds
 }

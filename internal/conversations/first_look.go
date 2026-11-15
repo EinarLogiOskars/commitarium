@@ -6,20 +6,19 @@ import (
 )
 
 // FirstLookNote is the line the user sees as Mayka starts her first look at
-// an imported project; the app draws the mode card under her reply to it
-// (SERVER_COMPLETE_PLAN.md, S7).
+// an imported project; under Ask first the app offers, under her reply to
+// it, to let her build everything (SERVER_COMPLETE_PLAN.md, S7).
 const FirstLookNote = "Mayka is taking a first look at the imported project."
 
 // FirstLook wakes the assistant of a project just imported for one turn:
 // it reads the code and tells the user what they have and what to do next.
 // The brief rides with that turn alone, so no other turn carries it.
-// settings are the project's settings in plain sentences; builds is whether
-// the assistant builds everything there.
-func (service *Service) FirstLook(ctx context.Context, scope string, settings []string, builds bool) error {
-	return service.Wake(ctx, scope, FirstLookNote, firstLookBrief(settings, builds))
+// settings are the project's settings in plain sentences.
+func (service *Service) FirstLook(ctx context.Context, scope string, settings []string) error {
+	return service.Wake(ctx, scope, FirstLookNote, firstLookBrief(settings))
 }
 
-func firstLookBrief(settings []string, builds bool) string {
+func firstLookBrief(settings []string) string {
 	var brief strings.Builder
 	brief.WriteString("The user just imported this project from an existing repository and has not seen it in " +
 		"Commitarium yet. Take a first look at the code and write them one message that orients them without " +
@@ -37,15 +36,11 @@ func firstLookBrief(settings []string, builds bool) string {
 	for _, setting := range settings {
 		brief.WriteString("     - " + setting + "\n")
 	}
-	if builds {
-		brief.WriteString("  6. Close with how you work here: you build everything, so you start on the list " +
-			"without asking, and they can switch to Assists me in Project settings to approve each step instead. " +
-			"Then propose work orders for the list.")
-	} else {
-		brief.WriteString("  6. Close with how you work here: you assist, so they choose what happens. Ask which " +
-			"of the list to start (\"for example, do 1 and 2\") and draft those work orders once they say; " +
-			"propose none now. Say that with Build for me you take the project over and they need not think about " +
-			"the settings above, and that a card under your message switches to it.")
-	}
+	brief.WriteString("  6. Close with how much you do here, from your say in the state. Under Build everything you " +
+		"start on the list without asking: take work orders for it, and say that Ask first, in Project settings " +
+		"or by telling you, has you ask before each step. Under Ask first they choose: ask which of the list to " +
+		"start (\"for example, do 1 and 2\") and draft those work orders once they say, proposing none now; say " +
+		"that you can build everything yourself so they need not think about the settings above, and that a " +
+		"card under your message, or telling you, lets you.")
 	return brief.String()
 }

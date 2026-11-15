@@ -13,7 +13,7 @@ import { ApiError } from "../api/client";
 import { getConversation } from "../api/assistant";
 import type { AutonomyPolicy, MergePolicy, Project } from "../api/types";
 import { ASSISTANT_CHANGED } from "./AssistantDrawer";
-import { ASSISTANT_MODES, assistantMode } from "./assistantMode";
+import { SAY_LEVELS, sayLevel } from "./maykaSay";
 import { TestAccounts } from "./TestAccounts";
 
 // Project preferences. Agents and models are not among them (ADR-027): each
@@ -329,7 +329,7 @@ function HowTheAssistantWorks({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [words, setWords] = useState("");
-  const current = assistantMode(project);
+  const current = sayLevel(project);
   useEffect(() => {
     let live = true;
     getConversation(project.id)
@@ -339,7 +339,7 @@ function HowTheAssistantWorks({
       live = false;
     };
   }, [project.id]);
-  const change = async (mode: (typeof ASSISTANT_MODES)[number]["value"]) => {
+  const change = async (mode: (typeof SAY_LEVELS)[number]["value"]) => {
     setBusy(true);
     setError(null);
     try {
@@ -355,7 +355,7 @@ function HowTheAssistantWorks({
     <section className="panel">
       <h2>How much Mayka does</h2>
       {error && <div className="banner banner--error">{error}</div>}
-      {ASSISTANT_MODES.map(({ value, label, description }) => (
+      {SAY_LEVELS.map(({ value, label, description }) => (
         <label key={value} className="toggle assistant-mode">
           <input
             type="radio"

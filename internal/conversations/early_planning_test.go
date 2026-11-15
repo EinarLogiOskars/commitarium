@@ -179,8 +179,8 @@ func TestBuildPlansPutTheFoundationFirst(t *testing.T) {
 		!strings.Contains(goal, "plans early") {
 		t.Fatalf("the goal's instructions do not say how to wait: %q", goal)
 	}
-	if !strings.Contains(buildsInstructions, "quick for small, low-risk items (keyboard shortcuts, empty states, copy)") {
-		t.Fatal("building everything does not choose steps by risk")
+	if !strings.Contains(workInstructions, "quick for small, low-risk items (keyboard shortcuts, empty states, copy)") {
+		t.Fatal("the work instructions do not choose steps by risk")
 	}
 }
 

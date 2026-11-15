@@ -405,14 +405,12 @@ func TestHowTheAssistantWorksFollowsTheProjectsSetting(t *testing.T) {
 				t.Fatal(err)
 			}
 			instructions := worker.puts[0].Instructions
-			if builds := strings.Contains(instructions, "Your say here is Build everything"); builds != test.applies {
-				t.Fatalf("builds instructions = %t, want %t", builds, test.applies)
-			}
-			// Building everything, it reports in a line or two and asks only
-			// what is the user's to decide.
-			if short := strings.Contains(instructions, "report it in one or two short lines") &&
-				strings.Contains(instructions, "never say that nothing needs the user"); short != test.applies {
-				t.Fatalf("short updates = %t, want %t", short, test.applies)
+			// One set of instructions at every level: the level is a fact
+			// in her state, not a branch of what she is told.
+			if !strings.Contains(instructions, "How you carry the work here:") ||
+				!strings.Contains(instructions, "report it in one or two short lines") ||
+				strings.Contains(instructions, "Your say here is") {
+				t.Fatalf("instructions lack the one set of work instructions:\n%s", instructions)
 			}
 			if app := strings.Contains(instructions, "This project is an app the user uses"); app != test.project.app {
 				t.Fatalf("app instructions = %t, want %t", app, test.project.app)
@@ -916,5 +914,54 @@ func TestMaykaNeverStartsAGoalHerself(t *testing.T) {
 	}
 	if card, _ := service.Action(t.Context(), "prj_test", "act_goal"); !card.LeftForUser || card.Status != ActionProposed {
 		t.Fatalf("card = %+v", card)
+	}
+}
+
+// A work order the user made and handed her with a goal is still work she
+// did not create: closing it while its recovery has not run out waits for
+// the user, even when she takes it (ADR-041). Her own she may close.
+func TestTakingACloseOfAHandedWorkOrderWaitsForTheUser(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		createdBy feature.Creator
+		applies   bool
+	}{
+		{"handed by the user", feature.CreatedByUser, false},
+		{"her own", feature.CreatedByAssistant, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			old := feature.Feature{ID: "fea_old", Title: "Edit and delete single items", State: feature.StateImplementing,
+				CreatedBy: test.createdBy}
+			service := replacementSetup(t, old, false)
+			stored, err := service.read("prj_test")
+			if err != nil {
+				t.Fatal(err)
+			}
+			stored.Actions = stored.Actions[len(stored.Actions)-1:]
+			stored.Actions[0].Take = true
+			if err := service.write(stored); err != nil {
+				t.Fatal(err)
+			}
+			apply, err := service.autopilotActions(t.Context(), "prj_test")
+			if err != nil || (len(apply) == 1) != test.applies {
+				t.Fatalf("applies %+v err=%v, want applied %t", apply, err, test.applies)
+			}
+			if !test.applies {
+				conversation, _ := service.Get(t.Context(), "prj_test")
+				if action := conversation.Actions[0]; !action.LeftForUser ||
+					action.LeftReason != "“Edit and delete single items” is your work order, so it waits for you." {
+					t.Fatalf("the close = %+v, want it left for the user", action)
+				}
+			}
+		})
+	}
+}
+
+// A goal's instructions agree with her say: outside the goal she takes or
+// asks as it says, rather than every action waiting for approval (ADR-041).
+func TestGoalInstructionsLeaveTheRestToHerSay(t *testing.T) {
+	text := goalInstructions(&Goal{Title: "Finish P0", Status: GoalActive})
+	if strings.Contains(text, "still wait for approval") || !strings.Contains(text, "take or ask as your say says") {
+		t.Fatalf("goal instructions = %s", text)
 	}
 }

@@ -1,7 +1,7 @@
 import { SCREENSHOT_PROMPT, captureScreenshot, nextPaint } from "./screenshot";
 import { WorkingList } from "./WorkingList";
 import { workingOn } from "./workingOn";
-import { BuildForMeCard, FIRST_LOOK_NOTE } from "./BuildForMeCard";
+import { BuildEverythingCard, FIRST_LOOK_NOTE } from "./BuildEverythingCard";
 import { AttachmentChips, uploadProgress, SentAttachments, useAttachments } from "./Attachments";
 import { OutputChips } from "./Outputs";
 import {
@@ -55,7 +55,7 @@ import type {
   VisionPlanning,
   VisionPriority,
 } from "../api/types";
-import { appliesItself, assistantMode, assistantModeNote } from "./assistantMode";
+import { appliesItself, sayLevel, sayLevelInWords, saysApplied } from "./maykaSay";
 import { Markdown } from "./Markdown";
 import { useCatalogModels, useModelName } from "./useModelName";
 import { agentName, reloadAgents, useAgentList, useAgents } from "./useAgents";
@@ -350,26 +350,31 @@ export function ChatView({
   const guidance = assistantGuidance(agents, settings);
   const [setUp, setSetUp] = useState<null | "agents" | "assistant">(null);
 
-  // How the assistant works in the project (ADR-027). Where it builds
-  // everything, work it applies by itself shows as a line, not a card to
-  // approve. Read when the scope changes and when the assistant reloads.
-  const [mode, setMode] = useState<AssistantMode | null>(null);
-  const loadMode = useCallback(() => {
+  // The level of Mayka's say in the project (ADR-041): under Build
+  // everything a card is only what needs the user, asked plainly. Read when
+  // the scope changes and when the assistant reloads.
+  const [level, setLevel] = useState<AssistantMode | null>(null);
+  const loadLevel = useCallback(() => {
     if (scope === "commitarium") {
-      setMode(null);
+      setLevel(null);
       return;
     }
     getProject(scope)
-      .then((project) => setMode(assistantMode(project)))
+      .then((project) => setLevel(sayLevel(project)))
       .catch(() => undefined);
   }, [scope]);
   useEffect(() => {
-    setMode(null);
-    loadMode();
-    window.addEventListener(ASSISTANT_CHANGED, loadMode);
-    return () => window.removeEventListener(ASSISTANT_CHANGED, loadMode);
-  }, [loadMode]);
-  const builds = mode === "builds";
+    setLevel(null);
+    loadLevel();
+    window.addEventListener(ASSISTANT_CHANGED, loadLevel);
+    return () => window.removeEventListener(ASSISTANT_CHANGED, loadLevel);
+  }, [loadLevel]);
+  // Her say may change the level as she records what the user told her.
+  const said = saysApplied(conversation?.actions ?? []);
+  useEffect(() => {
+    if (said) loadLevel();
+  }, [said, loadLevel]);
+  const buildsEverything = level === "builds";
 
   // Vision items by ID, labelled "P0.2 Title", for the cards.
   const [visionItems, setVisionItems] = useState<Map<string, string>>(new Map());
@@ -830,7 +835,7 @@ export function ChatView({
       onMoved={onMoved}
       onOpenOrder={onOpenOrder}
       visionLabel={visionItems.get(action.vision_item_id)}
-      plain={builds}
+      plain={buildsEverything}
       held={held.get(action.id)}
     />
   );
@@ -838,8 +843,9 @@ export function ChatView({
   // The chat's rows in order: messages and cards as they are, and the quiet
   // lines between them deduplicated and folded into runs (quietLines.ts).
   const chatEntries: QuietEntry<ReactElement>[] = [];
-  // The first look at an imported project ends with a card that offers
-  // Build for me, under Mayka's reply to it, while she assists.
+  // The first look at an imported project ends with a card that offers to
+  // let Mayka build everything, under her reply to it, while her say is Ask
+  // first.
   let firstLookPending = false;
   for (const message of conversation?.messages ?? []) {
     if (message.role === "event" && message.text === FIRST_LOOK_NOTE) firstLookPending = true;
@@ -918,9 +924,9 @@ export function ChatView({
     chatEntries.push(...turnEntries(message.id));
     if (firstLookPending && message.role === "assistant") {
       firstLookPending = false;
-      if (mode === "assists" && scope !== "commitarium") {
+      if (level === "assists" && scope !== "commitarium") {
         chatEntries.push({
-          block: <BuildForMeCard key={`${message.id}:build-for-me`} projectId={scope} />,
+          block: <BuildEverythingCard key={`${message.id}:build-everything`} projectId={scope} />,
         });
       }
     }
@@ -967,19 +973,15 @@ export function ChatView({
   }
   flushQuiet();
 
-  // The mode and planning pills, and the planning toggle.
+  // Her say's level and the planning pill, and the planning toggle.
   const meta = (
     <>
-      {mode && (
+      {level && (
         <span
           className="pill assistant-drawer__mode"
-          title={
-            builds
-              ? "It starts and finishes its own work without asking. Change this in the project's settings."
-              : "It suggests; nothing happens until you approve. Change this in the project's settings."
-          }
+          title={`${sayLevelInWords(level).description} Change it in Project settings, or tell her.`}
         >
-          {assistantModeNote(mode)}
+          {sayLevelInWords(level).label}
         </span>
       )}
       {planning.kind === "here" && (
@@ -1047,7 +1049,7 @@ export function ChatView({
         </strong>
         {notesButton}
       </div>
-      {(mode || planning.kind !== "none") && <div className="assistant-drawer__meta">{meta}</div>}
+      {(level || planning.kind !== "none") && <div className="assistant-drawer__meta">{meta}</div>}
     </header>
   );
 
@@ -1068,9 +1070,7 @@ export function ChatView({
               ? page
                 ? "Hi, I'm Mayka. Talk it through with me: research, sketch, or explain. When it turns into something to build, make it a project."
                 : "Hi, I'm Mayka. Ask about your projects. Open a project to have me draft work there."
-              : builds
-                ? "Hi, I'm Mayka. Ask for a change and I build it, along with work orders you add yourself. I ask before premium models."
-                : "Hi, I'm Mayka. Ask about the project, what to build next, or have me draft work orders. I propose; nothing happens until you approve."}
+              : "Hi, I'm Mayka. Ask about the project or for a change. How much I do on my own is up to you: tell me, or change it in Project settings."}
           </p>
         )}
         {chatRows}
@@ -1321,7 +1321,7 @@ function ActionCard({
   held?: string;
   /** "P0.2 Title" for the vision item a new work order delivers. */
   visionLabel?: string;
-  /** Where the assistant builds everything, a card is only what needs the
+  /** Where Mayka's say is Build everything, a card is only what needs the
    * user: one plain question with one action, its details on hover. */
   plain?: boolean;
   onChanged: (conversation: Conversation) => void;
@@ -1823,6 +1823,7 @@ const APPLY_LABEL: Record<AssistantAction["type"], string> = {
   add_vision_item: "Add to vision",
   start_autopilot: "Start autopilot",
   drop_goal_item: "Drop from goal",
+  set_say: "Note it",
   continue_work_order: "Continue",
   recover_work_order: "Recover",
   close_work_order: "Close",
@@ -1966,7 +1967,7 @@ function isPremium(model: string, families: string[]): boolean {
   return !!name && families.some((family) => family && name.includes(family.toLowerCase()));
 }
 
-// Where it builds everything, what Mayka set going, said in a quiet line;
+// What Mayka took and set going, said in a quiet line;
 // why, and what came of it, show on hover.
 function AppliedLine({
   action,
