@@ -10,6 +10,7 @@ import {
   updateProjectValidation,
 } from "../api/projects";
 import { ApiError } from "../api/client";
+import { getConversation } from "../api/assistant";
 import type { AutonomyPolicy, MergePolicy, Project } from "../api/types";
 import { ASSISTANT_CHANGED } from "./AssistantDrawer";
 import { ASSISTANT_MODES, assistantMode } from "./assistantMode";
@@ -315,9 +316,9 @@ function UseAsApp({ project, onUpdated }: { project: Project; onUpdated: (p: Pro
   );
 }
 
-// How the assistant works here (ADR-027): it assists with cards the user
-// approves, or builds everything on its own, taking over the user's work
-// orders too. Saved at once; the drawer follows.
+// How much Mayka does here, her say (ADR-041): the level, Ask first or Build
+// everything, saved at once (the drawer follows), and her own words for the
+// rest, which she keeps from what the user tells her in chat.
 function HowTheAssistantWorks({
   project,
   onUpdated,
@@ -327,7 +328,17 @@ function HowTheAssistantWorks({
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [words, setWords] = useState("");
   const current = assistantMode(project);
+  useEffect(() => {
+    let live = true;
+    getConversation(project.id)
+      .then((conversation) => live && setWords(conversation.say?.words ?? ""))
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [project.id]);
   const change = async (mode: (typeof ASSISTANT_MODES)[number]["value"]) => {
     setBusy(true);
     setError(null);
@@ -342,7 +353,7 @@ function HowTheAssistantWorks({
   };
   return (
     <section className="panel">
-      <h2>How Mayka works</h2>
+      <h2>How much Mayka does</h2>
       {error && <div className="banner banner--error">{error}</div>}
       {ASSISTANT_MODES.map(({ value, label, description }) => (
         <label key={value} className="toggle assistant-mode">
@@ -359,9 +370,16 @@ function HowTheAssistantWorks({
           </span>
         </label>
       ))}
+      {words && (
+        <p className="note">
+          <span className="muted">In her words: </span>
+          {words}
+        </p>
+      )}
       <p className="muted note">
-        Work orders you create yourself stay yours: Mayka only reminds you of them, and acts on one
-        only when you ask and approve its card.
+        Tell Mayka in the chat how much to do here, such as "advise only" or "deploy after each
+        change"; she keeps it in her words. Work orders you create yourself stay yours: she acts on
+        one only when you ask her to.
       </p>
     </section>
   );

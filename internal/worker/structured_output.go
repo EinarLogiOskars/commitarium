@@ -807,7 +807,7 @@ func ResolveStructuredOutput(
 // which Commitarium applies at once (ONE_CONVERSATION_PLAN.md phase 2).
 func assistantTurnSchema(planning bool) map[string]any {
 	text := map[string]any{"type": "string"}
-	types := []string{"create_work_order", "start_work_order", "change_models", "add_vision_item", "start_autopilot", "continue_work_order", "recover_work_order", "close_work_order", "create_app", "plan_project", "set_up_preview", "set_apps_page", "list_on_apps_page", "write_vision", "set_up_stack", "answer_helper", "write_brief", "design_stack", "research", "delegate", "revise", "build_plan", "deploy_app", "add_domain", "install_authentik", "set_app_access", "set_homelab"}
+	types := []string{"create_work_order", "start_work_order", "change_models", "add_vision_item", "start_autopilot", "continue_work_order", "recover_work_order", "close_work_order", "create_app", "plan_project", "set_up_preview", "set_apps_page", "list_on_apps_page", "write_vision", "set_up_stack", "answer_helper", "write_brief", "design_stack", "research", "delegate", "revise", "build_plan", "deploy_app", "add_domain", "install_authentik", "set_app_access", "set_homelab", "set_say"}
 	if !planning {
 		// Plan mode is suggested only in a chat that is not planning.
 		types = append(types, "start_planning")
@@ -848,14 +848,17 @@ func assistantTurnSchema(planning bool) map[string]any {
 			"app":      map[string]any{"type": "string", "description": "For set_app_access: the app's main address, such as notes.example.com, as the server's facts list it; empty is this project's app. Otherwise empty."},
 			"groups":   map[string]any{"type": "array", "items": text, "description": "For set_app_access with company: the groups that may open it; empty is anyone at the company. Otherwise empty."},
 			"test_app": map[string]any{"type": "boolean", "description": "For delegate: true has the helper test the project's running app in a throwaway test copy of its main branch, with its test accounts and a browser; it reports with screenshots. Otherwise false."},
-			"asked":    map[string]any{"type": "boolean", "description": "For deploy_app, add_domain, install_authentik, set_app_access, set_apps_page and list_on_apps_page: true when the user's latest message asked for exactly this change and you guessed nothing it needs (such as an address, a domain or groups they did not give and the facts do not settle); the app then applies it at once. Otherwise false."},
+			"asked":    map[string]any{"type": "boolean", "description": "True when the user's latest message asked for exactly this action and you guessed nothing it needs (such as an address, a domain or groups they did not give and the facts do not settle). For deploy_app, add_domain, install_authentik, set_app_access, set_apps_page and list_on_apps_page the app then applies it at once; for an action on a work order the user created, it lets you take it. Otherwise false."},
+			"take":     map[string]any{"type": "boolean", "description": "Your choice for this action: true takes it (Commitarium applies it right after your turn, unless a hard limit keeps it for the user), false asks for it as a card the user approves. When unsure, false."},
+			"level":    map[string]any{"type": "string", "enum": []string{"", "ask_first", "build_everything"}, "description": "For set_say: the new level of how much you do here; empty keeps it. Otherwise empty."},
+			"words":    map[string]any{"type": "string", "description": "For set_say: your own words, in full, for what the user told you about how much to do here beyond the level (\"advise only\", \"deploy after each change\"); empty keeps them. Otherwise empty."},
 		},
 		[]string{
 			"type", "reason", "title", "description", "vision_item_id", "steps",
 			"lead_agent", "lead_model", "reviewer_agent", "reviewer_model",
 			"lead_plan_model", "lead_plan_effort", "lead_effort", "reviewer_plan_model", "reviewer_plan_effort", "reviewer_effort",
 			"work_order_id", "when", "how", "priority", "guidance", "after", "helper", "brief", "app_brief", "assumptions",
-			"attachments", "domain", "name", "aliases", "app", "groups", "asked", "test_app",
+			"attachments", "domain", "name", "aliases", "app", "groups", "asked", "test_app", "take", "level", "words",
 		},
 	)
 	properties := map[string]any{

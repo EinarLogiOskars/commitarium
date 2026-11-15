@@ -455,6 +455,7 @@ func run(ctx context.Context, coordinatorConfig config) error {
 					return reported
 				},
 				Settings: func(ctx context.Context) (conversations.Settings, error) { return settingsOf.Settings(ctx) },
+				Say:      func(scope string) conversations.Say { return settingsOf.SayOf(scope) },
 				Guide:    modelGuide,
 				Blockers: executionStore,
 			},

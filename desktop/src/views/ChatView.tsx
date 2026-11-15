@@ -55,13 +55,7 @@ import type {
   VisionPlanning,
   VisionPriority,
 } from "../api/types";
-import {
-  appliesItself,
-  assistantMode,
-  assistantModeNote,
-  autoAppliedInBuilds,
-  autopilotHandles,
-} from "./assistantMode";
+import { appliesItself, assistantMode, assistantModeNote } from "./assistantMode";
 import { Markdown } from "./Markdown";
 import { useCatalogModels, useModelName } from "./useModelName";
 import { agentName, reloadAgents, useAgentList, useAgents } from "./useAgents";
@@ -680,22 +674,12 @@ export function ChatView({
   const liveNow = conversation ? liveLabel(conversation, runningTitles) : "";
   const held = heldCards(conversation?.messages ?? [], conversation?.actions ?? [], running);
 
-  // A created app or project that did not start keeps its card, with Try
-  // again. Where Mayka builds everything, or autopilot handles the action in
-  // any mode, what Commitarium applies by itself is a line from the moment
-  // she proposes it, with no card to approve in the gap before it is applied.
-  const lines = (action: AssistantAction) => builds || autopilotHandles(action, conversation?.goal);
-  const asLine = (action: AssistantAction) =>
-    !action.start_failed &&
-    (lines(action) && action.status === "proposed"
-      ? autoAppliedInBuilds(action, { goal: conversation?.goal })
-      : (lines(action) ||
-          action.type === "answer_helper" ||
-          action.type === "research" ||
-          action.type === "delegate" ||
-          action.type === "revise" ||
-          action.type === "update_plan") &&
-        appliesItself(action));
+  // What Mayka took is a line from the moment she proposes it, with no card
+  // to approve in the gap before it is applied; what she asked for, or what a
+  // hard limit left for the user, is a card. The backend's fields decide it
+  // (appliesItself); a created app or project that did not start keeps its
+  // card, with Try again.
+  const asLine = appliesItself;
   // The helpers Mayka briefed that are still at work, by their task.
   const helping = new Set(conversation?.helping ?? []);
   const helperWorking = (action: AssistantAction) =>
@@ -1767,6 +1751,9 @@ function ActionCard({
             </button>
           </div>
         </>
+      )}
+      {pending && action.left_for_user && action.left_reason && (
+        <p className="muted assistant-action__left">{action.left_reason}</p>
       )}
       {pending && held && <p className="muted assistant-action__held">{held}</p>}
       {actionable && (

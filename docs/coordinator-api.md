@@ -81,7 +81,7 @@ this API beyond the host loopback interface is unsupported.
 | `POST` | `/api/v1/projects/{projectID}/features/{featureID}/close` | Close a work order without merging it, keeping its history |
 | `PUT` | `/api/v1/projects/{id}/name` | Rename a project or app (`{"name"}`, at most 120 characters); its repository keeps its own name |
 | `PUT` | `/api/v1/projects/{id}/app` | Mark a project as an app (`{"app": true}`) or a project only; projects answer `app`. A project that changes kind takes that kind's assistant mode |
-| `PUT` | `/api/v1/projects/{id}/assistant-mode` | Set how the assistant works (`{"assistant_mode": "builds"}` or `"assists"`, ADR-027); projects answer `assistant_mode`, `builds` for apps and `assists` for projects by default |
+| `PUT` | `/api/v1/projects/{id}/assistant-mode` | Set the level of the assistant's say (`{"assistant_mode": "builds"}` for Build everything or `"assists"` for Ask first, ADR-027, ADR-041); projects answer `assistant_mode`, `builds` for apps and `assists` for projects by default |
 | `POST` | `/api/v1/runs/{runID}/interventions` | Queue a user message for the lead or reviewer and stop at the next safe boundary |
 | `POST` | `/api/v1/attachments/{owner}` | Store a file attached to a message (see [Message attachments](#message-attachments)) |
 | `GET` | `/api/v1/attachments/{owner}/{name}` | Read an attached file itself |
@@ -2806,13 +2806,35 @@ optional `chat_title`.
   "change_models"|"add_vision_item"|"start_autopilot"|"continue_work_order"|
   "recover_work_order"|"close_work_order"|"create_app"|"set_up_preview"|"write_vision"|"set_up_stack"|
   "answer_helper"|"write_brief"|"accept_brief"|"design_stack"|"apply_stack"|"research"|
-  "plan_project"|"update_plan"|"build_plan", "priority", "reason",
+  "plan_project"|"update_plan"|"build_plan"|"set_say", "priority", "reason",
   "title", "description", "vision_item_id",
   "steps", "independent_tests", "lead_agent", "lead_model", "reviewer_agent",
   "reviewer_model", "work_order_id", "when", "how", "guidance", "after", "helper", "brief",
   "app_brief", "assumptions", "decisions", "open_questions", "plan_items", "stack_presets",
-  "frameworks", "status", "premium",
-  "result", "auto_tried", "queued"}`. `write_vision` has the vision written, or
+  "frameworks", "take", "asked", "level", "words", "status", "premium",
+  "result", "auto_tried", "left_for_user", "left_reason", "queued"}`.
+  `take` is the assistant's choice for each action (ADR-041): `true` takes
+  it, and the coordinator applies it right after the turn through the same
+  approval as the user's, unless a hard limit stops it; `false` asks for it,
+  a card the user approves. `answer_helper`, `research`, `delegate`,
+  `revise`, `update_plan` and `set_say` are always taken; the server's cards
+  (`deploy_app`, the apps page's, `add_domain`, `install_authentik`,
+  `set_app_access`, `set_homelab`) never are, the user's app applying the
+  `asked` ones; an active goal's actions on its items are taken. The hard
+  limits, whatever the say: a premium model; a work order the user created
+  by hand and did not hand over with a goal, unless `asked` (the user asked
+  for that action in the chat), and closing one always; `create_app`,
+  `plan_project`, `build_plan` and `start_planning`; `back_to_ready` while the
+  say is Ask first; and the loop bounds (16 running work orders, eight
+  automatic continues per work order, two refusal wakes in a row). A taken
+  action a hard limit stops stays a card with `left_for_user` and
+  `left_reason`, the reason in plain words. `set_say` records how much the
+  assistant does in the project, as the user told it: `level`
+  (`ask_first` or `build_everything`, empty keeps it) sets the project's
+  `assistant_mode` as `PUT .../assistant-mode` does (`assists` is Ask first,
+  `builds` Build everything), and `words` (at most 2000 bytes, empty keeps
+  them) replace its own words, answered as the conversation's
+  `say: {"words", "updated_at"}`. `write_vision` has the vision written, or
   the one there is rewritten, on the assistant's agent from `description`;
   `set_up_stack` detects the stack of the code, or sets the project up on the
   stack its vision recommends (`409 stack_unknown` without either).
@@ -2828,8 +2850,7 @@ optional `chat_title`.
   helper_not_found` for one the assistant did not start). `research` looks
   `description` up on the web in a read-only attempt with no repository,
   named by `title`; it runs at the top level too. `answer_helper` and
-  `research` change nothing in the project, so the coordinator applies them
-  at once in every mode, without a card. `after`,
+  `research` change nothing in the project, so they are always taken. `after`,
   on a create or start, names a work order ID or another action's title it
   follows: autopilot holds it (`queued`) until that work has merged. `recover_work_order` recovers the work order's
   newest run when it waits on a blocker, the way `how` names (ADR-032):
@@ -2871,9 +2892,9 @@ optional `chat_title`.
   `description` is the goal, `decisions` and `open_questions` replace those
   lists, and `plan_items` (`[{"priority", "title", "description"}]`) and
   `stack_presets` with `frameworks` replace the build plan and the stack when
-  given; like `research`, it is applied at once in every mode. `build_plan`
+  given; like `research`, it is always taken. `build_plan`
   is a card that finishes the plan with autopilot, as Build it does. `premium` lists its models that need approval (`ask_before`);
-  `auto_tried` marks one autopilot took over.
+  `auto_tried` marks one the coordinator took over to apply.
 - `POST .../{scope}/actions/{actionID}/approve` with `{"start", "confirm_premium"}`
   runs it through the same paths as the app's own buttons and records the
   outcome. On a create or start, `lead_agent`, `lead_model`, `reviewer_agent`,
@@ -2883,7 +2904,9 @@ optional `chat_title`.
   `reviewer_plan_effort`, and `reviewer_effort`, applied and checked as a
   Start's `phase_choices`; a planning model counts toward `premium`.
   `409 premium_approval_required` without `confirm_premium` for a
-  premium action; `409 action_not_pending` once resolved.
+  premium action; `409 action_not_pending` once resolved. The coordinator's
+  own approval of a taken action answers `409 left_for_user` with the
+  reason when a hard limit stops it.
 - `POST .../{scope}/actions/{actionID}/dismiss` dismisses it.
 - `POST .../{scope}/autopilot` with `{"level"}` turns autopilot on for the open
   items of that vision priority (ADR-023); approving a `start_autopilot` action

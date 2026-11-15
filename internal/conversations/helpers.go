@@ -294,7 +294,7 @@ func (service *Service) helpersChangedIn(ctx context.Context, scope, chat string
 				service.noteResearch(ctx, scope, helper.Title, state.Text)
 				continue
 			}
-			stored.propose(*helper, state.Text, now)
+			stored.propose(*helper, state.Text, service.assistantBuilds(ctx, scope), now)
 		case HelperFinished:
 			helper.Done = true
 		case HelperFailed:
@@ -331,11 +331,11 @@ func (service *Service) helpersChangedIn(ctx context.Context, scope, chat string
 	return service.write(stored)
 }
 
-// propose turns a helper's result into a card, approved as the project's
-// mode says: by the user, or by autopilot where the assistant builds
-// everything. A newer result replaces an older card still waiting.
-func (stored *record) propose(helper Helper, text string, now time.Time) {
-	card := featureartifact.AssistantAction{Helper: helper.ID, Description: text}
+// propose turns a helper's result into a card, taken where Mayka's say is
+// Build everything and asked for otherwise (ADR-041). A newer result
+// replaces an older card still waiting.
+func (stored *record) propose(helper Helper, text string, take bool, now time.Time) {
+	card := featureartifact.AssistantAction{Helper: helper.ID, Description: text, Take: take}
 	switch helper.Kind {
 	case HelperBrief:
 		card.Type, card.WorkOrderID, card.Title = featureartifact.AssistantAcceptBrief, helper.WorkOrderID, helper.Title

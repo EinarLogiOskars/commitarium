@@ -210,7 +210,7 @@ func (watcher Watcher) releaseHeld(ctx context.Context, scope string) {
 	if err != nil {
 		return
 	}
-	_, _, states, _ := watcher.Service.workOrders(ctx, scope)
+	_, _, states := watcher.Service.workOrders(ctx, scope)
 	for workOrderID := range stored.earlyPlanners() {
 		if states[workOrderID] != feature.StatePlanning {
 			continue
@@ -314,6 +314,7 @@ func (service *Service) autopilotOutcome(scope string, action Action, applyErr e
 			stored.Actions[index].HoldStart = false
 			stored.Actions[index].PlansEarly = false
 			stored.Actions[index].LeftForUser = true
+			stored.Actions[index].LeftReason = "Commitarium could not apply it: " + strings.TrimSuffix(applyErr.Error(), ".") + "."
 		}
 	}
 	name := actionName(action.AssistantAction)

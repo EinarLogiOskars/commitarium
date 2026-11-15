@@ -89,8 +89,9 @@ func TestAHelperThatFailsWakesTheAssistant(t *testing.T) {
 	}
 }
 
-// The assistant's answer to a helper is sent at once, where it assists as
-// where it builds everything: it changes nothing in the project.
+// The assistant's answer to a helper is sent at once, whatever her say: it
+// changes nothing in the project. An action she asks for stays a card in
+// every level (ADR-041).
 func TestAnAnswerToAHelperIsSentWithoutApproval(t *testing.T) {
 	for _, mode := range []project.AssistantMode{project.AssistantModeAssists, project.AssistantModeBuilds} {
 		service, _ := newTestService(t)
@@ -115,11 +116,7 @@ func TestAnAnswerToAHelperIsSentWithoutApproval(t *testing.T) {
 		for _, action := range actions {
 			ids = append(ids, action.ID)
 		}
-		want := "act_answer"
-		if mode == project.AssistantModeBuilds {
-			want = "act_answer act_create"
-		}
-		if strings.Join(ids, " ") != want {
+		if want := "act_answer"; strings.Join(ids, " ") != want {
 			t.Fatalf("%s: applied %v, want %s", mode, ids, want)
 		}
 	}
@@ -133,7 +130,7 @@ func TestABriefBecomesACardApprovedAsTheModeSays(t *testing.T) {
 		service, _ := newTestService(t)
 		service.config.Projects = gapProjects{mode: mode}
 		service.config.Features = &featuresStub{features: []feature.Feature{
-			{ID: "fea_sort", Title: "Sort the shelf", State: feature.StateDraft},
+			{ID: "fea_sort", Title: "Sort the shelf", State: feature.StateDraft, CreatedBy: feature.CreatedByAssistant},
 		}}
 		startedHelper(t, service, Helper{ID: "ast_1", Kind: HelperBrief, WorkOrderID: "fea_sort", Title: "Sort the shelf"})
 		state := HelperState{Status: HelperProposes, Turn: 2, Text: "Sort the shelf by date."}

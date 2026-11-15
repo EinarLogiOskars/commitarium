@@ -70,6 +70,10 @@ type sharedState struct {
 	Gaps            map[string]gapTold  `json:"gaps,omitempty"`
 	PreviewFailedAt *time.Time          `json:"preview_failed_at,omitempty"`
 	Helpers         []Helper            `json:"helpers,omitempty"`
+	// Say is Mayka's own words on how much she does here (ADR-041); its
+	// level is the project's assistant mode. It is written only through
+	// updateShared, so a chat's write keeps it as it is.
+	Say *Say `json:"say,omitempty"`
 	// MainMoved is set once the main chat moved to another scope: its IDs
 	// stay taken there, so no chat here is main again.
 	MainMoved bool      `json:"main_moved,omitempty"`
@@ -122,6 +126,7 @@ func join(shared sharedState, chat chatState) record {
 		Conversation: Conversation{
 			Scope: shared.Scope, Chat: chat.ID, Title: chat.Title, Status: chat.Status, Agent: chat.Agent,
 			Model: chat.Model, Messages: chat.Messages, Actions: chat.Actions, Notes: shared.Notes, Goal: shared.Goal,
+			Say:    shared.Say,
 			Queued: chat.Queued, Launch: shared.Launch, UpdatedAt: chat.UpdatedAt, SignIn: chat.SignIn,
 			Focus: chat.Focus, Developer: shared.Developer, TurnStartedAt: chat.TurnStartedAt, Failure: chat.Failure,
 		},

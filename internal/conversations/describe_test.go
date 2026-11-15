@@ -98,7 +98,7 @@ func TestAWorkOrderWithoutAgentsSaysSo(t *testing.T) {
 	}
 	if !strings.Contains(state, `"New" (fea_new, the user's): draft, steps full, agents not chosen yet`) ||
 		!strings.Contains(state, `"Set" (fea_set, yours): ready`) ||
-		!strings.Contains(state, "How you work here: you assist.") ||
+		!strings.Contains(state, "How much you do here (your say): Ask first.") ||
 		!strings.Contains(state, "lead codex on gpt-6-luna, reviewer claude on claude-sonnet-5-5") ||
 		strings.Contains(state, "Defaults: lead") {
 		t.Fatalf("work orders in the state:\n%s", state)

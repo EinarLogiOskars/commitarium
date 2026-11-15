@@ -342,45 +342,50 @@ func (stub modeProjectsStub) GetByID(ctx context.Context, id string) (project.Pr
 	return stored, err
 }
 
-// Building everything, the assistant owns the whole project and takes over
-// work orders the user creates too (ADR-027); only assisting leaves them to
-// the user.
-func TestBuildingEverythingTakesOverTheUsersWorkOrders(t *testing.T) {
+// Whatever her say, the work orders the user created by hand stay theirs
+// (ADR-041): a start she takes on one is left for the user with the reason,
+// unless the user asked for it in the chat; her own start applies.
+func TestTheUsersWorkOrdersStayTheirsWhateverTheSay(t *testing.T) {
 	service, _ := newTestService(t)
 	service.config.Projects = modeProjectsStub{app: true, mode: project.AssistantModeBuilds}
 	service.config.Features = &featuresStub{features: []feature.Feature{
 		{ID: "fea_users", Title: "Prevent logging future nights", State: feature.StateDraft, CreatedBy: feature.CreatedByUser},
+		{ID: "fea_asked", Title: "Dark mode", State: feature.StateDraft, CreatedBy: feature.CreatedByUser},
 		{ID: "fea_ours", Title: "Weekly chart", State: feature.StateDraft, CreatedBy: feature.CreatedByAssistant},
 	}}
 	stored, err := service.read("prj_test")
 	if err != nil {
 		t.Fatal(err)
 	}
-	card := func(id string, workOrder string) Action {
+	card := func(id string, workOrder string, asked bool) Action {
 		return Action{ID: id, Status: ActionProposed, AssistantAction: featureartifact.AssistantAction{
-			Type: featureartifact.AssistantStartWorkOrder, Reason: "The draft has been waiting", WorkOrderID: workOrder}}
+			Type: featureartifact.AssistantStartWorkOrder, Reason: "The draft has been waiting", WorkOrderID: workOrder,
+			Take: true, Asked: asked}}
 	}
-	stored.Actions = append(stored.Actions, card("act_start_users", "fea_users"), card("act_start_ours", "fea_ours"))
+	stored.Actions = append(stored.Actions, card("act_start_users", "fea_users", false),
+		card("act_start_asked", "fea_asked", true), card("act_start_ours", "fea_ours", false))
 	stored.Watched = map[string]string{"fea_users": "draft", "fea_ours": "draft"}
 	if err := service.write(stored); err != nil {
 		t.Fatal(err)
 	}
-	if !service.AutopilotHandles(t.Context(), "prj_test", "fea_users", time.Now()) {
-		t.Fatal("building everything, autopilot does not handle the user's work order")
+	if service.AutopilotHandles(t.Context(), "prj_test", "fea_users", time.Now()) {
+		t.Fatal("building everything, autopilot claims the user's work order")
 	}
 	apply, err := service.autopilotActions(t.Context(), "prj_test")
-	if err != nil || len(apply) != 2 {
-		t.Fatalf("building everything applies %+v err=%v, want both starts", apply, err)
+	if err != nil || len(apply) != 2 || apply[0].ID != "act_start_asked" || apply[1].ID != "act_start_ours" {
+		t.Fatalf("applies %+v err=%v, want the asked start and her own", apply, err)
 	}
-
-	service.config.Projects = modeProjectsStub{app: true, mode: project.AssistantModeAssists}
-	if service.AutopilotHandles(t.Context(), "prj_test", "fea_users", time.Now()) {
-		t.Fatal("assisting, autopilot claims the user's work order")
+	conversation, _ := service.Get(t.Context(), "prj_test")
+	for _, action := range conversation.Actions {
+		if action.ID == "act_start_users" && (!action.LeftForUser ||
+			action.LeftReason != "“Prevent logging future nights” is your work order, so it waits for you.") {
+			t.Fatalf("the user's start = %+v, want it left for them with the reason", action)
+		}
 	}
 }
 
-// How the assistant works follows the project's setting, not its app flag:
-// building everything applies its actions; assisting leaves them as cards.
+// Her instructions follow the say's level, not the app flag; in every level
+// an action she takes applies and one she asks for stays a card (ADR-041).
 func TestHowTheAssistantWorksFollowsTheProjectsSetting(t *testing.T) {
 	for _, test := range []struct {
 		name    string
@@ -400,7 +405,7 @@ func TestHowTheAssistantWorksFollowsTheProjectsSetting(t *testing.T) {
 				t.Fatal(err)
 			}
 			instructions := worker.puts[0].Instructions
-			if builds := strings.Contains(instructions, "The user chose that you build everything here"); builds != test.applies {
+			if builds := strings.Contains(instructions, "Your say here is Build everything"); builds != test.applies {
 				t.Fatalf("builds instructions = %t, want %t", builds, test.applies)
 			}
 			// Building everything, it reports in a line or two and asks only
@@ -415,15 +420,16 @@ func TestHowTheAssistantWorksFollowsTheProjectsSetting(t *testing.T) {
 			worker.finish(workerhttp.TerminalResult{
 				Outcome: workerhttp.OutcomeCompleted, Disposition: workerhttp.DispositionSucceeded, Summary: "Making them blue.",
 				AssistantTurn: &featureartifact.AssistantTurn{Actions: []featureartifact.AssistantAction{
-					{Type: featureartifact.AssistantCreateWorkOrder, Reason: "Asked", Title: "Blue buttons", Steps: "quick"},
+					{Type: featureartifact.AssistantCreateWorkOrder, Reason: "Asked", Title: "Blue buttons", Steps: "quick", Take: true},
+					{Type: featureartifact.AssistantCreateWorkOrder, Reason: "Next", Title: "Round corners", Steps: "quick"},
 				}},
 			})
 			if _, err := service.Get(t.Context(), "prj_test"); err != nil {
 				t.Fatal(err)
 			}
 			apply, err := service.autopilotActions(t.Context(), "prj_test")
-			if err != nil || (len(apply) == 1) != test.applies {
-				t.Fatalf("applied %+v err=%v, want applied %t", apply, err, test.applies)
+			if err != nil || len(apply) != 1 || apply[0].Title != "Blue buttons" {
+				t.Fatalf("applied %+v err=%v, want only the action she took", apply, err)
 			}
 		})
 	}
@@ -536,19 +542,21 @@ func TestAutopilotLeavesBackToReadyToTheUser(t *testing.T) {
 	}
 }
 
-// Where the assistant builds everything, it may start stuck work over itself,
-// as it may close and replace it.
+// Where the assistant builds everything, it may start its stuck work over
+// itself, as it may close and replace it.
 func TestAutopilotSendsWorkBackToReadyWhereItBuildsEverything(t *testing.T) {
 	service, worker := newTestService(t)
 	service.config.Projects = modeProjectsStub{app: true, mode: project.AssistantModeBuilds}
-	service.config.Features = &featuresStub{features: []feature.Feature{{ID: "fea_list", State: feature.StateImplementing}}}
+	service.config.Features = &featuresStub{features: []feature.Feature{{ID: "fea_list", State: feature.StateImplementing,
+		CreatedBy: feature.CreatedByAssistant}}}
 	if _, err := service.Send(t.Context(), "prj_test", "Go on", "msg-1"); err != nil {
 		t.Fatal(err)
 	}
 	worker.finish(workerhttp.TerminalResult{
 		Outcome: workerhttp.OutcomeCompleted, Disposition: workerhttp.DispositionSucceeded, Summary: "Starting over.",
 		AssistantTurn: &featureartifact.AssistantTurn{Actions: []featureartifact.AssistantAction{
-			{Type: featureartifact.AssistantRecoverWorkOrder, Reason: "Unusable", WorkOrderID: "fea_list", How: "back_to_ready"},
+			{Type: featureartifact.AssistantRecoverWorkOrder, Reason: "Unusable", WorkOrderID: "fea_list", How: "back_to_ready",
+				Take: true},
 		}},
 	})
 	if _, err := service.Get(t.Context(), "prj_test"); err != nil {
@@ -679,10 +687,23 @@ func TestAClosedWorkOrderNoLongerClaimsItsVisionItem(t *testing.T) {
 
 // blockedReplacement is replacementSetup in a project in the given mode,
 // whose old work order is blocked (or not) without its recovery running out.
+// Building everything, Mayka takes the close and the replacement.
 func blockedReplacement(t *testing.T, old feature.Feature, mode project.AssistantMode, blocked bool) *Service {
 	t.Helper()
 	service := replacementSetup(t, old, false)
 	service.config.Projects = modeProjectsStub{mode: mode}
+	if mode == project.AssistantModeBuilds {
+		stored, err := service.read("prj_test")
+		if err != nil {
+			t.Fatal(err)
+		}
+		for index := range stored.Actions {
+			stored.Actions[index].Take = true
+		}
+		if err := service.write(stored); err != nil {
+			t.Fatal(err)
+		}
+	}
 	service.config.Blocked = func(_ context.Context, workOrderID string) bool {
 		return blocked && workOrderID == old.ID
 	}
@@ -698,16 +719,6 @@ func TestAutopilotReplacesABlockedGoalWorkOrderWhereItBuildsEverything(t *testin
 	apply, err := service.autopilotActions(t.Context(), "prj_test")
 	if err != nil || len(apply) != 2 || apply[0].ID != "act_close_old" || apply[1].ID != "act_rebuild" || apply[1].HoldStart {
 		t.Fatalf("autopilot applies %+v err=%v, want the close, then the replacement created and started", apply, err)
-	}
-}
-
-func TestAutopilotDoesNotCloseAHealthyGoalWorkOrderWhereItBuildsEverything(t *testing.T) {
-	old := feature.Feature{ID: "fea_old", Title: "Edit and delete single items", State: feature.StateImplementing,
-		CreatedBy: feature.CreatedByAssistant}
-	service := blockedReplacement(t, old, project.AssistantModeBuilds, false)
-	apply, err := service.autopilotActions(t.Context(), "prj_test")
-	if err != nil || len(apply) != 0 {
-		t.Fatalf("autopilot applies %+v err=%v, want nothing", apply, err)
 	}
 }
 
@@ -769,9 +780,11 @@ func TestAutopilotStartsWorkSideBySideUpToTheSafetyCap(t *testing.T) {
 	}
 	for index := 1; index <= SafetyCap+2; index++ {
 		id := fmt.Sprintf("fea_%02d", index)
-		features.features = append(features.features, feature.Feature{ID: id, Title: "Screen " + id, State: feature.StateReady})
+		features.features = append(features.features, feature.Feature{ID: id, Title: "Screen " + id, State: feature.StateReady,
+			CreatedBy: feature.CreatedByAssistant})
 		stored.Actions = append(stored.Actions, Action{ID: "act_" + id, Status: ActionProposed,
-			AssistantAction: featureartifact.AssistantAction{Type: featureartifact.AssistantStartWorkOrder, WorkOrderID: id}})
+			AssistantAction: featureartifact.AssistantAction{Type: featureartifact.AssistantStartWorkOrder, WorkOrderID: id,
+				Take: true}})
 	}
 	if err := service.write(stored); err != nil {
 		t.Fatal(err)

@@ -81,7 +81,9 @@ type StateDescriber struct {
 	Documents DocumentLister
 	// TestAccounts, when set, lists the project's test logins.
 	TestAccounts TestAccountLister
-	Now          func() time.Time
+	// Say, when set, reads Mayka's own words in a project's say (ADR-041).
+	Say func(scope string) Say
+	Now func() time.Time
 }
 
 // maxWorkOrders bounds the work orders listed for a project.
@@ -221,14 +223,14 @@ func (describer StateDescriber) writeProject(ctx context.Context, builder *strin
 	builder.WriteString(fmt.Sprintf("\n## This project: %s (%s)\n", current.Name, current.ID))
 	builder.WriteString(fmt.Sprintf("Defaults: merge %s; autonomy %s; independent tests %t.\n",
 		current.MergePolicy, current.AutonomyPolicy, current.IndependentAcceptanceTests))
-	if current.AssistantBuilds() {
-		builder.WriteString("How you work here: you build everything. You own the whole project: write the vision, " +
-			"set up the stack, create and start the work orders, and take over work orders the user creates too. " +
-			"Your actions apply without cards, except those using a premium model.\n")
-	} else {
-		builder.WriteString("How you work here: you assist. Each of your actions waits for the user's approval " +
-			"as a card.\n")
+	// Her say (ADR-041): the level the user sees, and her own words.
+	builder.WriteString("How much you do here (your say): " + sayLevel(current.AssistantBuilds()) + ".")
+	if describer.Say != nil {
+		if say := describer.Say(current.ID); say.Words != "" {
+			builder.WriteString(" Your words: " + say.Words)
+		}
 	}
+	builder.WriteString("\n")
 	if current.ForgejoRepository != nil {
 		if overview, err := describer.Projects.GetRepositoryOverview(ctx, current.ID); err == nil {
 			builder.WriteString(fmt.Sprintf("Repository default branch %s at %s.\n", overview.DefaultBranch, overview.Head.CommitID))

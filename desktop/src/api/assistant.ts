@@ -166,8 +166,13 @@ export interface AssistantAction {
   start_failed?: string;
   /** Autopilot took it over. */
   auto_tried?: boolean;
-  /** Autopilot left it for the user instead of applying it. */
+  /** Mayka's choice (ADR-041): true takes it, applied right after her
+   * turn; false asks for it as a card. */
+  take?: boolean;
+  /** A hard limit left it for the user instead of applying it. */
   left_for_user?: boolean;
+  /** Why it was left for the user, in plain words. */
+  left_reason?: string;
   /** Its work order already got where it leads, so it was not needed: it
    * counts as applied, and result says why ("Already started."). */
   settled?: boolean;
@@ -199,6 +204,9 @@ export interface Conversation {
   actions: AssistantAction[];
   notes: string;
   goal?: AutopilotGoal;
+  /** Mayka's own words on how much she does in the project (ADR-041); the
+   * level is the project's assistant mode. */
+  say?: { words: string; updated_at: string };
   /** The user's messages sent while the assistant answered; they start its
    * next turn. */
   queued?: AssistantMessage[];
