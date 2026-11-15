@@ -523,6 +523,25 @@ func (service *Service) autopilotChat(ctx context.Context, scope, chat string, l
 				continue
 			}
 		}
+		// The hard limits first, so an action they stop takes no slot. A
+		// work order the user made stays theirs to close even when a goal
+		// handed it to her, unless its recovery ran out and the goal replaces
+		// it: closing is a removal of work she did not create (ADR-041).
+		handedClose := action.Type == featureartifact.AssistantCloseWorkOrder && target != "" &&
+			!stored.made(target, ours) && !(orders[target] && exhausted(target))
+		theirs := ""
+		if target != "" && (!stored.mayAct(target, ours) || handedClose) {
+			if theirs = titles[target]; theirs == "" {
+				theirs = target
+			}
+		}
+		if reason := HardLimit(*action, Limits{Builds: builds, Theirs: theirs, Premium: action.Premium}); reason != "" {
+			action.Queued, action.AutoTried = false, true
+			action.LeftForUser, action.LeftReason = true, capitalized(reason)
+			stored.addEvent(fmt.Sprintf("Mayka left %s for you: %s", actionName(action.AssistantAction), reason), now)
+			noted = true
+			continue
+		}
 		// Work orders run side by side up to the safety cap; a start beyond
 		// it waits for a slot (ADR-036, revised).
 		// Planning early takes no slot: it counts once it implements.
@@ -549,23 +568,6 @@ func (service *Service) autopilotChat(ctx context.Context, scope, chat string, l
 		}
 		action.Queued = false
 		action.AutoTried = true
-		// A work order the user made stays theirs to close even when a goal
-		// handed it to her, unless its recovery ran out and the goal replaces
-		// it: closing is a removal of work she did not create (ADR-041).
-		handedClose := action.Type == featureartifact.AssistantCloseWorkOrder && target != "" &&
-			!stored.made(target, ours) && !(orders[target] && exhausted(target))
-		theirs := ""
-		if target != "" && (!stored.mayAct(target, ours) || handedClose) {
-			if theirs = titles[target]; theirs == "" {
-				theirs = target
-			}
-		}
-		if reason := HardLimit(*action, Limits{Builds: builds, Theirs: theirs, Premium: action.Premium}); reason != "" {
-			action.LeftForUser, action.LeftReason = true, capitalized(reason)
-			stored.addEvent(fmt.Sprintf("Mayka left %s for you: %s", actionName(action.AssistantAction), reason), now)
-			noted = true
-			continue
-		}
 		if action.Type == featureartifact.AssistantContinueWorkOrder || action.Type == featureartifact.AssistantRecoverWorkOrder {
 			if stored.AutoContinues[action.WorkOrderID] >= maxAutoContinues {
 				action.LeftForUser = true
@@ -900,16 +902,20 @@ func (service *Service) AutopilotHandles(ctx context.Context, scope, workOrderID
 			inGoal = inGoal || item.WorkOrderID == workOrderID
 		}
 	}
-	if !inGoal || !stored.mayAct(workOrderID, ours) {
+	if !stored.mayAct(workOrderID, ours) {
 		return false
 	}
 	for _, action := range stored.everyAction() {
 		if (action.Type == featureartifact.AssistantContinueWorkOrder || action.Type == featureartifact.AssistantRecoverWorkOrder) &&
 			action.WorkOrderID == workOrderID &&
 			action.Status == ActionProposed {
-			// Not yet tried, autopilot applies it; tried, it waits for the user.
-			return !action.AutoTried
+			// One she took, or the goal's, applies once tried; one she asks
+			// about, or one tried already, waits for the user (ADR-041).
+			return !action.AutoTried && (taken(action) || stored.Goal.drivesItem(action.AssistantAction))
 		}
+	}
+	if !inGoal {
+		return false
 	}
 	if service.busy(scope, chats) {
 		return true

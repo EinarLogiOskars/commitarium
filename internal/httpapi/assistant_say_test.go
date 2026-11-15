@@ -16,7 +16,7 @@ func TestHerSayIsAppliedAtOnce(t *testing.T) {
 	stub := &conversationStub{action: conversations.Action{
 		ID: "act_1", Status: conversations.ActionProposed,
 		AssistantAction: featureartifact.AssistantAction{
-			Type: featureartifact.AssistantSetSay, Reason: "The user said to just go", Take: true,
+			Type: featureartifact.AssistantSetSay, Reason: "The user said to just go", Take: true, Asked: true,
 			Level: featureartifact.SayBuildEverything, Words: "Deploy after each change.",
 		},
 	}}

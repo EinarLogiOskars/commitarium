@@ -102,6 +102,12 @@ func HardLimit(action Action, limits Limits) string {
 		// the chat to act on it: that hands it to her (handOver).
 		return fmt.Sprintf("“%s” is your work order, so it waits for you.", limits.Theirs)
 	}
+	if action.Type == featureartifact.AssistantSetSay && action.Level == featureartifact.SayBuildEverything &&
+		!limits.Builds && !action.Asked {
+		// Build everything lets her start and merge work on her own: she
+		// raises it only when the user plainly asked; otherwise she asks.
+		return "building everything here waits for your yes."
+	}
 	if action.Type == featureartifact.AssistantRecoverWorkOrder && action.How == "back_to_ready" && !limits.Builds && !action.Asked {
 		// Back to Ready throws work away: the user's call, unless they asked
 		// for it or she builds everything here, where she may start stuck

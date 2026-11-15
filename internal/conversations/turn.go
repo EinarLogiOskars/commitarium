@@ -338,24 +338,32 @@ func (service *Service) refresh(ctx context.Context, stored record) (record, err
 					// The user's app applies the server's cards, the ones
 					// the user asked for at once: never taken here.
 					proposed.Take = false
-				case sentAtOnce(proposed.Type), stored.Goal.drivesItem(proposed):
+				case sentAtOnce(proposed.Type):
+					// An active goal's actions are not marked here: the
+					// watcher sees the goal when it looks, so stopping the
+					// goal stops them too.
 					proposed.Take = true
 				}
 				userTurn := stored.LastTurn != nil && stored.LastTurn.Role == "user"
-				if !featureartifact.AppliedByTheApp(proposed.Type) && !userTurn {
-					// Only the user's message asks for an action on their
-					// work order: a turn woken by events asks for nothing,
-					// so it cannot take one of theirs over (ADR-041).
+				if !userTurn {
+					// Only the user's message asks for anything: a turn
+					// woken by events, whose text may come from agents or
+					// pages, asks for nothing, so it cannot take over the
+					// user's work order or apply a server card at once
+					// (ADR-041).
 					proposed.Asked = false
-				}
-				if proposed.Type == featureartifact.AssistantSetSay && !userTurn {
-					// Her level follows what the user tells her: a turn
-					// woken by events may note words, never raise or lower
-					// how much she does.
-					proposed.Level = ""
-					if strings.TrimSpace(proposed.Words) == "" {
+					if proposed.Type == featureartifact.AssistantSetSay ||
+						proposed.Type == featureartifact.AssistantDropGoalItem {
+						// Her say and the goal the user handed her follow
+						// what the user tells her, never what happened.
 						continue
 					}
+				}
+				if proposed.Type == featureartifact.AssistantSetSay &&
+					proposed.Level == featureartifact.SayBuildEverything && !proposed.Asked {
+					// A raise the user did not plainly ask for is a card
+					// (HardLimit); shown as one from the start.
+					proposed.Take = false
 				}
 				if stored.Scope == TopLevel && (proposed.Type == featureartifact.AssistantSetSay ||
 					proposed.Type == featureartifact.AssistantDropGoalItem) {
@@ -616,7 +624,7 @@ How you handle round limits:
 - Be brief and concrete.
 
 How much you do here (your say):
-- Each project keeps your say, shown in the state: a level, Ask first or Build everything, and your own words for the rest. Unset is Ask first. When the user tells you how much to do here ("just go", "build it all", "ask me first", "advise only, don't change anything", "deploy after each change", "skip P1.3 for now"), record it with set_say: level ask_first or build_everything when they change how much you do, and words, in full, for everything else they said about it (two levels only; "advise only" and the like go in words). Commitarium applies set_say at once; say in a line what you noted.
+- Each project keeps your say, shown in the state: a level, Ask first or Build everything, and your own words for the rest. Unset is Ask first. When the user tells you how much to do here ("just go", "build it all", "ask me first", "advise only, don't change anything", "deploy after each change", "skip P1.3 for now"), record it with set_say: level ask_first or build_everything when they change how much you do, and words, in full, for everything else they said about it (two levels only; "advise only" and the like go in words). Commitarium applies set_say at once; say in a line what you noted. Raising the level to build_everything applies at once only with asked true, when the user plainly asked for it in their message; otherwise it waits for their yes. set_say and drop_goal_item count only in a turn answering the user's message.
 - Take or ask, for every action, from your say and the conversation. When unsure, ask.
 - Under Build everything, take every step that moves the app toward its vision, and tell the user what you did.
 - Under Ask first, take small steps (answer_helper, research, delegate, revise, write_brief) and the actions the user just asked you for; ask before work orders start (create_work_order, start_work_order) and before anything else that changes the project.

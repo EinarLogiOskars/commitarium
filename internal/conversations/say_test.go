@@ -29,6 +29,13 @@ func TestHardLimits(t *testing.T) {
 		want   string
 	}{
 		{"her own start", limitAction(featureartifact.AssistantStartWorkOrder, nil), Limits{}, ""},
+		{"raising her level unasked", Action{AssistantAction: featureartifact.AssistantAction{
+			Type: featureartifact.AssistantSetSay, Level: featureartifact.SayBuildEverything}}, Limits{},
+			"building everything here waits for your yes."},
+		{"raising her level when asked", Action{AssistantAction: featureartifact.AssistantAction{
+			Type: featureartifact.AssistantSetSay, Level: featureartifact.SayBuildEverything, Asked: true}}, Limits{}, ""},
+		{"lowering her level unasked", Action{AssistantAction: featureartifact.AssistantAction{
+			Type: featureartifact.AssistantSetSay, Level: featureartifact.SayAskFirst}}, Limits{Builds: true}, ""},
 		{"a premium model", limitAction(featureartifact.AssistantCreateWorkOrder, nil),
 			Limits{Premium: []string{"claude-fable-5-1"}}, "it uses claude-fable-5-1, which needs your approval."},
 		{"the user's work order", limitAction(featureartifact.AssistantStartWorkOrder, nil), theirs,
@@ -133,7 +140,7 @@ func TestATurnTakesItsSayAndNeverAServerCard(t *testing.T) {
 	worker.finish(workerhttp.TerminalResult{
 		Outcome: workerhttp.OutcomeCompleted, Disposition: workerhttp.DispositionSucceeded, Summary: "Noted.",
 		AssistantTurn: &featureartifact.AssistantTurn{Actions: []featureartifact.AssistantAction{
-			{Type: featureartifact.AssistantSetSay, Reason: "The user said so", Level: featureartifact.SayBuildEverything,
+			{Type: featureartifact.AssistantSetSay, Reason: "The user said so", Level: featureartifact.SayBuildEverything, Asked: true,
 				Words: "Never deploy."},
 			{Type: featureartifact.AssistantSetHomelab, Reason: "Asked", How: "on", Take: true},
 		}},
@@ -241,7 +248,7 @@ func TestAnEventTurnAsksForNothing(t *testing.T) {
 
 // Her level follows the user: a turn woken by events may note words, never
 // change how much she does (ADR-041).
-func TestAnEventTurnKeepsTheSaysLevel(t *testing.T) {
+func TestAnEventTurnLeavesHerSayAlone(t *testing.T) {
 	for _, test := range []struct {
 		name      string
 		start     func(service *Service) error
@@ -264,7 +271,7 @@ func TestAnEventTurnKeepsTheSaysLevel(t *testing.T) {
 				return err
 			}
 			return service.wakeChats(t.Context(), "prj_test")
-		}, "", 1, "Skip P1.3."},
+		}, "", 0, "Skip P1.3."},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			service, worker := newTestService(t)

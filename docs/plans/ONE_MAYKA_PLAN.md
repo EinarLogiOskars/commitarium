@@ -82,7 +82,9 @@ backend; the desktop reads each action's outcome instead of re-deriving it.
 - **The user's own work:** acting on a work order the user made by hand,
   unless the user asked for that action in this chat.
 - **Removals:** closing or deleting work she did not create, deleting a
-  project, removing a domain or address.
+  project, removing a domain or address. Closing the user's own work order
+  is theirs to ask for: once they ask in the chat, it is hers like any
+  other action on it.
 - **The server:** Homelab, sign-in gates, app access, the apps page, and a
   deploy that moves or drops an address (the current server-card
   exceptions, unchanged).

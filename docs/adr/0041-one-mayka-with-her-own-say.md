@@ -31,7 +31,8 @@ Project settings. Unset means *Ask first*.
 
 **Hard limits are the coordinator's.** One list, enforced when an action is
 applied, whatever her say is: premium models; the user's own work orders
-unless the user asked in this chat; removals of work she did not create;
+unless the user asked in this chat (which covers closing it); removals of
+other work she did not create, such as a project;
 the server cards (Homelab, sign-in, app access, the apps page, and deploys
 that move or drop an address); and the loop bounds (16 running work orders,
 8 automatic continues per work order, 2 refusal wakes in a row). A deploy
