@@ -7,8 +7,11 @@ import (
 	"testing"
 )
 
-const testOwnerToken = "owner-token-0123456789abcdefghijklmnopqrstuv"
+// Hex, as bootstrap makes it, so it looks like a run token too.
+const testOwnerToken = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
+// guarded wraps a mux with the coordinator's real route patterns, so the
+// guard is judged against how the mux routes, and records which matched.
 func guarded(t *testing.T) (Callers, http.Handler, *int) {
 	t.Helper()
 	callers, err := NewCallers(testOwnerToken + "\n")
@@ -16,11 +19,28 @@ func guarded(t *testing.T) (Callers, http.Handler, *int) {
 		t.Fatal(err)
 	}
 	reached := 0
-	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		reached++
-		w.WriteHeader(http.StatusNoContent)
-	})
-	return callers, callers.Guard(next), &reached
+	mux := http.NewServeMux()
+	for _, pattern := range []string{
+		"GET /health",
+		"GET /api/v1/projects",
+		"GET /api/v1/projects/{projectID}",
+		"POST /api/v1/agents",
+		"PUT /api/v1/assistant/settings",
+		"POST /api/v1/assistant/conversations/{scope}/actions/{actionID}/approve",
+		"POST /api/v1/marketplace/apps/{owner}/{name}/install",
+		"GET /api/v1/projects/{projectID}/features/{id}",
+		"POST /api/v1/projects/{projectID}/features/{id}/transitions",
+		"GET /api/v1/projects/{projectID}/features/{id}/artifacts/{kind}",
+		"PUT /api/v1/projects/{projectID}/features/{id}/artifacts/{kind}",
+		"POST /api/v1/projects/{projectID}/features/{id}/implementation-plan/steps/{stepID}/transitions",
+		"POST /api/v1/projects/{projectID}/features/{id}/acceptance-tests/{testID}/transitions",
+	} {
+		mux.HandleFunc(pattern, func(w http.ResponseWriter, _ *http.Request) {
+			reached++
+			w.WriteHeader(http.StatusNoContent)
+		})
+	}
+	return callers, callers.Guard(mux), &reached
 }
 
 func call(handler http.Handler, method, path, token string) int {
@@ -88,9 +108,15 @@ func TestARunTokenOpensOnlyItsOwnWorkOrdersPlanAndTests(t *testing.T) {
 		{http.MethodGet, "/api/v1/projects/prj_a/features/ftr_b"},
 		{http.MethodPost, "/api/v1/assistant/conversations/prj_a/actions/act_1/approve"},
 		{http.MethodGet, "/api/v1/projects/prj_a/features/ftr_b/artifacts/.."},
+		{http.MethodHead, "/api/v1/projects/prj_a/features/ftr_b/artifacts/implementation_plan"},
+		// An encoded slash stays in one segment for the mux, so these reach
+		// other routes than they seem to.
+		{http.MethodPost, "/api/v1/projects/prj_a/features/ftr_b%2Facceptance-tests%2Ft1/transitions"},
+		{http.MethodGet, "/api/v1/projects/prj_a/features/ftr_b%2Fartifacts%2Fx"},
+		{http.MethodGet, "/api/v1/projects/prj_a%2Ffeatures%2Fftr_b%2Fartifacts%2Fx"},
 	} {
-		if code := call(handler, route.method, route.path, token); code != http.StatusForbidden {
-			t.Errorf("%s %s with another scope's run token: %d, want 403", route.method, route.path, code)
+		if code := call(handler, route.method, route.path, token); code != http.StatusUnauthorized {
+			t.Errorf("%s %s with another scope's run token: %d, want 401", route.method, route.path, code)
 		}
 	}
 }

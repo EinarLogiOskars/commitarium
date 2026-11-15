@@ -15,7 +15,7 @@ import (
 // and the gateway hold it, and no worker does. A run token, derived from the
 // owner token for one project and work order, opens only what
 // commitarium-artifact needs for that work order. Everything else, except
-// GET /health, is refused.
+// GET /health, is refused with 401.
 type Callers struct {
 	owner []byte
 }
@@ -62,10 +62,8 @@ func (callers Callers) Guard(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		if looksLikeRunToken(token) {
-			writeError(w, http.StatusForbidden, "forbidden", "an agent's token opens only its own work order's plan and tests")
-			return
-		}
+		// One answer for every refusal, so a window holding an old token
+		// asks for it again.
 		w.Header().Set("WWW-Authenticate", "Bearer")
 		writeError(w, http.StatusUnauthorized, "unauthorized", "this needs the coordinator's token")
 	})
@@ -78,16 +76,6 @@ func bearer(r *http.Request) (string, bool) {
 	return token, found && token != ""
 }
 
-// looksLikeRunToken tells an agent outside its scope (403) from a caller
-// with no valid token (401), only for the error it gets.
-func looksLikeRunToken(token string) bool {
-	if len(token) != sha256.Size*2 {
-		return false
-	}
-	_, err := hex.DecodeString(token)
-	return err == nil
-}
-
 // runRoute reports whether the request is one of commitarium-artifact's
 // calls, and for which project and work order:
 //
@@ -95,6 +83,11 @@ func looksLikeRunToken(token string) bool {
 //	POST /api/v1/projects/{p}/features/{f}/implementation-plan/steps/{s}/transitions
 //	POST /api/v1/projects/{p}/features/{f}/acceptance-tests/{t}/transitions
 func runRoute(r *http.Request) (string, string, bool) {
+	if r.URL.RawPath != "" {
+		// The mux matches the escaped path, where an encoded slash stays
+		// inside one segment: such a path is never one of these routes.
+		return "", "", false
+	}
 	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/"), "/")
 	for _, part := range parts {
 		if part == "" || part == "." || part == ".." {

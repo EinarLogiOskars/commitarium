@@ -1,8 +1,11 @@
 # Coordinator API
 
 The coordinator listens on `http://127.0.0.1:8080` when started through Docker
-Compose. All current mutation endpoints are local and unauthenticated; exposing
-this API beyond the host loopback interface is unsupported.
+Compose. Every route but `GET /health` needs `Authorization: Bearer <token>`,
+with the owner token from `.commitarium/internal/coordinator-token`
+(COORDINATOR_ACCESS_PLAN.md); agents' run tokens open only their own work
+order's artifact reads and plan-step and acceptance-test transitions.
+Exposing this API beyond the host loopback interface is unsupported.
 
 ## Routes
 

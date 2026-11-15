@@ -298,7 +298,11 @@ func (service *Service) PutAttempt(
 	}
 	service.launching.Add(1)
 	defer service.launching.Add(-1)
-	digest, err := workerjournal.DigestRequest(request)
+	// The run token follows the owner token, which can change between
+	// retries of one launch; it is not part of what makes them the same.
+	digestible := request
+	digestible.RunToken = ""
+	digest, err := workerjournal.DigestRequest(digestible)
 	if err != nil {
 		return workerhttp.Attempt{}, false, fmt.Errorf("digest worker launch request: %w", err)
 	}

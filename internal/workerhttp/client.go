@@ -177,7 +177,9 @@ func (client *Client) PutAttempt(
 	identity MutationIdentity,
 	request PutAttemptRequest,
 ) (Attempt, bool, error) {
-	if client.runToken != nil {
+	if client.runToken != nil && request.Assignment.Role != RoleConsultant {
+		// Only a work order's own agents move its plan and tests; Mayka's
+		// turns and consultants get no token.
 		request.RunToken = client.runToken(request.Assignment.ProjectID, request.Assignment.FeatureID)
 	}
 	if err := request.Validate(identity); err != nil {
