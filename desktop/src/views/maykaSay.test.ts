@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AssistantAction } from "../api/assistant";
-import { appliesItself, offersAutopilot, sayLevel, sayLevelInWords } from "./maykaSay";
+import { appliesItself, offersAutopilot, sayLevel, sayLevelInWords, saysApplied } from "./maykaSay";
 
 const action = (overrides: Partial<AssistantAction>): AssistantAction =>
   ({
@@ -14,6 +14,14 @@ const action = (overrides: Partial<AssistantAction>): AssistantAction =>
   }) as AssistantAction;
 
 describe("Mayka's say", () => {
+  it("changes its key once a say of hers applies, so the level is read again", () => {
+    const before = saysApplied([action({ type: "set_say", status: "proposed", take: true })]);
+    const after = saysApplied([action({ type: "set_say", status: "applied", take: true })]);
+    expect(before).toBe("");
+    expect(after).toBe("act_1");
+    expect(saysApplied([action({ status: "applied" })])).toBe("");
+  });
+
   it("follows the project's level, and the app flag on older coordinators", () => {
     expect(sayLevel({ app: true, assistant_mode: "assists" })).toBe("assists");
     expect(sayLevel({ app: false, assistant_mode: "builds" })).toBe("builds");

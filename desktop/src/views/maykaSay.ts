@@ -47,3 +47,13 @@ export function appliesItself(action: AssistantAction): boolean {
   if (action.status === "proposed") return taken && (action.premium ?? []).length === 0;
   return taken;
 }
+
+/** The says Mayka recorded that applied, as a key: it changes once one
+ * applies, so the chat reads the level again, which her say may have
+ * changed without the user's approval. */
+export function saysApplied(actions: AssistantAction[]): string {
+  return actions
+    .filter((action) => action.type === "set_say" && action.status === "applied")
+    .map((action) => action.id)
+    .join(",");
+}

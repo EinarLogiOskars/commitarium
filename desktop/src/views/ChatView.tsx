@@ -55,7 +55,7 @@ import type {
   VisionPlanning,
   VisionPriority,
 } from "../api/types";
-import { appliesItself, sayLevel, sayLevelInWords } from "./maykaSay";
+import { appliesItself, sayLevel, sayLevelInWords, saysApplied } from "./maykaSay";
 import { Markdown } from "./Markdown";
 import { useCatalogModels, useModelName } from "./useModelName";
 import { agentName, reloadAgents, useAgentList, useAgents } from "./useAgents";
@@ -369,6 +369,11 @@ export function ChatView({
     window.addEventListener(ASSISTANT_CHANGED, loadLevel);
     return () => window.removeEventListener(ASSISTANT_CHANGED, loadLevel);
   }, [loadLevel]);
+  // Her say may change the level as she records what the user told her.
+  const said = saysApplied(conversation?.actions ?? []);
+  useEffect(() => {
+    if (said) loadLevel();
+  }, [said, loadLevel]);
   const buildsEverything = level === "builds";
 
   // Vision items by ID, labelled "P0.2 Title", for the cards.
