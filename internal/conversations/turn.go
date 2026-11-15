@@ -351,7 +351,14 @@ func (service *Service) refresh(ctx context.Context, stored record) (record, err
 					// pages, asks for nothing, so it cannot take over the
 					// user's work order or apply a server card at once
 					// (ADR-041).
-					proposed.Asked = false
+					// A deploy to the app's address is the exception: the
+					// user asks for those in her say ("deploy after each
+					// change"), which only their messages write, and a merge
+					// is what wakes her to do it. The app still refuses one
+					// that moves or drops an address.
+					if proposed.Type != featureartifact.AssistantDeployApp {
+						proposed.Asked = false
+					}
 					if proposed.Type == featureartifact.AssistantSetSay ||
 						proposed.Type == featureartifact.AssistantDropGoalItem {
 						// Her say and the goal the user handed her follow

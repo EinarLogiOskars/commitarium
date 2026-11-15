@@ -494,6 +494,26 @@ func (service *Service) autopilotChat(ctx context.Context, scope, chat string, l
 		if !taken(*action) && !inGoal {
 			continue
 		}
+		// The hard limits first, so an action they stop is neither queued
+		// nor takes a slot. A work order the user made stays theirs to close
+		// even when a goal handed it to her, unless its recovery ran out and
+		// the goal replaces it: closing is a removal of work she did not
+		// create (ADR-041).
+		handedClose := action.Type == featureartifact.AssistantCloseWorkOrder && target != "" &&
+			!stored.made(target, ours) && !(orders[target] && exhausted(target))
+		theirs := ""
+		if target != "" && (!stored.mayAct(target, ours) || handedClose) {
+			if theirs = titles[target]; theirs == "" {
+				theirs = target
+			}
+		}
+		if reason := HardLimit(*action, Limits{Builds: builds, Theirs: theirs, Premium: action.Premium}); reason != "" {
+			action.Queued, action.AutoTried = false, true
+			action.LeftForUser, action.LeftReason = true, capitalized(reason)
+			stored.addEvent(fmt.Sprintf("Mayka left %s for you: %s", actionName(action.AssistantAction), reason), now)
+			noted = true
+			continue
+		}
 		// Work that needs other work's code or result waits until that has
 		// merged. A new work order is created at once, so it shows as a
 		// draft; only its start waits.
@@ -522,25 +542,6 @@ func (service *Service) autopilotChat(ctx context.Context, scope, chat string, l
 				}
 				continue
 			}
-		}
-		// The hard limits first, so an action they stop takes no slot. A
-		// work order the user made stays theirs to close even when a goal
-		// handed it to her, unless its recovery ran out and the goal replaces
-		// it: closing is a removal of work she did not create (ADR-041).
-		handedClose := action.Type == featureartifact.AssistantCloseWorkOrder && target != "" &&
-			!stored.made(target, ours) && !(orders[target] && exhausted(target))
-		theirs := ""
-		if target != "" && (!stored.mayAct(target, ours) || handedClose) {
-			if theirs = titles[target]; theirs == "" {
-				theirs = target
-			}
-		}
-		if reason := HardLimit(*action, Limits{Builds: builds, Theirs: theirs, Premium: action.Premium}); reason != "" {
-			action.Queued, action.AutoTried = false, true
-			action.LeftForUser, action.LeftReason = true, capitalized(reason)
-			stored.addEvent(fmt.Sprintf("Mayka left %s for you: %s", actionName(action.AssistantAction), reason), now)
-			noted = true
-			continue
 		}
 		// Work orders run side by side up to the safety cap; a start beyond
 		// it waits for a slot (ADR-036, revised).
