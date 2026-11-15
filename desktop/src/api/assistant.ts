@@ -50,6 +50,7 @@ export type AssistantActionType =
   | "add_vision_item"
   | "start_autopilot"
   | "drop_goal_item"
+  | "set_say"
   | "continue_work_order"
   | "recover_work_order"
   | "close_work_order"

@@ -209,6 +209,15 @@ export function appliedLine(
         "brief-write",
         done ? "Writing the brief" : "Writing the brief…",
       );
+    case "set_say":
+      // Her say says what it noted in its result ("Noted: …").
+      return done
+        ? line("done", "note", action.result || "Noted how much Mayka does here")
+        : line(
+            action.status === "failed" ? "failed" : "busy",
+            "note",
+            "Noting how much Mayka does here…",
+          );
     case "recover_work_order":
     case "close_work_order":
     case "add_vision_item":

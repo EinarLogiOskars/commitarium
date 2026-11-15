@@ -1818,6 +1818,7 @@ const APPLY_LABEL: Record<AssistantAction["type"], string> = {
   add_vision_item: "Add to vision",
   start_autopilot: "Start autopilot",
   drop_goal_item: "Drop from goal",
+  set_say: "Note it",
   continue_work_order: "Continue",
   recover_work_order: "Recover",
   close_work_order: "Close",
