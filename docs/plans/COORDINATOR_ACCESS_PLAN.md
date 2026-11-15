@@ -66,15 +66,19 @@ coordinator needs the same idea.
     `COMMITARIUM_FEATURE_ID`; the artifact CLI sends it. The name avoids
     TOKEN, KEY and SECRET, which Codex strips from the commands it runs.
   - The middleware accepts it only on those three routes and only when the
-    path's project and work order match. Anywhere else it gets 403. It is not
+    path's project and work order match, on an unencoded path. Anywhere else it
+    gets the same 401 as no token. It is not
     limited to a running work order: all it opens is that work order's own
     plan and tests, and checking run state on every call adds more than it
     saves.
-  - Mayka's own turns get no run token: they only read, and her actions go
+  - Consultant turns, Mayka's included, get no run token: they only read, and her actions go
     through the coordinator's apply path (and, from 0.16, the worker relay
     for actions as tools, which never uses this API).
-- **Refusals.** No token or a wrong one: 401. A run token outside its scope:
-  403. Tokens are compared in constant time and never logged.
+- **Refusals.** Every refusal is 401, so a window holding an old token asks
+  for it again. Tokens are compared in constant time and never logged.
+- **What a run token is not.** It is per work order, not per role, and the
+  agent's container keeps every work order's token it ran (the worker's
+  journal, its processes' environment). Narrowing that is left for later.
 
 No Host or Origin check is needed on top: a page cannot set an
 `Authorization` header without a CORS preflight, which fails, and a rebound
