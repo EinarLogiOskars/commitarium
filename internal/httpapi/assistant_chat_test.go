@@ -47,6 +47,8 @@ type conversationStub struct {
 	retryErr error
 	// say is Mayka's words in the project's say, as set_say kept them.
 	say string
+	// dropped is the goal item drop_goal_item dropped, with its reason.
+	dropped string
 }
 
 func (stub *conversationStub) SetSay(_ context.Context, _, words string) error {
@@ -114,6 +116,11 @@ func (stub *conversationStub) Action(context.Context, string, string) (conversat
 func (stub *conversationStub) StartGoal(_ context.Context, scope string, level int) (conversations.Conversation, error) {
 	stub.goalLevel = level
 	return conversations.Conversation{Scope: scope}, stub.goalErr
+}
+
+func (stub *conversationStub) DropGoalItem(_ context.Context, _, itemID, reason string) (string, error) {
+	stub.dropped = itemID + ": " + reason
+	return "Dropped it from the goal.", nil
 }
 
 func (stub *conversationStub) ActiveGoals(context.Context) (map[string]conversations.Goal, error) {
@@ -209,11 +216,38 @@ func TestAutopilotAppliesActionsThroughTheSameApproval(t *testing.T) {
 			Type: featureartifact.AssistantStartAutopilot, Reason: "Finish the core", Priority: 1,
 		},
 	}
-	if err := apply(t.Context(), "prj_test", "act_1"); err != nil {
+	// A goal is only the user's to hand Mayka (ADR-041): the watcher never
+	// starts one, the user's approval of the card does.
+	if err := apply(t.Context(), "prj_test", "act_1"); err == nil ||
+		!strings.Contains(err.Error(), "an autopilot goal is yours to hand Mayka") || stub.goalLevel != 0 {
+		t.Fatalf("autopilot started a goal: %v (level %d)", err, stub.goalLevel)
+	}
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost,
+		"/api/v1/assistant/conversations/prj_test/actions/act_1/approve", strings.NewReader(`{}`)))
+	if recorder.Code != http.StatusOK || stub.goalLevel != 1 || stub.resolvedStatus != conversations.ActionApplied ||
+		!strings.Contains(stub.resolvedResult, "P1") {
+		t.Fatalf("goal level %d, resolved %s %q: %d %s", stub.goalLevel, stub.resolvedStatus, stub.resolvedResult,
+			recorder.Code, recorder.Body.String())
+	}
+}
+
+// drop_goal_item, which Mayka always takes, applies through the watcher's
+// approval: the goal no longer counts the item.
+func TestDroppingAGoalItemApplies(t *testing.T) {
+	stub := &conversationStub{action: conversations.Action{
+		ID: "act_1", Status: conversations.ActionProposed,
+		AssistantAction: featureartifact.AssistantAction{
+			Type: featureartifact.AssistantDropGoalItem, Reason: "The user skips it", VisionItemID: "bc",
+		},
+	}}
+	projects := &recordingProjectService{getByIDResult: project.Project{ID: "prj_test"}}
+	handler := NewWithWorkspaceRealWorkflowDeletionAndModels(projects, &recordingFeatureService{}, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, stub, testAgents())
+	if err := AssistantActionApplier(handler)(t.Context(), "prj_test", "act_1"); err != nil {
 		t.Fatal(err)
 	}
-	if stub.goalLevel != 1 || stub.resolvedStatus != conversations.ActionApplied || !strings.Contains(stub.resolvedResult, "P1") {
-		t.Fatalf("goal level %d, resolved %s %q", stub.goalLevel, stub.resolvedStatus, stub.resolvedResult)
+	if stub.dropped != "bc: The user skips it" || stub.resolvedStatus != conversations.ActionApplied {
+		t.Fatalf("dropped %q, resolved %s", stub.dropped, stub.resolvedStatus)
 	}
 }
 
@@ -232,8 +266,11 @@ func TestAutopilotOnFinishedWorkIsAlreadyDone(t *testing.T) {
 	projects := &recordingProjectService{getByIDResult: project.Project{ID: "prj_test"}}
 	handler := NewWithWorkspaceRealWorkflowDeletionAndModels(projects, &recordingFeatureService{}, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, stub, testAgents())
 
-	if err := AssistantActionApplier(handler)(t.Context(), "prj_test", "act_1"); err != nil {
-		t.Fatal(err)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost,
+		"/api/v1/assistant/conversations/prj_test/actions/act_1/approve", strings.NewReader(`{}`)))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("approve: %d %s", recorder.Code, recorder.Body.String())
 	}
 	if !stub.settled || stub.resolvedResult != "Already done." {
 		t.Fatalf("settled %v, result %q", stub.settled, stub.resolvedResult)

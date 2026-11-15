@@ -13,8 +13,8 @@ import (
 
 // Launching a new app (APPS_PLAN.md phase 2): the user describes the app in
 // a sentence; the vision assistant writes its vision with a recommended
-// stack; the stack is set up; and once the setup merges, autopilot builds
-// the whole vision. The watcher moves a launch along, so it needs nothing
+// stack; the stack is set up; and once the setup merges, Mayka, building
+// everything, builds the vision. The watcher moves a launch along, so it needs nothing
 // from the desktop once started.
 
 type LaunchStage string
@@ -77,7 +77,7 @@ func (service *Service) StartLaunch(ctx context.Context, scope string) (Conversa
 }
 
 // launch moves an app's launch along: from its written vision to setting up
-// the stack, and from the merged setup to autopilot on the whole vision.
+// the stack, and from the merged setup to building.
 func (watcher Watcher) launch(ctx context.Context, scope string) {
 	service := watcher.Service
 	stored, err := service.sharedOf(scope)
@@ -161,12 +161,12 @@ func (watcher Watcher) restartVision(ctx context.Context, scope string, launch L
 	}
 }
 
-func (watcher Watcher) startBuilding(ctx context.Context, scope string) {
-	if _, err := watcher.Service.StartGoal(ctx, scope, AllPriorities); err != nil && !errors.Is(err, ErrGoalActive) {
-		_ = watcher.Service.note(scope, "Autopilot could not start building the app: "+err.Error())
-		return
-	}
-	watcher.Service.setLaunchStage(scope, LaunchBuilding, "")
+// startBuilding ends the launch: the project builds everything already
+// (create_app and Build it set its say so), so no goal starts (ADR-041);
+// Mayka hears of the merged setup as news, and the idle look tells her
+// what is open once nothing runs.
+func (watcher Watcher) startBuilding(_ context.Context, scope string) {
+	watcher.Service.setLaunchStage(scope, LaunchBuilding, "The app is set up; Mayka builds its vision.")
 }
 
 func (service *Service) setLaunchStage(scope string, stage LaunchStage, text string) {

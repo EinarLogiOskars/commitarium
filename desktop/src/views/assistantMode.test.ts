@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AssistantAction } from "../api/assistant";
-import { appliesItself, assistantMode, assistantModeNote } from "./assistantMode";
+import { appliesItself, assistantMode, assistantModeNote, offersAutopilot } from "./assistantMode";
 
 const action = (overrides: Partial<AssistantAction>): AssistantAction =>
   ({
@@ -59,5 +59,12 @@ describe("assistant mode", () => {
         action({ type: "create_app", status: "applied", take: true, start_failed: "No" }),
       ),
     ).toBe(false);
+  });
+});
+
+describe("the Vision page's autopilot", () => {
+  it("is offered only where Mayka does not build everything already", () => {
+    expect(offersAutopilot("assists")).toBe(true);
+    expect(offersAutopilot("builds")).toBe(false);
   });
 });

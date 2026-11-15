@@ -1,7 +1,7 @@
 # One Mayka and Workspaces: Design Note
 
 **Status:** agreed 2026-11-15, [ADR-041](../adr/0041-one-mayka-with-her-own-say.md);
-Phase 1 in progress. Order: one Mayka, workspaces, across projects, then
+Phase 1 in progress (slices 1–4 built). Order: one Mayka, workspaces, across projects, then
 actions as tools after a spike.
 
 ## Why

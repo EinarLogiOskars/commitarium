@@ -83,10 +83,11 @@ type Watcher struct {
 	// Recoveries, when set, tells a work order's first round limit, which
 	// the assistant handles, from one after it did, which is the user's.
 	Recoveries RecoveryReader
-	// Toolchains and VisionSessions let the gap check see a project's stack
-	// and a vision being written; VisionSessions also lets each look store a
-	// vision the assistant has finished writing. AgentLimited, when set, tells it the
-	// assistant's agent is at its usage limit (gaps.go).
+	// Toolchains and VisionSessions let the facts and the idle look see a
+	// project's stack and a vision being written; VisionSessions also lets
+	// each look store a vision the assistant has finished writing.
+	// AgentLimited, when set, tells the idle look the assistant's agent is at
+	// its usage limit (idle.go).
 	Toolchains     ToolchainReader
 	VisionSessions VisionSessions
 	AgentLimited   func(ctx context.Context, agentID string) bool
@@ -137,7 +138,7 @@ func (watcher Watcher) Tick(ctx context.Context) {
 		watcher.launch(ctx, scope)
 		watcher.releaseHeld(ctx, scope)
 		watcher.autopilot(ctx, scope)
-		watcher.gapCheck(ctx, scope)
+		watcher.idleLook(ctx, scope)
 	}
 	// The top level has no project's work, but research it started comes
 	// back to it, and is sent without a card (research.go).
@@ -322,8 +323,7 @@ func (service *Service) autopilotOutcome(scope string, action Action, applyErr e
 	stored.Refusals++
 	if stored.Refusals <= maxRefusals {
 		stored.PendingEvents = append(stored.PendingEvents, fmt.Sprintf(
-			"Commitarium could not apply your action %s: %v. Propose it again with a choice that can run, "+
-				"or tell the user plainly what is needed.", name, applyErr))
+			"Commitarium could not apply your action %s: %v. It waits for the user as a card.", name, applyErr))
 		service.nudgeWatcher()
 	}
 	stored.UpdatedAt = now
@@ -515,14 +515,11 @@ func (item work) event() (Event, bool) {
 		return Event{Text: with(name + " is blocked"), Wake: true}, true
 	case execution.RunWaitKindRoundCap:
 		if item.RoundCapHandled {
-			return Event{Text: name + " reached its round limit again after you handled it once, so it is the " +
-				"user's now: do not continue it again. Tell them plainly, in a sentence or two, the one point its " +
-				"agents cannot settle, and ask for their decision.", Wake: true}, true
+			return Event{Text: name + " reached its round limit again, after you handled it once: its agents " +
+				"still could not agree.", Wake: true}, true
 		}
-		return Event{Text: name + " reached its round limit: its agents could not agree. Handle it before the " +
-			"user: read their last messages in the state, then continue it with guidance that settles the open " +
-			"point, or send it back to Ready (see How you handle round limits). Ask the user only for a choice " +
-			"that is truly theirs.", Wake: true}, true
+		return Event{Text: name + " reached its round limit for the first time: its agents could not agree.",
+			Wake: true}, true
 	case execution.RunWaitKindPhaseCheckpoint:
 		// Planned early, it implements on its own once nothing holds it
 		// (ADR-037).
@@ -695,10 +692,9 @@ func (service *Service) tell(scope, chat string, events []Event, driving bool) e
 func (service *Service) startWaitingTurn(ctx context.Context, stored record, settings Settings) error {
 	key := fmt.Sprintf("events:%d", stored.Turn+1)
 	if len(stored.Queued) == 0 {
-		prompt := eventsPrompt(stored.PendingEvents) +
-			"\n\nTell the user briefly what this means and what comes next. Propose actions only when they help; " +
-			"the user approves them as usual, unless you build everything here. When nothing needs the user, say so " +
-			"in a line."
+		// What happened and how things stand, never what to do: her rules
+		// and her say decide that (ADR-041).
+		prompt := eventsPrompt(stored.PendingEvents)
 		stored.PendingEvents = nil
 		_, err := service.startTurn(ctx, stored, settings, key, "event", prompt)
 		return err
@@ -777,7 +773,7 @@ func (service *Service) Report(_ context.Context, scope, text string) error {
 }
 
 // PreviewFailure starts what the assistant hears when the app's preview
-// failed to start, so the gap check knows it fails until a fix merges.
+// failed to start, so the facts say it fails until a fix merges.
 const PreviewFailure = "The app's preview failed to start"
 
 // Wake tells a project's assistant about something the user did that it
@@ -815,10 +811,9 @@ func (service *Service) TellChat(ctx context.Context, scope, chat, note, text st
 // user dismissed before no longer stand: switching hands the work over.
 func (service *Service) HandOver(ctx context.Context, scope string) error {
 	return service.wake(ctx, scope, "", "You handed the project to Mayka: she builds everything from here.",
-		"The user switched this project to Builds everything: you own it now. Take it over: write the vision "+
-			"if there is none, set up the stack, start autopilot on the vision's open items, and start or queue "+
-			"the waiting work orders, the user's too. Cards the user dismissed before this switch no longer "+
-			"stand. Commitarium reports what is still missing as you go.", true)
+		"The user switched this project to Build everything: you own it now, the work orders waiting in it "+
+			"too. Cards the user dismissed before this switch no longer stand. Your state lists what the "+
+			"project still lacks to run.", true)
 }
 
 func (service *Service) wake(ctx context.Context, scope, chat, note, text string, handOver bool) error {
@@ -847,8 +842,8 @@ func (service *Service) wakeQuietly(ctx context.Context, scope, chat, note, text
 	now := service.now()
 	if handOver {
 		stored.BuildsSince = &now
-		// What was missing is told afresh to the new owner.
-		stored.Gaps = nil
+		// What is open is told afresh to the new owner.
+		stored.IdleLook = ""
 	}
 	stored.addEvent(note, now)
 	stored.PendingEvents = append(stored.PendingEvents, text)

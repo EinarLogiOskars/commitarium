@@ -851,3 +851,70 @@ func TestAnActionLeftForTheUserIsMarkedUntilApplied(t *testing.T) {
 		t.Fatalf("applied = %+v", action)
 	}
 }
+
+// An item the user said to skip is dropped from the goal with why: the goal
+// shows it as dropped, and finishes once the rest is done.
+func TestADroppedItemLetsTheGoalFinish(t *testing.T) {
+	visions := &visionStub{plan: featureartifact.VisionPlan{Priorities: []featureartifact.VisionPriority{
+		{Level: 1, Items: []featureartifact.VisionItem{
+			{ID: "csv", Title: "CSV import", FeatureID: "fea_csv"},
+			{ID: "bc", Title: "Business Central"},
+		}},
+	}}}
+	service, _ := newTestService(t)
+	service.config.Visions, service.config.Features = visions, &featuresStub{}
+	if _, err := service.StartGoal(t.Context(), "prj_test", 1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.DropGoalItem(t.Context(), "prj_test", "nope", ""); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("dropped an item not in the goal: %v", err)
+	}
+	result, err := service.DropGoalItem(t.Context(), "prj_test", "bc", "The user skips it for now")
+	if err != nil || result != "Dropped P1.2 “Business Central” from the goal: The user skips it for now." {
+		t.Fatalf("drop = %q err=%v", result, err)
+	}
+	conversation, _ := service.Get(t.Context(), "prj_test")
+	goal := conversation.Goal
+	if len(goal.Items) != 1 || len(goal.Dropped) != 1 || goal.Dropped[0].Reason != "The user skips it for now" {
+		t.Fatalf("goal = %+v", goal)
+	}
+	if text := goalInstructions(goal); !strings.Contains(text, "P1.2 Business Central (item bc): dropped, The user skips it for now") {
+		t.Fatalf("the goal's instructions do not show the drop: %q", text)
+	}
+	current := map[string]work{"fea_csv": {State: feature.StateCompleted}}
+	snapshot := func(context.Context, string) (view, error) { return view{Work: current, Plan: &visions.plan}, nil }
+	if err := service.observe(t.Context(), "prj_test", snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if conversation, _ := service.Get(t.Context(), "prj_test"); conversation.Goal.Status != GoalDone {
+		t.Fatalf("the goal did not finish without its dropped item: %+v", conversation.Goal)
+	}
+	if _, err := service.DropGoalItem(t.Context(), "prj_test", "csv", ""); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("dropped from a finished goal: %v", err)
+	}
+}
+
+// drop_goal_item is always taken; start_autopilot she produced is never
+// applied on its own, whatever she marked (ADR-041).
+func TestMaykaNeverStartsAGoalHerself(t *testing.T) {
+	if !taken(Action{AssistantAction: featureartifact.AssistantAction{Type: featureartifact.AssistantDropGoalItem}}) {
+		t.Fatal("drop_goal_item is not taken at once")
+	}
+	service, _ := newTestService(t)
+	service.config.Projects = gapProjects{mode: project.AssistantModeBuilds}
+	stored, err := service.read("prj_test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored.Actions = append(stored.Actions, Action{ID: "act_goal", Status: ActionProposed, AssistantAction: featureartifact.AssistantAction{
+		Type: featureartifact.AssistantStartAutopilot, Reason: "Finish it", Priority: 0, Take: true}})
+	if err := service.write(stored); err != nil {
+		t.Fatal(err)
+	}
+	if apply, err := service.autopilotActions(t.Context(), "prj_test"); err != nil || len(apply) != 0 {
+		t.Fatalf("applied %+v err=%v", apply, err)
+	}
+	if card, _ := service.Action(t.Context(), "prj_test", "act_goal"); !card.LeftForUser || card.Status != ActionProposed {
+		t.Fatalf("card = %+v", card)
+	}
+}

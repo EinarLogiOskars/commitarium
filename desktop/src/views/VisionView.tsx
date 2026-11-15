@@ -57,9 +57,13 @@ export function VisionView({
   projectId,
   onOpenOrder,
   setup,
+  offerAutopilot = true,
 }: {
   projectId: string;
   onOpenOrder: (featureId: string) => void;
+  /** Whether each priority offers Autopilot: not where Mayka builds
+   * everything already. */
+  offerAutopilot?: boolean;
   /** A new project without a stack: the recommended stack sets it up. */
   setup?: { onStarted: (workOrderId: string, toolchain: ProjectToolchain) => void };
 }) {
@@ -356,6 +360,7 @@ export function VisionView({
                     projectId={projectId}
                     level={priority.level}
                     progress={progress.get(priority.level)}
+                    offer={offerAutopilot}
                   />
                   <ItemList
                     items={priority.items}
@@ -1177,11 +1182,14 @@ function PriorityAutopilot({
   projectId,
   level,
   progress,
+  offer,
 }: {
   projectId: string;
   level: number;
   /** How many of the priority's items are done. */
   progress?: PriorityProgress;
+  /** Whether to offer handing the priority to Mayka as a goal. */
+  offer: boolean;
 }) {
   const [confirming, setConfirming] = useState(false);
   const [starting, setStarting] = useState(false);
@@ -1210,13 +1218,13 @@ function PriorityAutopilot({
             {progress.done} of {progress.total} done
           </span>
         )}
-        {!confirming && (
+        {offer && !confirming && (
           <button className="ghost" onClick={() => setConfirming(true)}>
             Autopilot
           </button>
         )}
       </div>
-      {confirming && (
+      {offer && confirming && (
         <div className="vision__autopilot">
           <p className="muted note">
             Let Mayka finish P{level}? She creates and starts work orders for the open items without

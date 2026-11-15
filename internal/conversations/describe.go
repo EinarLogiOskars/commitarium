@@ -83,7 +83,10 @@ type StateDescriber struct {
 	TestAccounts TestAccountLister
 	// Say, when set, reads Mayka's own words in a project's say (ADR-041).
 	Say func(scope string) Say
-	Now func() time.Time
+	// Facts, when set, says what a project still lacks to run, as plain
+	// facts (Watcher.Facts, ADR-041).
+	Facts func(ctx context.Context, scope string) []string
+	Now   func() time.Time
 }
 
 // maxWorkOrders bounds the work orders listed for a project.
@@ -287,6 +290,12 @@ func (describer StateDescriber) writeProject(ctx context.Context, builder *strin
 				writeVisionItems(builder, priority.Items, fmt.Sprintf("P%d", priority.Level), "", byID)
 				collectLinked(priority.Items, linked)
 			}
+		}
+	}
+
+	if describer.Facts != nil {
+		if facts := describer.Facts(ctx, current.ID); len(facts) > 0 {
+			builder.WriteString("\n### What the project lacks to run\n- " + strings.Join(facts, "\n- ") + "\n")
 		}
 	}
 

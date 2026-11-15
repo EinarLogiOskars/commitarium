@@ -3,8 +3,9 @@ import { stopAutopilot, type AutopilotGoal, type LaunchStage } from "../api/assi
 import { ApiError } from "../api/client";
 import { ASSISTANT_CHANGED } from "./AssistantDrawer";
 
-// While autopilot is on, the project says so above every page: the goal,
-// how far it is, and Stop.
+// While a goal the user handed Mayka is on, the project says so above every
+// page: the goal, how far it is, and Stop. Items she dropped are not
+// counted.
 export function AutopilotBanner({ scope, goal }: { scope: string; goal: AutopilotGoal }) {
   const [stopping, setStopping] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -39,7 +40,7 @@ export function AutopilotBanner({ scope, goal }: { scope: string; goal: Autopilo
   );
 }
 
-// While a new app is planned and set up, before autopilot builds it, the
+// While a new app is planned and set up, before Mayka builds it, the
 // project says it is building on its own.
 export function LaunchBanner({ stage }: { stage: LaunchStage }) {
   return (
@@ -47,8 +48,8 @@ export function LaunchBanner({ stage }: { stage: LaunchStage }) {
       <span className="autopilot-banner__dot" aria-hidden />
       <strong>Building the app</strong>
       <span className="muted">
-        {stage === "vision" ? "Planning what to build" : "Setting it up"} · then autopilot builds
-        the whole vision
+        {stage === "vision" ? "Planning what to build" : "Setting it up"} · then Mayka builds the
+        vision
       </span>
     </div>
   );

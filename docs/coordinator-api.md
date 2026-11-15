@@ -2641,7 +2641,7 @@ optional `chat_title`.
 
 - What belongs to the project is shared by its chats: the notes, the
   autopilot `goal`, the work the coordinator watches, the events the
-  assistant has yet to hear, helpers, gap checks, the `launch`, and
+  assistant has yet to hear, helpers, the idle look, the `launch`, and
   `developer`. Each chat keeps its own messages, actions, `queued` messages,
   `focus`, provider session, `failure`, and `sign_in`. A conversation answer
   is a chat with its project's state, and names the chat in `chat` and
@@ -2803,7 +2803,7 @@ optional `chat_title`.
 - `PUT .../{scope}/notes` with `{"notes"}` replaces the notes with the user's
   edit.
 - An action is `{"id", "type": "create_work_order"|"start_work_order"|
-  "change_models"|"add_vision_item"|"start_autopilot"|"continue_work_order"|
+  "change_models"|"add_vision_item"|"start_autopilot"|"drop_goal_item"|"continue_work_order"|
   "recover_work_order"|"close_work_order"|"create_app"|"set_up_preview"|"write_vision"|"set_up_stack"|
   "answer_helper"|"write_brief"|"accept_brief"|"design_stack"|"apply_stack"|"research"|
   "plan_project"|"update_plan"|"build_plan"|"set_say", "priority", "reason",
@@ -2817,14 +2817,16 @@ optional `chat_title`.
   it, and the coordinator applies it right after the turn through the same
   approval as the user's, unless a hard limit stops it; `false` asks for it,
   a card the user approves. `answer_helper`, `research`, `delegate`,
-  `revise`, `update_plan` and `set_say` are always taken; the server's cards
+  `revise`, `update_plan`, `set_say` and `drop_goal_item` are always taken; the server's cards
   (`deploy_app`, the apps page's, `add_domain`, `install_authentik`,
   `set_app_access`, `set_homelab`) never are, the user's app applying the
   `asked` ones; an active goal's actions on its items are taken. The hard
   limits, whatever the say: a premium model; a work order the user created
   by hand and did not hand over with a goal, unless `asked` (the user asked
   for that action in the chat), and closing one always; `create_app`,
-  `plan_project`, `build_plan` and `start_planning`; `back_to_ready` while the
+  `plan_project`, `build_plan`, `start_planning` and `start_autopilot` (a goal
+  is only the user's to hand; the assistant's turns no longer offer it, and
+  an older card waits for the user's approval); `back_to_ready` while the
   say is Ask first; and the loop bounds (16 running work orders, eight
   automatic continues per work order, two refusal wakes in a row). A taken
   action a hard limit stops stays a card with `left_for_user` and
@@ -2834,7 +2836,10 @@ optional `chat_title`.
   `assistant_mode` as `PUT .../assistant-mode` does (`assists` is Ask first,
   `builds` Build everything), and `words` (at most 2000 bytes, empty keeps
   them) replace its own words, answered as the conversation's
-  `say: {"words", "updated_at"}`. `write_vision` has the vision written, or
+  `say: {"words", "updated_at"}`. `drop_goal_item` drops `vision_item_id`
+  from the active goal, with `reason` why the user skips it: it moves to the
+  goal's `dropped` and no longer counts, so the goal finishes once the rest
+  is done (`400` without an active goal or when the item is not one of its). `write_vision` has the vision written, or
   the one there is rewritten, on the assistant's agent from `description`;
   `set_up_stack` detects the stack of the code, or sets the project up on the
   stack its vision recommends (`409 stack_unknown` without either).
@@ -2909,9 +2914,11 @@ optional `chat_title`.
   reason when a hard limit stops it.
 - `POST .../{scope}/actions/{actionID}/dismiss` dismisses it.
 - `POST .../{scope}/autopilot` with `{"level"}` turns autopilot on for the open
-  items of that vision priority (ADR-023); approving a `start_autopilot` action
-  does the same. `goal` is then `{"title", "level", "items": [{"id", "label",
-  "title", "work_order_id", "done"}], "status": "active"|"done"|"stopped",
+  items of that vision priority (ADR-023); the user's approval of a
+  `start_autopilot` card does the same, the coordinator's never (ADR-041).
+  `goal` is then `{"title", "level", "items": [{"id", "label",
+  "title", "work_order_id", "done"}], "dropped": [{"id", "label", "title",
+  "reason"}], "status": "active"|"done"|"stopped",
   "started_at", "ended_at", "chat"}`, where `chat` started it. While it is
   active, the coordinator approves the assistant's create, start, change-models, and continue actions for the goal's
   items as the user would (with a new work order started, one per item, and at
@@ -2924,17 +2931,26 @@ optional `chat_title`.
   and every app still being launched.
 - `POST .../{scope}/launch` (empty body) launches a new app (ADR-024): once
   its vision is written, the coordinator sets up the stack it recommends and,
-  when the setup merges, starts autopilot on the whole vision. The
+  when the setup merges, moves the launch to building; no goal starts, the
+  app's say being Build everything. Build it with `autopilot`
+  (`POST .../vision/planning/finish`) and `build_plan` likewise set the say to
+  Build everything and launch the project, without a goal. The
   conversation's `launch` is `{"stage": "vision"|"setup"|"building",
-  "started_at"}`. In a project marked as an app, autopilot applies the
-  assistant's work actions without a goal.
-- Where the assistant builds everything (ADR-027), switching a project to
-  `builds` and creating a work order by hand wake it, and each look the
-  coordinator checks, without the model, what the project still lacks to run
-  (a vision, a stack, autopilot on open vision items, work orders nobody
-  starts, an app's preview) and wakes it with the list, each gap at most once
-  per ten minutes and three times in a row, never while it answers, has
-  events waiting, or its agent is at its usage limit.
+  "started_at"}`.
+- Wakes say what happened and how things stand, never what to do
+  (ADR-041). What a project still lacks to run (a vision, a stack, open
+  vision items with nothing running or queued, work orders nobody starts, an
+  app's preview) is in the assistant's state as plain facts, at every level.
+  Where the assistant builds everything (ADR-027), switching a project to
+  `builds` and creating a work order by hand wake it, merges and work back in
+  Ready wake it as news, and the idle look wakes it once when nothing runs,
+  nothing waits on the user (no card, no queued start), no chat is busy, its
+  agent is not at its usage limit, and the vision still has open items
+  (leaving out goal items it dropped). The idle look tells the same again
+  only after something changed: it keeps a fingerprint of the open items,
+  every work order's state and the preview's last failure in the project's
+  shared state (`idle_look`). A taken action the coordinator could not apply
+  wakes it with the reason, at most twice in a row.
 
 ## Project vision
 

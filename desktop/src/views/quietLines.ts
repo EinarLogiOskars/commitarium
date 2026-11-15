@@ -213,6 +213,7 @@ export function appliedLine(
     case "close_work_order":
     case "add_vision_item":
     case "start_autopilot":
+    case "drop_goal_item":
     case "build_plan":
     case "start_planning": {
       // These say what they did in their result ("Re-checked “Sort”.").
@@ -223,13 +224,15 @@ export function appliedLine(
             ? ["vision", `Adding to the vision: ${action.title}`]
             : action.type === "start_autopilot"
               ? ["autopilot", `Turning autopilot on for P${action.priority}`]
-              : action.type === "build_plan"
-                ? ["plan", "Building the plan"]
-                : action.type === "start_planning"
-                  ? ["plan", "Turning plan mode on"]
-                  : action.how === "back_to_ready"
-                    ? ["work", "Starting the work over"]
-                    : ["work", "Picking the work back up"];
+              : action.type === "drop_goal_item"
+                ? ["autopilot", "Dropping an item from the goal"]
+                : action.type === "build_plan"
+                  ? ["plan", "Building the plan"]
+                  : action.type === "start_planning"
+                    ? ["plan", "Turning plan mode on"]
+                    : action.how === "back_to_ready"
+                      ? ["work", "Starting the work over"]
+                      : ["work", "Picking the work back up"];
       return done
         ? line("done", kind, action.result || fallback)
         : line(action.status === "failed" ? "failed" : "busy", kind, `${fallback}…`);

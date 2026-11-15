@@ -456,6 +456,12 @@ func run(ctx context.Context, coordinatorConfig config) error {
 				},
 				Settings: func(ctx context.Context) (conversations.Settings, error) { return settingsOf.Settings(ctx) },
 				Say:      func(scope string) conversations.Say { return settingsOf.SayOf(scope) },
+				Facts: func(ctx context.Context, scope string) []string {
+					if assistantWatcher == nil {
+						return nil
+					}
+					return assistantWatcher.Facts(ctx, scope)
+				},
 				Guide:    modelGuide,
 				Blockers: executionStore,
 			},

@@ -256,11 +256,11 @@ type record struct {
 	// past maxRefusals they no longer wake the assistant.
 	Refusals int `json:"refusals,omitempty"`
 	// BuildsSince is when the user last switched the project to building
-	// everything: cards dismissed before it no longer stand (gaps.go).
+	// everything: cards dismissed before it no longer stand (idle.go).
 	BuildsSince *time.Time `json:"builds_since,omitempty"`
-	// Gaps are what the gap check last told the assistant was missing, by
-	// kind, so it tells each at most once per gapEvery (gaps.go).
-	Gaps map[string]gapTold `json:"gaps,omitempty"`
+	// IdleLook is what the idle look last told the assistant, as a
+	// fingerprint, so it tells the same once (idle.go).
+	IdleLook string `json:"idle_look,omitempty"`
 	// PreviewFailedAt is when the app's preview last failed to start, as the
 	// desktop reported it; a preview work order merged since fixes it.
 	PreviewFailedAt *time.Time `json:"preview_failed_at,omitempty"`

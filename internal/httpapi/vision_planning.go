@@ -235,14 +235,15 @@ func (api *API) discardPlanningHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 type finishPlanningRequest struct {
-	// Autopilot hands the finished vision to the assistant, which then
-	// builds everything; otherwise the user takes it from there.
+	// Autopilot hands the finished vision to the assistant: her say becomes
+	// Build everything (no goal starts, ADR-041); otherwise the user takes
+	// it from there.
 	Autopilot bool `json:"autopilot"`
 }
 
 // finishPlanningHandler is Build it: the vision is the plan as it stands,
 // and with autopilot the project is launched as a new app is: its stack is
-// set up and the whole vision built.
+// set up, and Mayka, building everything, builds the vision.
 func (api *API) finishPlanningHandler(w http.ResponseWriter, r *http.Request) {
 	projectID := r.PathValue("id")
 	var body finishPlanningRequest
@@ -319,14 +320,14 @@ func (api *API) planBuilt(ctx context.Context, projectID string) bool {
 }
 
 // applyBuildPlan is Build it, from the assistant's card: the vision is
-// finished and autopilot builds it.
+// finished and Mayka builds it, her say set to Build everything.
 func (api *API) applyBuildPlan(w http.ResponseWriter, r *http.Request, projectID string) (string, bool) {
 	if err := api.callOwn(r.Context(), http.MethodPost, "/api/v1/projects/"+url.PathEscape(projectID)+"/vision/planning/finish",
 		"", map[string]bool{"autopilot": true}, nil); err != nil {
 		writeError(w, http.StatusConflict, "plan_not_built", "the plan could not be built: "+err.Error())
 		return "", false
 	}
-	return "Finished the plan. Autopilot sets the project up and builds it.", true
+	return "Finished the plan. Mayka sets the project up and builds it.", true
 }
 
 // applyStartPlanning turns plan mode on in the chat that proposed it, as the

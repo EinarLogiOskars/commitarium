@@ -50,13 +50,18 @@ type GoalItem struct {
 	Title       string `json:"title"`
 	WorkOrderID string `json:"work_order_id,omitempty"`
 	Done        bool   `json:"done"`
+	// Reason is why Mayka dropped it from the goal, for a dropped item.
+	Reason string `json:"reason,omitempty"`
 }
 
 type Goal struct {
-	Title  string     `json:"title"`
-	Level  int        `json:"level"`
-	Items  []GoalItem `json:"items"`
-	Status GoalStatus `json:"status"`
+	Title string     `json:"title"`
+	Level int        `json:"level"`
+	Items []GoalItem `json:"items"`
+	// Dropped are the items Mayka dropped from the goal when the user said
+	// to skip them (drop_goal_item): they no longer count toward it.
+	Dropped []GoalItem `json:"dropped,omitempty"`
+	Status  GoalStatus `json:"status"`
 	// Handed are the work orders the goal's items had when it started: the
 	// user handed them to the assistant with the goal, whoever created them.
 	Handed    []string   `json:"handed,omitempty"`
@@ -105,6 +110,59 @@ func (goal *Goal) drivesItem(action featureartifact.AssistantAction) bool {
 		})
 	}
 	return false
+}
+
+// dropped are the IDs of the items dropped from the goal, whatever its
+// status: the user said to skip them.
+func (goal *Goal) dropped() map[string]bool {
+	dropped := map[string]bool{}
+	if goal != nil {
+		for _, item := range goal.Dropped {
+			dropped[item.ID] = true
+		}
+	}
+	return dropped
+}
+
+// DropGoalItem drops a vision item from the active goal, as the user asked,
+// with why: the goal finishes once the rest is done. The chat that started
+// the goal hears of it.
+func (service *Service) DropGoalItem(ctx context.Context, scope, itemID, reason string) (string, error) {
+	if err := service.checkScope(ctx, scope); err != nil {
+		return "", err
+	}
+	itemID, reason = strings.TrimSpace(itemID), strings.TrimSpace(reason)
+	stored, done, err := service.open(scope, service.goalChat(scope))
+	if err != nil {
+		return "", err
+	}
+	defer done()
+	if !stored.Goal.active() {
+		return "", fmt.Errorf("%w: no autopilot goal is on", ErrInvalid)
+	}
+	index := slices.IndexFunc(stored.Goal.Items, func(item GoalItem) bool { return item.ID == itemID })
+	if index < 0 {
+		if slices.ContainsFunc(stored.Goal.Dropped, func(item GoalItem) bool { return item.ID == itemID }) {
+			return "Already dropped from the goal.", nil
+		}
+		return "", fmt.Errorf("%w: item %s is not one of the goal's", ErrInvalid, itemID)
+	}
+	item := stored.Goal.Items[index]
+	item.Reason = reason
+	stored.Goal.Items = slices.Delete(stored.Goal.Items, index, index+1)
+	stored.Goal.Dropped = append(stored.Goal.Dropped, item)
+	now := service.now()
+	stored.UpdatedAt = now
+	if err := service.write(stored); err != nil {
+		return "", err
+	}
+	// The next look finishes a goal with nothing else left.
+	service.nudgeWatcher()
+	result := fmt.Sprintf("Dropped %s “%s” from the goal.", item.Label, item.Title)
+	if reason != "" {
+		result = fmt.Sprintf("Dropped %s “%s” from the goal: %s", item.Label, item.Title, strings.TrimSuffix(reason, ".")+".")
+	}
+	return result, nil
 }
 
 // Hands reports whether the goal, while it is on, hands the assistant a
@@ -176,7 +234,7 @@ func (service *Service) StartGoal(ctx context.Context, scope string, level int) 
 	}
 	text := fmt.Sprintf("Autopilot is on: finish %s (%d %s).", name, len(items), plural(len(items), "item", "items"))
 	stored.addEvent(text, now)
-	stored.PendingEvents = append(stored.PendingEvents, text+" Start driving its items to merged.")
+	stored.PendingEvents = append(stored.PendingEvents, text+" The user handed you this goal.")
 	stored.UpdatedAt = now
 	if err := service.write(stored); err != nil {
 		return Conversation{}, err
@@ -434,9 +492,6 @@ func (service *Service) autopilotChat(ctx context.Context, scope, chat string, l
 			inGoal = (created[target] && !orders[target]) || (orders[target] && exhausted(target))
 		}
 		if !taken(*action) && !inGoal {
-			continue
-		}
-		if action.Type == featureartifact.AssistantStartAutopilot && stored.Goal.active() {
 			continue
 		}
 		// Work that needs other work's code or result waits until that has
@@ -959,12 +1014,13 @@ func (stored *record) addEvent(text string, at time.Time) {
 }
 
 // sentAtOnce reports whether an action is always taken, without a card: it
-// only talks to a helper, updates the plan being written, or records her
-// say.
+// only talks to a helper, updates the plan being written, records her say,
+// or drops an item the user said to skip from their goal.
 func sentAtOnce(kind featureartifact.AssistantActionType) bool {
 	return kind == featureartifact.AssistantAnswerHelper || kind == featureartifact.AssistantResearch ||
 		kind == featureartifact.AssistantDelegate || kind == featureartifact.AssistantRevise ||
-		kind == featureartifact.AssistantUpdatePlan || kind == featureartifact.AssistantSetSay
+		kind == featureartifact.AssistantUpdatePlan || kind == featureartifact.AssistantSetSay ||
+		kind == featureartifact.AssistantDropGoalItem
 }
 
 func actionName(action featureartifact.AssistantAction) string {
@@ -1004,6 +1060,12 @@ func goalInstructions(goal *Goal) string {
 		}
 		builder.WriteString(fmt.Sprintf("- %s %s (item %s): %s\n", item.Label, item.Title, item.ID, state))
 	}
+	for _, item := range goal.Dropped {
+		builder.WriteString(fmt.Sprintf("- %s %s (item %s): dropped, %s\n", item.Label, item.Title, item.ID,
+			orNothing(item.Reason)))
+	}
+	builder.WriteString("Dropped items no longer count toward the goal. When the user says to skip one of its " +
+		"open items, take drop_goal_item for it with their reason, and record the skip in your say's words. ")
 	builder.WriteString("Drive these items to merged. Propose create_work_order with the item's vision_item_id for " +
 		"an item without a work order and without a create card already waiting (autopilot applies a waiting one; " +
 		"never propose a second for the same item), start_work_order for one that is drafted, and change_models when a run " +

@@ -49,6 +49,7 @@ export type AssistantActionType =
   | "change_models"
   | "add_vision_item"
   | "start_autopilot"
+  | "drop_goal_item"
   | "continue_work_order"
   | "recover_work_order"
   | "close_work_order"
@@ -187,6 +188,9 @@ export interface AutopilotGoal {
   title: string;
   level: number;
   items: { id: string; label: string; title: string; work_order_id?: string; done: boolean }[];
+  /** Items Mayka dropped when the user said to skip them; they no longer
+   * count toward the goal. */
+  dropped?: { id: string; label: string; title: string; reason?: string }[];
   status: "active" | "done" | "stopped";
   started_at: string;
   ended_at?: string;
@@ -403,7 +407,7 @@ export const listAutopilotGoals = (): Promise<{
 }> => request("/api/v1/assistant/autopilot");
 
 /** Launch a new app: once its vision is written, the coordinator sets up
- * its stack and builds the whole vision on autopilot. */
+ * its stack, and Mayka, building everything, builds the vision. */
 /** A scope's open chats, the most recently used first. */
 export interface ChatMatch {
   scope: string;
