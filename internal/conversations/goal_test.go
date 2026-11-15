@@ -916,3 +916,43 @@ func TestMaykaNeverStartsAGoalHerself(t *testing.T) {
 		t.Fatalf("card = %+v", card)
 	}
 }
+
+// A work order the user made and handed her with a goal is still work she
+// did not create: closing it while its recovery has not run out waits for
+// the user, even when she takes it (ADR-041). Her own she may close.
+func TestTakingACloseOfAHandedWorkOrderWaitsForTheUser(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		createdBy feature.Creator
+		applies   bool
+	}{
+		{"handed by the user", feature.CreatedByUser, false},
+		{"her own", feature.CreatedByAssistant, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			old := feature.Feature{ID: "fea_old", Title: "Edit and delete single items", State: feature.StateImplementing,
+				CreatedBy: test.createdBy}
+			service := replacementSetup(t, old, false)
+			stored, err := service.read("prj_test")
+			if err != nil {
+				t.Fatal(err)
+			}
+			stored.Actions = stored.Actions[len(stored.Actions)-1:]
+			stored.Actions[0].Take = true
+			if err := service.write(stored); err != nil {
+				t.Fatal(err)
+			}
+			apply, err := service.autopilotActions(t.Context(), "prj_test")
+			if err != nil || (len(apply) == 1) != test.applies {
+				t.Fatalf("applies %+v err=%v, want applied %t", apply, err, test.applies)
+			}
+			if !test.applies {
+				conversation, _ := service.Get(t.Context(), "prj_test")
+				if action := conversation.Actions[0]; !action.LeftForUser ||
+					action.LeftReason != "“Edit and delete single items” is your work order, so it waits for you." {
+					t.Fatalf("the close = %+v, want it left for the user", action)
+				}
+			}
+		})
+	}
+}

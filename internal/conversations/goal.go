@@ -549,8 +549,13 @@ func (service *Service) autopilotChat(ctx context.Context, scope, chat string, l
 		}
 		action.Queued = false
 		action.AutoTried = true
+		// A work order the user made stays theirs to close even when a goal
+		// handed it to her, unless its recovery ran out and the goal replaces
+		// it: closing is a removal of work she did not create (ADR-041).
+		handedClose := action.Type == featureartifact.AssistantCloseWorkOrder && target != "" &&
+			!stored.made(target, ours) && !(orders[target] && exhausted(target))
 		theirs := ""
-		if target != "" && !stored.mayAct(target, ours) {
+		if target != "" && (!stored.mayAct(target, ours) || handedClose) {
 			if theirs = titles[target]; theirs == "" {
 				theirs = target
 			}
@@ -846,7 +851,13 @@ func (service *Service) MarkCreatedWork(ctx context.Context, marker CreatorMarke
 // (ours) or as its applied create shows, or one the user handed it with the
 // goal. Every other work order is the user's.
 func (stored record) mayAct(workOrderID string, ours map[string]bool) bool {
-	if ours[workOrderID] || stored.Goal.Hands(workOrderID) {
+	return stored.Goal.Hands(workOrderID) || stored.made(workOrderID, ours)
+}
+
+// made reports whether the assistant created a work order, as stored with
+// it (ours) or as its applied create shows.
+func (stored record) made(workOrderID string, ours map[string]bool) bool {
+	if ours[workOrderID] {
 		return true
 	}
 	for _, action := range stored.everyAction() {

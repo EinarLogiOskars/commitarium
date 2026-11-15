@@ -2825,6 +2825,8 @@ optional `chat_title`.
   by hand and did not hand over with a goal, unless `asked` (the user asked
   for that action in the chat; an `asked` action that applies hands the work
   order to the assistant, which drives it as its own from then on);
+  closing a work order the user created, even one a goal handed over,
+  unless `asked` or the goal replaces it once its recovery ran out;
   `create_app`,
   `plan_project`, `build_plan`, `start_planning` and `start_autopilot` (a goal
   is only the user's to hand; the assistant's turns no longer offer it, and
