@@ -15,6 +15,7 @@ import (
 )
 
 type recordingFeatureService struct {
+	handedOver          []string
 	createCalls         int
 	receivedProjectID   string
 	receivedTitle       string
@@ -652,4 +653,10 @@ func TestCreateFeatureHandlerPassesTheKind(t *testing.T) {
 	if !strings.Contains(recorder.Body.String(), `"kind":"session"`) {
 		t.Fatalf("response does not carry the kind: %s", recorder.Body.String())
 	}
+}
+
+// MarkCreatedByAssistant records the work orders handed to Mayka.
+func (s *recordingFeatureService) MarkCreatedByAssistant(_ context.Context, _ string, featureIDs []string) error {
+	s.handedOver = append(s.handedOver, featureIDs...)
+	return nil
 }

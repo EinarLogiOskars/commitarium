@@ -2823,7 +2823,9 @@ optional `chat_title`.
   `asked` ones; an active goal's actions on its items are taken. The hard
   limits, whatever the say: a premium model; a work order the user created
   by hand and did not hand over with a goal, unless `asked` (the user asked
-  for that action in the chat), and closing one always; `create_app`,
+  for that action in the chat; an `asked` action that applies hands the work
+  order to the assistant, which drives it as its own from then on);
+  `create_app`,
   `plan_project`, `build_plan`, `start_planning` and `start_autopilot` (a goal
   is only the user's to hand; the assistant's turns no longer offer it, and
   an older card waits for the user's approval); `back_to_ready` while the
