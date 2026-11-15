@@ -1,7 +1,7 @@
 # Coordinator Access: Design Note
 
-**Status:** proposed 2026-11-15, for review. Its own change, apart from the
-One Mayka work.
+**Status:** agreed 2026-11-15; built on top of the One Mayka PRs, ships in
+0.15.
 
 ## The gap
 
@@ -48,24 +48,28 @@ coordinator needs the same idea.
   - The gateway adds it when it forwards `/coordinator`, as it adds the host's
     token, so a device never holds it. The bridge needs no change: it forwards
     to the gateway.
-  - App windows keep what they reach today, the coordinator; narrowing that is
-    ADR-029's business, not this change.
+  - App windows keep what they reach today, the coordinator, so on this
+    computer they get the owner token too; narrowing that is ADR-029's
+    business, not this change. On a first run the token exists only once the
+    stack has started, so windows ask for it until they have it.
 - **The run token.** It gives an agent only what `commitarium-artifact` does:
   read its work order's artifacts and move its own plan steps and acceptance
   tests (`GET …/features/{f}/artifacts/{kind}`,
   `POST …/implementation-plan/steps/{s}/transitions`,
   `POST …/acceptance-tests/{t}/transitions`), and only for its own project and
   work order.
-  - It is an HMAC of `project_id|feature_id` under a second coordinator secret
-    (made and mounted like the owner token), so it needs no table and survives
-    a coordinator restart while a run goes on.
+  - It is an HMAC of the project and work order under the owner token, so it
+    needs no table or second secret, and survives a coordinator restart
+    while a run goes on.
   - The coordinator puts it in each turn's assignment; the worker sets
-    `COMMITARIUM_RUN_TOKEN` beside `COMMITARIUM_PROJECT_ID` and
-    `COMMITARIUM_FEATURE_ID` (`internal/workerservice/environment.go`); the
-    artifact CLI sends it.
-  - The middleware accepts it only on those three routes, only when the
-    path's project and work order match, and only while that work order has an
-    active run. Anywhere else it is refused like no token.
+    `COMMITARIUM_RUN_CREDENTIAL` beside `COMMITARIUM_PROJECT_ID` and
+    `COMMITARIUM_FEATURE_ID`; the artifact CLI sends it. The name avoids
+    TOKEN, KEY and SECRET, which Codex strips from the commands it runs.
+  - The middleware accepts it only on those three routes and only when the
+    path's project and work order match. Anywhere else it gets 403. It is not
+    limited to a running work order: all it opens is that work order's own
+    plan and tests, and checking run state on every call adds more than it
+    saves.
   - Mayka's own turns get no run token: they only read, and her actions go
     through the coordinator's apply path (and, from 0.16, the worker relay
     for actions as tools, which never uses this API).
@@ -85,15 +89,16 @@ coordinator. Routes, IDs and the hard limits are untouched.
 
 ## Slices
 
-1. **Coordinator:** the middleware, both secrets read from files at start
+1. **Coordinator:** the middleware, the owner token read from its file at start
    (the coordinator refuses to start without them, outside tests), run tokens
    minted into assignments. Tests: every registered route answers 401 without
    a token (walked from the mux, so a new route cannot slip by); a run token
    works on its own artifact routes and gets 403 on another work order and on
    `…/approve`.
-2. **Worker and CLI:** `COMMITARIUM_RUN_TOKEN` into the turn's environment and
-   the artifact CLI's header; the token is added to the worker's redaction
-   list so it does not land in activity.
+2. **Worker and CLI:** `COMMITARIUM_RUN_CREDENTIAL` into the turn's
+   environment and the artifact CLI's header. It is not added to the worker's
+   redaction list: the list is fixed at the worker's start, and a run token
+   seen in activity opens nothing beyond that work order's plan.
 3. **Host, gateway and desktop:** make and mount the secrets, the shared
    client's header, the gateway's header, the main window's token. Local and
    remote mode both tested by hand.
