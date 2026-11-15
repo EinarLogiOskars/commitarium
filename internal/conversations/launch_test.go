@@ -21,7 +21,9 @@ func (appProjectsStub) GetByID(ctx context.Context, id string) (project.Project,
 	return stored, err
 }
 
-func TestALaunchGoesFromVisionToSetupToBuildingTheWholeVision(t *testing.T) {
+// A launch goes from the vision to its stack to building, where Mayka builds
+// everything: no goal starts (ADR-041).
+func TestALaunchGoesFromVisionToSetupToBuilding(t *testing.T) {
 	service, _ := newTestService(t)
 	visions := &visionStub{}
 	features := &featuresStub{}
@@ -63,8 +65,7 @@ func TestALaunchGoesFromVisionToSetupToBuildingTheWholeVision(t *testing.T) {
 	features.features = []feature.Feature{{ID: "fea_setup", Title: projectSetupTitle, State: feature.StateCompleted}}
 	watcher.launch(t.Context(), "prj_test")
 	conversation, _ := service.Get(t.Context(), "prj_test")
-	if conversation.Launch.Stage != LaunchBuilding || conversation.Goal == nil ||
-		conversation.Goal.Title != "Finish the vision" || len(conversation.Goal.Items) != 2 {
+	if conversation.Launch.Stage != LaunchBuilding || conversation.Goal != nil {
 		t.Fatalf("launch = %+v goal = %+v", conversation.Launch, conversation.Goal)
 	}
 	if launches, _ := service.ActiveLaunches(t.Context()); len(launches) != 0 {

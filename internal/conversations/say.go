@@ -84,6 +84,10 @@ func HardLimit(action Action, limits Limits) string {
 		return "building the plan waits for your approval."
 	case featureartifact.AssistantStartPlanning:
 		return "starting plan mode waits for your approval."
+	case featureartifact.AssistantStartAutopilot:
+		// A goal is only ever the user's to hand her (ADR-041), from the
+		// Vision page or by approving this card.
+		return "an autopilot goal is yours to hand Mayka."
 	}
 	if featureartifact.AppliedByTheApp(action.Type) {
 		// The user's app applies the server's cards through the host, the

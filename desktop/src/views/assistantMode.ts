@@ -24,6 +24,12 @@ export function assistantMode(project: Pick<Project, "app" | "assistant_mode">):
   return project.assistant_mode ?? (project.app ? "builds" : "assists");
 }
 
+/** Whether the Vision page offers to hand Mayka a priority as an autopilot
+ * goal: not where she builds everything already. */
+export function offersAutopilot(mode: AssistantMode): boolean {
+  return mode !== "builds";
+}
+
 /** The drawer's note on how the assistant works here. */
 export function assistantModeNote(mode: AssistantMode): string {
   return mode === "builds" ? "Build everything" : "Ask first";

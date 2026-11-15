@@ -15,15 +15,15 @@ import (
 	"github.com/EinarLogiOskars/commitarium/internal/vision"
 )
 
-func kinds(gaps []gap) []gapKind {
-	found := make([]gapKind, 0, len(gaps))
-	for _, item := range gaps {
+func factKinds(facts []fact) []string {
+	found := make([]string, 0, len(facts))
+	for _, item := range facts {
 		found = append(found, item.Kind)
 	}
 	return found
 }
 
-func sameKinds(a []gapKind, b ...gapKind) bool {
+func sameKinds(a []string, b ...string) bool {
 	if len(a) != len(b) {
 		return false
 	}
@@ -43,75 +43,83 @@ var openPlan = featureartifact.VisionPlan{Priorities: []featureartifact.VisionPr
 	}},
 }}
 
-// The gap check finds each thing a project lacks to run, in the order the
-// assistant fixes it; the preview only in an app.
-func TestTheGapCheckFindsWhatAProjectLacks(t *testing.T) {
+// The facts say what a project lacks to run, as it is and never as a step
+// to take; the preview only in an app.
+func TestTheFactsSayWhatAProjectLacks(t *testing.T) {
 	merged := feature.Feature{ID: "fea_merged", Title: "Sort the shelf", State: feature.StateCompleted}
 	for name, test := range map[string]struct {
 		state projectState
-		want  []gapKind
+		want  []string
 		text  string
 	}{
-		"an empty project":       {projectState{}, []gapKind{gapVision}, "write_vision"},
-		"a vision being written": {projectState{Writing: true}, []gapKind{}, ""},
+		"an empty project":       {projectState{}, []string{factVision}, "no vision yet"},
+		"a vision being written": {projectState{Writing: true}, []string{}, ""},
 		"code but nothing else": {projectState{HasCode: true, HasCompose: true},
-			[]gapKind{gapVision, gapStack}, "set_up_stack"},
-		"a vision without a stack": {projectState{Vision: &openPlan}, []gapKind{gapStack}, ""},
-		"a stack being set up":     {projectState{Vision: &openPlan, SettingUp: true}, []gapKind{}, ""},
-		"open items, autopilot off": {projectState{Vision: &openPlan, StackReady: true, Features: []feature.Feature{merged}},
-			[]gapKind{gapAutopilot}, "2 open items and autopilot is off. Propose start_autopilot for P0"},
+			[]string{factVision, factStack}, "stack is not set up."},
+		"a vision without a stack": {projectState{Vision: &openPlan}, []string{factStack, factOpen}, ""},
+		"a stack being set up":     {projectState{Vision: &openPlan, SettingUp: true}, []string{factOpen}, ""},
+		"open items, nothing runs": {projectState{Vision: &openPlan, StackReady: true, Features: []feature.Feature{merged}},
+			[]string{factOpen}, "2 open items, and no work runs or waits to start"},
+		"open items while work runs": {projectState{Vision: &openPlan, StackReady: true, Features: []feature.Feature{
+			merged, {ID: "fea_run", Title: "Count", State: feature.StateImplementing},
+		}}, []string{}, ""},
 		"waiting work, nothing runs": {projectState{StackReady: true, Vision: &featureartifact.VisionPlan{}, Features: []feature.Feature{
 			{ID: "fea_draft", Title: "Count the books", State: feature.StateDraft},
 			{ID: "fea_ready", Title: "Dark shelf", State: feature.StateReady},
 			{ID: "fea_session", Title: "Pairing", State: feature.StateDraft, Kind: feature.KindSession},
-		}}, []gapKind{gapWaiting}, "“Count the books” (fea_draft, draft), “Dark shelf” (fea_ready, ready)"},
+		}}, []string{factWaiting}, "“Count the books” (fea_draft, draft), “Dark shelf” (fea_ready, ready)"},
 		"waiting work while work runs": {projectState{StackReady: true, Vision: &featureartifact.VisionPlan{}, Features: []feature.Feature{
 			{ID: "fea_draft", Title: "Count the books", State: feature.StateDraft},
 			{ID: "fea_run", Title: "Sort", State: feature.StateImplementing},
-		}}, []gapKind{}, ""},
+		}}, []string{}, ""},
 		"a project without a compose file": {projectState{StackReady: true, Vision: &featureartifact.VisionPlan{}, HasCode: true},
-			[]gapKind{}, ""},
+			[]string{}, ""},
 		"an app without a compose file": {projectState{App: true, StackReady: true, Vision: &featureartifact.VisionPlan{}, HasCode: true},
-			[]gapKind{gapPreview}, "no compose file. Propose set_up_preview"},
+			[]string{factPreview}, "the repository has no compose file."},
 		"an app whose preview is being set up": {projectState{App: true, StackReady: true, Vision: &featureartifact.VisionPlan{}, HasCode: true,
 			Features: []feature.Feature{{ID: "fea_bg", Title: "Set up the preview", Background: true, State: feature.StateImplementing}},
 			Runs:     map[string]execution.Run{"fea_bg": {Status: execution.RunStatusRunning}},
-		}, []gapKind{}, ""},
+		}, []string{}, ""},
 		"an app whose preview setup is stuck": {projectState{App: true, StackReady: true, Vision: &featureartifact.VisionPlan{}, HasCode: true, HasCompose: true,
 			Features: []feature.Feature{{ID: "fea_bg", Title: "Fix the preview", Background: true, State: feature.StateImplementing}},
 			Runs: map[string]execution.Run{"fea_bg": {Status: execution.RunStatusWaitingForUser,
 				WaitKind: execution.RunWaitKindBlocker, Reason: "The API does not start.\nTrace."}},
-		}, []gapKind{gapPreview}, "“Fix the preview” (fea_bg), is stuck: The API does not start."},
+		}, []string{factPreview}, "“Fix the preview” (fea_bg), is stuck: The API does not start."},
 	} {
 		t.Run(name, func(t *testing.T) {
-			found := findGaps(test.state, record{})
-			if !sameKinds(kinds(found), test.want...) {
-				t.Fatalf("gaps = %+v, want %v", found, test.want)
+			found := projectFacts(test.state, record{})
+			if !sameKinds(factKinds(found), test.want...) {
+				t.Fatalf("facts = %+v, want %v", found, test.want)
 			}
 			if test.text != "" && !strings.Contains(found[len(found)-1].Text, test.text) {
-				t.Fatalf("gap text = %q, want %q", found[len(found)-1].Text, test.text)
+				t.Fatalf("fact text = %q, want %q", found[len(found)-1].Text, test.text)
+			}
+			for _, item := range found {
+				if strings.Contains(item.Text, "Propose") || strings.Contains(item.Text, "start_autopilot") {
+					t.Fatalf("a fact tells her what to do: %q", item.Text)
+				}
 			}
 		})
 	}
 }
 
-// A preview the desktop reported failing is a gap until preview work merged
-// after it.
-func TestAFailingPreviewIsAGapUntilAFixMerges(t *testing.T) {
+// A preview the desktop reported failing is a fact until preview work
+// merged after it.
+func TestAFailingPreviewIsAFactUntilAFixMerges(t *testing.T) {
 	failedAt := time.Date(2026, 10, 14, 12, 0, 0, 0, time.UTC)
 	state := projectState{App: true, StackReady: true, Vision: &featureartifact.VisionPlan{}, HasCode: true, HasCompose: true}
 	stored := record{PreviewFailedAt: &failedAt}
-	if !sameKinds(kinds(findGaps(state, stored)), gapPreview) {
-		t.Fatal("a failing preview is no gap")
+	if !sameKinds(factKinds(projectFacts(state, stored)), factPreview) {
+		t.Fatal("a failing preview is no fact")
 	}
 	state.Features = []feature.Feature{{ID: "fea_fix", PreviewCheck: true, State: feature.StateCompleted, UpdatedAt: failedAt.Add(time.Minute)}}
-	if gaps := findGaps(state, stored); len(gaps) != 0 {
-		t.Fatalf("a fixed preview is still a gap: %+v", gaps)
+	if facts := projectFacts(state, stored); len(facts) != 0 {
+		t.Fatalf("a fixed preview is still a fact: %+v", facts)
 	}
 }
 
 // A start card the user dismissed while the assistant assisted does not
-// keep it from taking the work order over after the switch; one dismissed
+// keep the work order out of the facts after the switch; one dismissed
 // while it builds everything does.
 func TestACardDismissedBeforeTheSwitchDoesNotBlockTakingOver(t *testing.T) {
 	switched := time.Date(2026, 10, 14, 12, 0, 0, 0, time.UTC)
@@ -124,11 +132,11 @@ func TestACardDismissedBeforeTheSwitchDoesNotBlockTakingOver(t *testing.T) {
 			AssistantAction: featureartifact.AssistantAction{Type: featureartifact.AssistantStartWorkOrder, WorkOrderID: "fea_ready"},
 		}}}}
 	}
-	if !sameKinds(kinds(findGaps(state, dismissed(switched.Add(-time.Hour)))), gapWaiting) {
+	if !sameKinds(factKinds(projectFacts(state, dismissed(switched.Add(-time.Hour)))), factWaiting) {
 		t.Fatal("a card dismissed while assisting kept the work order from being taken over")
 	}
-	if gaps := findGaps(state, dismissed(switched.Add(time.Hour))); len(gaps) != 0 {
-		t.Fatalf("a card dismissed while building everything was overruled: %+v", gaps)
+	if facts := projectFacts(state, dismissed(switched.Add(time.Hour))); len(facts) != 0 {
+		t.Fatalf("a card dismissed while building everything was overruled: %+v", facts)
 	}
 	if text := recentActions(dismissed(switched.Add(-time.Hour)).Actions, &switched); !strings.Contains(text, "no longer stands") {
 		t.Fatalf("the assistant does not hear the dismissal no longer stands: %q", text)
@@ -158,27 +166,28 @@ func (noVisionSession) OpenSession(context.Context, string) (vision.Session, err
 	return vision.Session{}, vision.ErrNotFound
 }
 
-func gapWatcher(t *testing.T, mode project.AssistantMode) (Watcher, *Service, *bool) {
+// idleWatcher is a watcher over a project with a vision whose items are
+// open, a stack set up, and nothing running.
+func idleWatcher(t *testing.T, mode project.AssistantMode) (Watcher, *Service, *featuresStub, *bool) {
 	t.Helper()
 	service, _ := newTestService(t)
 	service.config.Projects = gapProjects{mode: mode}
 	limited := false
+	features := &featuresStub{features: []feature.Feature{{ID: "fea_merged", Title: "Sort the shelf", State: feature.StateCompleted}}}
 	watcher := Watcher{
-		Service: service, Features: &featuresStub{}, Runs: runsStub{}, Visions: missingVision{},
-		Toolchains: toolchainStub{status: toolchain.StatusNeedsSetup}, VisionSessions: noVisionSession{},
+		Service: service, Features: features, Runs: runsStub{}, Visions: &visionStub{plan: openPlan},
+		Toolchains: toolchainStub{status: toolchain.StatusConfigured}, VisionSessions: noVisionSession{},
 		AgentLimited: func(context.Context, string) bool { return limited },
 	}
-	return watcher, service, &limited
+	return watcher, service, features, &limited
 }
 
-// Building everything, the gap check wakes the assistant once with what
-// is missing; at most once per gapEvery, at most maxGapTells times in a
-// row, and never while it answers, has events waiting, or its agent is at
-// its usage limit. Assisting, it never does.
-func TestTheGapCheckWakesTheAssistantRarely(t *testing.T) {
-	watcher, service, limited := gapWatcher(t, project.AssistantModeBuilds)
-	now := time.Date(2026, 10, 14, 12, 0, 0, 0, time.UTC)
-	service.now = func() time.Time { return now }
+// Under Build everything, the idle look wakes the assistant once when
+// nothing runs and the vision has open items, and again only after
+// something changed; never while it answers, has events waiting, a card
+// waits, work runs, or its agent is at its usage limit.
+func TestTheIdleLookWakesTheAssistantOncePerChange(t *testing.T) {
+	watcher, service, features, limited := idleWatcher(t, project.AssistantModeBuilds)
 	pending := func() []string {
 		stored, err := service.read("prj_test")
 		if err != nil {
@@ -195,56 +204,94 @@ func TestTheGapCheckWakesTheAssistantRarely(t *testing.T) {
 	}
 
 	*limited = true
-	watcher.gapCheck(t.Context(), "prj_test")
+	watcher.idleLook(t.Context(), "prj_test")
 	if len(pending()) != 0 {
-		t.Fatal("the gap check woke an assistant at its usage limit")
+		t.Fatal("the idle look woke an assistant at its usage limit")
 	}
 	*limited = false
-	watcher.gapCheck(t.Context(), "prj_test")
-	if events := pending(); len(events) != 1 || !strings.Contains(events[0], "no vision yet") {
+	watcher.idleLook(t.Context(), "prj_test")
+	events := pending()
+	if len(events) != 1 || !strings.Contains(events[0], "Nothing is running") ||
+		!strings.Contains(events[0], "P0.3 “Count the books” (item count)") ||
+		!strings.Contains(events[0], "P1.1 “Share the shelf” (item later)") ||
+		strings.Contains(events[0], "Sort the shelf") || strings.Contains(events[0], "start_autopilot") {
 		t.Fatalf("pending = %v", events)
 	}
 	// Events wait: nothing more is told.
-	now = now.Add(gapEvery)
-	watcher.gapCheck(t.Context(), "prj_test")
+	watcher.idleLook(t.Context(), "prj_test")
 	if len(pending()) != 1 {
-		t.Fatal("the gap check told again while events waited")
+		t.Fatal("the idle look told again while events waited")
 	}
+	// She answered there is nothing to do: the same look stays quiet.
 	clear()
-	now = now.Add(-time.Minute)
+	watcher.idleLook(t.Context(), "prj_test")
+	if len(pending()) != 0 {
+		t.Fatal("the idle look told the same again")
+	}
+	// Work that runs holds it back; once it merged, something changed.
+	features.features = append(features.features, feature.Feature{ID: "fea_count", Title: "Count", State: feature.StateImplementing})
+	watcher.idleLook(t.Context(), "prj_test")
+	if len(pending()) != 0 {
+		t.Fatal("the idle look woke the assistant while work ran")
+	}
+	features.features[1].State = feature.StateCompleted
+	watcher.plan(t, &openPlan, "count", "fea_count")
+	// A card waiting for the user holds it back too.
 	stored, _ := service.read("prj_test")
-	stored.Gaps["vision"] = gapTold{At: now.Add(-gapEvery + time.Minute), Count: 1}
+	stored.Actions = append(stored.Actions, Action{ID: "act_card", Status: ActionProposed,
+		AssistantAction: featureartifact.AssistantAction{Type: featureartifact.AssistantCreateWorkOrder, Title: "Share"}})
 	_ = service.write(stored)
-	watcher.gapCheck(t.Context(), "prj_test")
+	watcher.idleLook(t.Context(), "prj_test")
 	if len(pending()) != 0 {
-		t.Fatal("the same gap was told again within gapEvery")
-	}
-	// A turn running holds it back too.
-	stored, _ = service.read("prj_test")
-	stored.Status = StatusRunning
-	_ = service.write(stored)
-	now = now.Add(gapEvery)
-	watcher.gapCheck(t.Context(), "prj_test")
-	if len(pending()) != 0 {
-		t.Fatal("the gap check told an assistant whose turn runs")
+		t.Fatal("the idle look woke the assistant while a card waited")
 	}
 	stored, _ = service.read("prj_test")
-	stored.Status = StatusIdle
+	stored.Actions[len(stored.Actions)-1].Status = ActionDismissed
 	_ = service.write(stored)
-	for tell := 2; tell <= maxGapTells+1; tell++ {
-		watcher.gapCheck(t.Context(), "prj_test")
-		told := len(pending()) == 1
-		if told != (tell <= maxGapTells) {
-			t.Fatalf("tell %d: told %t", tell, told)
-		}
-		clear()
-		now = now.Add(gapEvery)
+	watcher.idleLook(t.Context(), "prj_test")
+	if events := pending(); len(events) != 1 || strings.Contains(events[0], "Count the books") ||
+		!strings.Contains(events[0], "Share the shelf") {
+		t.Fatalf("after the counts merged, pending = %v", events)
 	}
 
-	assists, service, _ := gapWatcher(t, project.AssistantModeAssists)
-	assists.gapCheck(t.Context(), "prj_test")
+	// Under Ask first it never looks.
+	assists, service, _, _ := idleWatcher(t, project.AssistantModeAssists)
+	assists.idleLook(t.Context(), "prj_test")
 	if stored, _ := service.read("prj_test"); len(stored.PendingEvents) != 0 {
-		t.Fatal("the gap check woke an assistant that assists")
+		t.Fatal("the idle look woke an assistant that asks first")
+	}
+}
+
+// plan points the watcher at a vision whose item now has a work order.
+func (watcher Watcher) plan(t *testing.T, base *featureartifact.VisionPlan, itemID, workOrderID string) {
+	t.Helper()
+	plan := featureartifact.VisionPlan{}
+	for _, priority := range base.Priorities {
+		items := append([]featureartifact.VisionItem{}, priority.Items...)
+		for index := range items {
+			if items[index].ID == itemID {
+				items[index].FeatureID = workOrderID
+			}
+		}
+		priority.Items = items
+		plan.Priorities = append(plan.Priorities, priority)
+	}
+	watcher.Visions.(*visionStub).plan = plan
+}
+
+// An item dropped from the goal is not open for the idle look: with
+// nothing else open, it stays quiet.
+func TestTheIdleLookLeavesOutDroppedItems(t *testing.T) {
+	watcher, service, _, _ := idleWatcher(t, project.AssistantModeBuilds)
+	if err := service.updateShared("prj_test", func(shared *sharedState) bool {
+		shared.Goal = &Goal{Status: GoalDone, Dropped: []GoalItem{{ID: "count"}, {ID: "later"}}}
+		return true
+	}); err != nil {
+		t.Fatal(err)
+	}
+	watcher.idleLook(t.Context(), "prj_test")
+	if stored, _ := service.read("prj_test"); len(stored.PendingEvents) != 0 {
+		t.Fatalf("the idle look told of dropped items: %v", stored.PendingEvents)
 	}
 }
 

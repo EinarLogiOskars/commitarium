@@ -100,9 +100,11 @@ export function TurnFailureControls({
 }
 
 /** What goes on in the chat's project while Mayka is not answering: the new
- * app's launch, its work orders running, or autopilot between them, picking
- * the next or waiting on the user once Mayka answered what happened. Empty
- * when nothing does. Running titles are the work orders under way. */
+ * app's launch, its work orders running, or, only for a goal the user handed
+ * her, autopilot between them, picking the next or waiting on the user once
+ * Mayka answered what happened. Empty when nothing does. Running titles are
+ * the work orders under way. A goal's progress counts its items; those she
+ * dropped are not among them. */
 export function liveLabel(conversation: Conversation, runningTitles: string[]): string {
   const stage = conversation.launch?.stage;
   if (stage === "vision") return "Writing the app's vision…";

@@ -105,6 +105,18 @@ func TestAWorkOrderWithoutAgentsSaysSo(t *testing.T) {
 	}
 }
 
+// What the project lacks to run is in the state, as facts, at every level.
+func TestTheStateSaysWhatTheProjectLacks(t *testing.T) {
+	describer := StateDescriber{
+		Projects: projectsStub{}, Agents: agentsStub{}, Features: &featuresStub{},
+		Facts: func(context.Context, string) []string { return []string{"The project has no vision yet."} },
+	}
+	state, err := describer.Describe(t.Context(), "prj_test")
+	if err != nil || !strings.Contains(state, "### What the project lacks to run\n- The project has no vision yet.") {
+		t.Fatalf("state = %s err=%v", state, err)
+	}
+}
+
 // A refused autopilot action wakes the assistant with the reason, at most
 // twice in a row, so it can choose again without spending turns forever.
 func TestARefusedAutopilotActionWakesTheAssistantAtMostTwice(t *testing.T) {
@@ -121,6 +133,8 @@ func TestARefusedAutopilotActionWakesTheAssistantAtMostTwice(t *testing.T) {
 	stored, err := service.read("prj_test")
 	if err != nil || stored.Refusals != 3 || len(stored.PendingEvents) != 2 ||
 		!strings.Contains(stored.PendingEvents[0], "usage limit") ||
+		!strings.Contains(stored.PendingEvents[0], "It waits for the user as a card.") ||
+		strings.Contains(stored.PendingEvents[0], "Propose") ||
 		!strings.Contains(stored.Messages[len(stored.Messages)-1].Text, "waits for your approval") {
 		t.Fatalf("after three refusals = %+v err=%v", stored, err)
 	}

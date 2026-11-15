@@ -59,3 +59,27 @@ func (api *API) applySetSay(
 	}
 	return result, true
 }
+
+// goalDropper drops an item the user said to skip from their autopilot goal
+// (ADR-041).
+type goalDropper interface {
+	DropGoalItem(ctx context.Context, scope, itemID, reason string) (string, error)
+}
+
+// applyDropGoalItem drops a vision item from the goal the user handed Mayka,
+// so it can finish without it.
+func (api *API) applyDropGoalItem(
+	w http.ResponseWriter, r *http.Request, projectID string, action conversations.Action,
+) (string, bool) {
+	dropper, ok := api.conversations.(goalDropper)
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable, "assistant_unavailable", "the goal cannot be changed")
+		return "", false
+	}
+	result, err := dropper.DropGoalItem(r.Context(), projectID, action.VisionItemID, action.Reason)
+	if err != nil {
+		writeConversationError(w, err)
+		return "", false
+	}
+	return result, true
+}

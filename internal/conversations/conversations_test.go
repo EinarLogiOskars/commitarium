@@ -419,6 +419,18 @@ func TestTheAssistantIsToldHowToRecover(t *testing.T) {
 	}
 }
 
+// She never starts a goal herself; she drops an item the user skips.
+func TestTheRulesHandGoalsToTheUser(t *testing.T) {
+	instructions := rules("prj_test", Settings{})
+	if strings.Contains(instructions, "start_autopilot") || !strings.Contains(instructions, "you never start one") ||
+		!strings.Contains(instructions, "drop_goal_item") {
+		t.Fatalf("rules = %q", instructions)
+	}
+	if strings.Contains(buildsInstructions, "start_autopilot") || strings.Contains(buildsInstructions, "Fix each in turn") {
+		t.Fatalf("builds instructions still script her: %q", buildsInstructions)
+	}
+}
+
 // The assistant never has an agent commit something the work does not need
 // just to satisfy a check.
 func TestTheAssistantNeverAsksForADummyCommit(t *testing.T) {

@@ -65,4 +65,24 @@ describe("the chat's live line", () => {
     );
     expect(liveLabel(chat({}), [])).toBe("");
   });
+  it("says only what runs without a goal the user handed her", () => {
+    const merged = { id: "m1", role: "event" as const, text: "“Editor” merged.", occurred_at: "" };
+    expect(liveLabel(chat({ messages: [merged] }), [])).toBe("");
+    expect(liveLabel(chat({ goal: { ...goal, status: "done" } }), ["Editor", "Search"])).toBe(
+      "Waiting on work orders · 2 active",
+    );
+    expect(liveLabel(chat({ goal: { ...goal, status: "stopped" }, messages: [merged] }), [])).toBe(
+      "",
+    );
+  });
+  it("leaves dropped items out of a goal's progress", () => {
+    const skipped = {
+      ...goal,
+      items: [{ id: "1", label: "P1.1", title: "a", done: true }],
+      dropped: [{ id: "2", label: "P1.2", title: "b", reason: "The user skips it" }],
+    };
+    expect(liveLabel(chat({ goal: skipped }), ["Editor"])).toBe(
+      "Waiting on “Editor” · autopilot 1 of 1 done",
+    );
+  });
 });

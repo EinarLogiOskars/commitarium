@@ -586,6 +586,8 @@ func (api *API) approveConversationActionHandler(w http.ResponseWriter, r *http.
 		result, ok = api.applyStartPlanning(w, r, scope, action)
 	case featureartifact.AssistantSetSay:
 		result, ok = api.applySetSay(w, r, scope, action)
+	case featureartifact.AssistantDropGoalItem:
+		result, ok = api.applyDropGoalItem(w, r, scope, action)
 	case featureartifact.AssistantSetUpStack:
 		result, workOrderID, ok = api.applySetUpStack(w, r, scope)
 	case featureartifact.AssistantCloseWorkOrder:

@@ -81,15 +81,15 @@ func TestAPlannedProjectIsPlannedWithTheUser(t *testing.T) {
 	}
 }
 
-// Nothing is missing from a project being planned: the gap check waits for
-// the user to build it.
-func TestAPlannedProjectHasNoGaps(t *testing.T) {
+// Nothing is missing from a project being planned: the facts wait for the
+// user to build it.
+func TestAPlannedProjectLacksNothing(t *testing.T) {
 	stored := record{Conversation: Conversation{Scope: "prj_test"}}
-	if gaps := findGaps(projectState{Planning: true}, stored); len(gaps) != 0 {
-		t.Fatalf("gaps = %+v", gaps)
+	if facts := projectFacts(projectState{Planning: true}, stored); len(facts) != 0 {
+		t.Fatalf("facts = %+v", facts)
 	}
-	if gaps := findGaps(projectState{}, stored); len(gaps) == 0 {
-		t.Fatal("a project without a vision has no gaps")
+	if facts := projectFacts(projectState{}, stored); len(facts) == 0 {
+		t.Fatal("a project without a vision lacks nothing")
 	}
 }
 

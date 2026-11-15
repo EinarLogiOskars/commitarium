@@ -48,7 +48,9 @@ const (
 	// optionally linking a work order done outside the plan.
 	AssistantAddVisionItem AssistantActionType = "add_vision_item"
 	// AssistantStartAutopilot hands the assistant a goal: the open items of
-	// one vision priority, which it then drives to merged on its own.
+	// one vision priority, which it then drives to merged on its own. Only
+	// the user hands a goal (ADR-041): Mayka's turns no longer offer it, and
+	// one she produced is never applied on its own.
 	AssistantStartAutopilot AssistantActionType = "start_autopilot"
 	// AssistantContinueWorkOrder continues a work order whose run waits on a
 	// blocker, with optional guidance for its agents.
@@ -158,7 +160,8 @@ const (
 	// it is applied at once: the user watches the plan fill in.
 	AssistantUpdatePlan AssistantActionType = "update_plan"
 	// AssistantBuildPlan finishes the vision being planned and hands it to
-	// autopilot, as the planning workspace's Build it does.
+	// Mayka, her say set to Build everything, as the planning workspace's
+	// Build it does.
 	AssistantBuildPlan AssistantActionType = "build_plan"
 	// AssistantStartPlanning suggests plan mode in the chat that proposed it
 	// (ADR-039), for a request too big or vague to build without planning:
@@ -171,6 +174,10 @@ const (
 	// build_everything, and Words, when set, replace her own words for the
 	// rest ("advise only", "deploy after each change"). Applied at once.
 	AssistantSetSay AssistantActionType = "set_say"
+	// AssistantDropGoalItem drops VisionItemID from the autopilot goal the
+	// user handed Mayka, when the user said to skip it, with Reason why, so
+	// the goal can finish without it (ADR-041). Applied at once.
+	AssistantDropGoalItem AssistantActionType = "drop_goal_item"
 )
 
 // The levels of Mayka's say in a project (ADR-041).
@@ -727,6 +734,10 @@ func (action AssistantAction) validate() error {
 	case AssistantStartAutopilot:
 		if action.Priority < 0 || action.Priority > maxVisionPriority {
 			return fmt.Errorf("priority runs from 0 to %d", maxVisionPriority)
+		}
+	case AssistantDropGoalItem:
+		if action.VisionItemID == "" {
+			return fmt.Errorf("drop_goal_item needs the vision item")
 		}
 	case AssistantSetSay:
 		switch action.Level {
