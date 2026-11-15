@@ -133,7 +133,7 @@ not per role, and the agent's container keeps the tokens of every work
 order it ran. Every other route, with
 no token or another work order's, is refused. The same check stops a web page
 on the user's machine: it cannot set the header, and a name rebound to
-loopback gets no token. `GET /health` alone is open. `scripts/check-isolation.sh`
+loopback gets no token. Every refusal is 401. `GET /health` alone is open. `scripts/check-isolation.sh`
 checks the refusal from the stack's network.
 
 Since RH2 step 4 that API is the way to the host's real work, not just to
