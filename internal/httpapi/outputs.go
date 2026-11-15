@@ -6,7 +6,6 @@ import (
 	"log"
 	"mime"
 	"net/http"
-	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -222,15 +221,15 @@ func (api *API) readHelperFileHandler(w http.ResponseWriter, r *http.Request) {
 		if file.Name != name {
 			continue
 		}
-		// The helper may change its folder at any time: serve only an ordinary
-		// file whose path has no link in it, inside its folder.
-		resolved, err := filepath.EvalSymlinks(file.Path)
-		inside := filepath.Join(directory, outputs.Dir) + string(filepath.Separator)
-		if info, statErr := os.Lstat(file.Path); err != nil || statErr != nil || resolved != file.Path ||
-			!strings.HasPrefix(resolved, inside) || !info.Mode().IsRegular() {
+		// The helper may change its folder at any time: the file is opened
+		// through a root no link can leave, and that open file is served.
+		opened, info, err := outputs.OpenLive(directory, file)
+		if err != nil {
 			break
 		}
-		serveOutput(w, r, name, file.Path)
+		defer opened.Close()
+		outputHeaders(w, name)
+		http.ServeContent(w, r, name, info.ModTime(), opened)
 		return
 	}
 	writeOutputError(w, owner, outputs.ErrNotFound)
@@ -267,6 +266,12 @@ func (api *API) helperFiles(w http.ResponseWriter, r *http.Request, owner string
 // runs in the coordinator's origin: everything is served under a sandbox
 // policy, and the app shows HTML in a sandboxed frame and SVG as an image.
 func serveOutput(w http.ResponseWriter, r *http.Request, name, path string) {
+	outputHeaders(w, name)
+	http.ServeFile(w, r, path)
+}
+
+// outputHeaders keeps an output from running as a page of the app.
+func outputHeaders(w http.ResponseWriter, name string) {
 	extension := strings.ToLower(filepath.Ext(name))
 	kind, ok := outputTypes[extension]
 	if !ok {
@@ -279,7 +284,6 @@ func serveOutput(w http.ResponseWriter, r *http.Request, name, path string) {
 		w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": name}))
 	}
 	w.Header().Set("Cache-Control", "no-store")
-	http.ServeFile(w, r, path)
 }
 
 // deleteOutputHandler removes an output with its versions; once the last of

@@ -24,6 +24,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -301,18 +302,40 @@ func (store *Store) DeleteProject(_ context.Context, projectID string) error {
 	return nil
 }
 
+// openWithin opens a regular file under root, refusing links out of it. It
+// opens without blocking, so a pipe swapped in cannot hang the caller.
+func openWithin(root *os.Root, name string) (*os.File, os.FileInfo, error) {
+	file, err := root.OpenFile(name, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, nil, err
+	}
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() {
+		file.Close()
+		return nil, nil, errors.New("not a regular file")
+	}
+	return file, info, nil
+}
+
+// OpenLive opens a file a helper has in Dir under from now, as Live listed
+// it, the same way Collect reads it: never through a link out of from.
+func OpenLive(from string, pending Pending) (*os.File, os.FileInfo, error) {
+	root, err := os.OpenRoot(from)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer root.Close()
+	return openWithin(root, filepath.Join(Dir, pending.relative))
+}
+
 // readWithin reads a regular file under root, refusing links out of it and
 // files grown past MaxBytes since they were listed.
 func readWithin(root *os.Root, name string) ([]byte, error) {
-	file, err := root.Open(name)
+	file, _, err := openWithin(root, name)
 	if err != nil {
 		return nil, err
 	}
 	defer file.Close()
-	info, err := file.Stat()
-	if err != nil || !info.Mode().IsRegular() {
-		return nil, errors.New("not a regular file")
-	}
 	contents, err := io.ReadAll(io.LimitReader(file, MaxBytes+1))
 	if err != nil || len(contents) == 0 || len(contents) > MaxBytes {
 		return nil, errors.New("empty or too large")
