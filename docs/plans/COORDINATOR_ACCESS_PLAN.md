@@ -97,7 +97,7 @@ coordinator. Routes, IDs and the hard limits are untouched.
    (the coordinator refuses to start without them, outside tests), run tokens
    minted into assignments. Tests: every registered route answers 401 without
    a token (walked from the mux, so a new route cannot slip by); a run token
-   works on its own artifact routes and gets 403 on another work order and on
+   works on its own artifact routes and gets 401 on another work order and on
    `…/approve`.
 2. **Worker and CLI:** `COMMITARIUM_RUN_CREDENTIAL` into the turn's
    environment and the artifact CLI's header. It is not added to the worker's
@@ -138,7 +138,7 @@ PRs, so it is built after them, on top.
 4. **Refused.** From a worker container,
    `wget -S -O- http://coordinator:8080/api/v1/projects` answers 401.
    With `$COMMITARIUM_RUN_CREDENTIAL` on `…/assistant/conversations/<p>/actions/<a>/approve`,
-   it answers 403.
+   it answers 401.
 5. **A server.** A paired desktop works through the gateway. On the server,
    `sudo sh scripts/check-isolation.sh` reports that the coordinator refuses a
    call with no token.
