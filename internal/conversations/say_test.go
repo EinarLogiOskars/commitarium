@@ -193,3 +193,46 @@ func TestHerSayIsKeptAndDescribed(t *testing.T) {
 		}
 	}
 }
+
+// Only the user's message asks for an action: a turn woken by events cannot
+// mark one asked and so take over the user's work order (ADR-041).
+func TestAnEventTurnAsksForNothing(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		start func(service *Service) error
+		want  bool
+	}{
+		{"the user's message", func(service *Service) error {
+			_, err := service.Send(t.Context(), "prj_test", "Get Dark mode going", "msg-1")
+			return err
+		}, true},
+		{"an event", func(service *Service) error {
+			if err := service.Wake(t.Context(), "prj_test", "Note", "Dark mode is not started."); err != nil {
+				return err
+			}
+			return service.wakeChats(t.Context(), "prj_test")
+		}, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			service, worker := newTestService(t)
+			service.config.Features = &featuresStub{}
+			if err := test.start(service); err != nil {
+				t.Fatal(err)
+			}
+			worker.finish(workerhttp.TerminalResult{
+				Outcome: workerhttp.OutcomeCompleted, Disposition: workerhttp.DispositionSucceeded, Summary: "On it.",
+				AssistantTurn: &featureartifact.AssistantTurn{Actions: []featureartifact.AssistantAction{
+					{Type: featureartifact.AssistantStartWorkOrder, Reason: "Asked", WorkOrderID: "fea_users",
+						Take: true, Asked: true},
+				}},
+			})
+			conversation, err := service.Get(t.Context(), "prj_test")
+			if err != nil || len(conversation.Actions) != 1 {
+				t.Fatalf("actions = %+v err=%v", conversation.Actions, err)
+			}
+			if got := conversation.Actions[0].Asked; got != test.want {
+				t.Fatalf("asked = %t, want %t", got, test.want)
+			}
+		})
+	}
+}

@@ -341,6 +341,12 @@ func (service *Service) refresh(ctx context.Context, stored record) (record, err
 				case sentAtOnce(proposed.Type), stored.Goal.drivesItem(proposed):
 					proposed.Take = true
 				}
+				if !featureartifact.AppliedByTheApp(proposed.Type) && (stored.LastTurn == nil || stored.LastTurn.Role != "user") {
+					// Only the user's message asks for an action on their
+					// work order: a turn woken by events asks for nothing,
+					// so it cannot take one of theirs over (ADR-041).
+					proposed.Asked = false
+				}
 				action.AssistantAction = proposed
 				for _, model := range []string{proposed.LeadModel, proposed.ReviewerModel, proposed.LeadPlanModel, proposed.ReviewerPlanModel} {
 					if service.RequiresApproval(ctx, model) {
