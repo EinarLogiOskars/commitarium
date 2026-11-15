@@ -426,8 +426,8 @@ func TestTheRulesHandGoalsToTheUser(t *testing.T) {
 		!strings.Contains(instructions, "drop_goal_item") {
 		t.Fatalf("rules = %q", instructions)
 	}
-	if strings.Contains(buildsInstructions, "start_autopilot") || strings.Contains(buildsInstructions, "Fix each in turn") {
-		t.Fatalf("builds instructions still script her: %q", buildsInstructions)
+	if strings.Contains(workInstructions, "start_autopilot") || strings.Contains(workInstructions, "Fix each in turn") {
+		t.Fatalf("work instructions still script her: %q", workInstructions)
 	}
 }
 

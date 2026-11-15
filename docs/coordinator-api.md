@@ -80,8 +80,8 @@ this API beyond the host loopback interface is unsupported.
 | `POST` | `/api/v1/projects/{projectID}/features/{featureID}/return-to-ready` | Stop a started work order and return it to Ready, keeping its brief |
 | `POST` | `/api/v1/projects/{projectID}/features/{featureID}/close` | Close a work order without merging it, keeping its history |
 | `PUT` | `/api/v1/projects/{id}/name` | Rename a project or app (`{"name"}`, at most 120 characters); its repository keeps its own name |
-| `PUT` | `/api/v1/projects/{id}/app` | Mark a project as an app (`{"app": true}`) or a project only; projects answer `app`. A project that changes kind takes that kind's assistant mode |
-| `PUT` | `/api/v1/projects/{id}/assistant-mode` | Set the level of the assistant's say (`{"assistant_mode": "builds"}` for Build everything or `"assists"` for Ask first, ADR-027, ADR-041); projects answer `assistant_mode`, `builds` for apps and `assists` for projects by default |
+| `PUT` | `/api/v1/projects/{id}/app` | Mark a project as an app (`{"app": true}`) or a project only; projects answer `app`. A project that changes kind takes that kind's level of the assistant's say |
+| `PUT` | `/api/v1/projects/{id}/assistant-mode` | Set the level of the assistant's say (`{"assistant_mode": "builds"}` for Build everything or `"assists"` for Ask first, ADR-041; the path and field keep ADR-027's name); projects answer `assistant_mode`, `builds` for apps and `assists` for projects by default. Raising it to Build everything also runs the project's work to completion, merges it after its gates, and hands the project over |
 | `POST` | `/api/v1/runs/{runID}/interventions` | Queue a user message for the lead or reviewer and stop at the next safe boundary |
 | `POST` | `/api/v1/attachments/{owner}` | Store a file attached to a message (see [Message attachments](#message-attachments)) |
 | `GET` | `/api/v1/attachments/{owner}/{name}` | Read an attached file itself |
@@ -2941,8 +2941,10 @@ optional `chat_title`.
   (ADR-041). What a project still lacks to run (a vision, a stack, open
   vision items with nothing running or queued, work orders nobody starts, an
   app's preview) is in the assistant's state as plain facts, at every level.
-  Where the assistant builds everything (ADR-027), switching a project to
-  `builds` and creating a work order by hand wake it, merges and work back in
+  Where the assistant's say is Build everything, raising it there hands the
+  project over (cards the user dismissed before no longer stand; the
+  conversation keeps when as `builds_since`), a work order the user creates
+  by hand wakes it as news that stays the user's, merges and work back in
   Ready wake it as news, and the idle look wakes it once when nothing runs,
   nothing waits on the user (no card, no queued start), no chat is busy, its
   agent is not at its usage limit, and the vision still has open items

@@ -343,7 +343,7 @@ func priorityItems(plan featureartifact.VisionPlan, level int) []GoalItem {
 // hard limit stops is left for the user, with the reason on its card. Work
 // that follows other work, or past the safety cap, waits.
 func (service *Service) autopilotActions(ctx context.Context, scope string) ([]Action, error) {
-	look := autopilotLook{builds: service.assistantBuilds(ctx, scope), planBuilt: service.planBuilt(ctx, scope)}
+	look := autopilotLook{builds: service.buildsEverything(ctx, scope), planBuilt: service.planBuilt(ctx, scope)}
 	look.ours, look.titles, look.states = service.workOrders(ctx, scope)
 	chats, err := service.chatsOf(scope)
 	if err != nil {
@@ -867,7 +867,7 @@ func (stored record) mayAct(workOrderID string, ours map[string]bool) bool {
 // answered without one, or left one for the user, the work order needs the
 // user.
 func (service *Service) AutopilotHandles(ctx context.Context, scope, workOrderID string, blockedAt time.Time) bool {
-	builds := service.assistantBuilds(ctx, scope)
+	builds := service.buildsEverything(ctx, scope)
 	ours, _, _ := service.workOrders(ctx, scope)
 	if _, err := service.Readiness(ctx); err != nil {
 		return false
@@ -979,14 +979,14 @@ func (service *Service) isApp(ctx context.Context, scope string) bool {
 	return err == nil && stored.App
 }
 
-// assistantBuilds reports whether the assistant builds everything in a
-// project (ADR-027): its actions apply without cards, as on autopilot.
-func (service *Service) assistantBuilds(ctx context.Context, scope string) bool {
+// buildsEverything reports whether Mayka's say in a project is Build
+// everything (ADR-041).
+func (service *Service) buildsEverything(ctx context.Context, scope string) bool {
 	if scope == TopLevel {
 		return false
 	}
 	stored, err := service.config.Projects.GetByID(ctx, scope)
-	return err == nil && stored.AssistantBuilds()
+	return err == nil && stored.BuildsEverything()
 }
 
 // note adds an event line to a scope's most recently used chat.

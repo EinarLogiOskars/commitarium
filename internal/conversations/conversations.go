@@ -255,9 +255,10 @@ type record struct {
 	// Refusals counts autopilot's refused actions since one last applied;
 	// past maxRefusals they no longer wake the assistant.
 	Refusals int `json:"refusals,omitempty"`
-	// BuildsSince is when the user last switched the project to building
-	// everything: cards dismissed before it no longer stand (idle.go).
-	BuildsSince *time.Time `json:"builds_since,omitempty"`
+	// BuildEverythingSince is when Mayka's say last became Build everything:
+	// cards the user dismissed before it no longer stand (idle.go), since
+	// raising her say hands the work they held back to her.
+	BuildEverythingSince *time.Time `json:"builds_since,omitempty"`
 	// IdleLook is what the idle look last told the assistant, as a
 	// fingerprint, so it tells the same once (idle.go).
 	IdleLook string `json:"idle_look,omitempty"`

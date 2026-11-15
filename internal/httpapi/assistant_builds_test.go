@@ -63,8 +63,9 @@ func TestSwitchingToBuildingEverythingHandsTheProjectOver(t *testing.T) {
 	}
 }
 
-// Building everything, a work order the user creates by hand wakes the
-// assistant to take it over; assisting, or a session, does not.
+// Under Build everything, a work order the user creates by hand is news to
+// the assistant, told as a fact that it stays theirs; under Ask first, or a
+// session, it wakes no one.
 func TestAWorkOrderTheUserAddsWakesTheAssistantThatBuilds(t *testing.T) {
 	for name, test := range map[string]struct {
 		mode  project.AssistantMode
@@ -88,7 +89,8 @@ func TestAWorkOrderTheUserAddsWakesTheAssistantThatBuilds(t *testing.T) {
 			if recorder.Code != http.StatusCreated {
 				t.Fatalf("status %d: %s", recorder.Code, recorder.Body.String())
 			}
-			woke := len(waker.woken) == 1 && strings.Contains(waker.woken[0], "“Sort the shelf” (fea_sort)")
+			woke := len(waker.woken) == 1 && strings.Contains(waker.woken[0], "“Sort the shelf” (fea_sort)") &&
+				strings.Contains(waker.woken[0], "It is theirs")
 			if woke != test.wakes {
 				t.Fatalf("woken = %v, want woken %t", waker.woken, test.wakes)
 			}

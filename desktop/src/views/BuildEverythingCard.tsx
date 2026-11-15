@@ -16,11 +16,11 @@ function dismissed(projectId: string): boolean {
   }
 }
 
-// Under Mayka's first look at an imported project that she assists in
-// (SERVER_COMPLETE_PLAN.md, S7): the one switch that spares the user the
-// settings she just explained. Written here, not by Mayka, so the promise
-// and the button are always the same.
-export function BuildForMeCard({ projectId }: { projectId: string }) {
+// Under Mayka's first look at an imported project whose say is Ask first
+// (SERVER_COMPLETE_PLAN.md, S7): the one switch that raises her say to Build
+// everything and spares the user the settings she just explained. Written
+// here, not by Mayka, so the promise and the button are always the same.
+export function BuildEverythingCard({ projectId }: { projectId: string }) {
   const [gone, setGone] = useState(() => dismissed(projectId));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -30,11 +30,11 @@ export function BuildForMeCard({ projectId }: { projectId: string }) {
     try {
       localStorage.setItem(dismissedKey(projectId), "1");
     } catch {
-      // Shown again next time; the header still switches modes.
+      // Shown again next time; Project settings still changes her say.
     }
     setGone(true);
   };
-  const buildForMe = async () => {
+  const buildEverything = async () => {
     setBusy(true);
     setError(null);
     try {
@@ -49,14 +49,15 @@ export function BuildForMeCard({ projectId }: { projectId: string }) {
   return (
     <div className="assistant-action assistant-action--proposed">
       <p className="assistant-action__desc">
-        <strong>Build it for me.</strong> Mayka plans the work from the vision and runs it: agents
-        build, review and merge on their own, and she comes to you only when something needs a
-        decision. You can switch back to Ask first at any time in Project settings.
+        <strong>Let Mayka build everything.</strong> She plans the work from the vision and runs it:
+        agents build, review and merge on their own, and she comes to you only when something needs
+        a decision. You can change back to Ask first at any time in Project settings, or by telling
+        her.
       </p>
       {error && <div className="banner banner--error">{error}</div>}
       <div className="row">
-        <button className="primary" onClick={() => void buildForMe()} disabled={busy}>
-          {busy ? "Switching…" : "Build for me"}
+        <button className="primary" onClick={() => void buildEverything()} disabled={busy}>
+          {busy ? "Changing…" : "Build everything"}
         </button>
         <button className="ghost" onClick={notNow} disabled={busy}>
           Not now

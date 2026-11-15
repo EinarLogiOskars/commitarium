@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AssistantAction } from "../api/assistant";
-import { appliesItself, assistantMode, assistantModeNote, offersAutopilot } from "./assistantMode";
+import { appliesItself, offersAutopilot, sayLevel, sayLevelInWords } from "./maykaSay";
 
 const action = (overrides: Partial<AssistantAction>): AssistantAction =>
   ({
@@ -13,14 +13,14 @@ const action = (overrides: Partial<AssistantAction>): AssistantAction =>
     ...overrides,
   }) as AssistantAction;
 
-describe("assistant mode", () => {
-  it("follows the project's setting, and the app flag on older coordinators", () => {
-    expect(assistantMode({ app: true, assistant_mode: "assists" })).toBe("assists");
-    expect(assistantMode({ app: false, assistant_mode: "builds" })).toBe("builds");
-    expect(assistantMode({ app: true })).toBe("builds");
-    expect(assistantMode({})).toBe("assists");
-    expect(assistantModeNote("builds")).toBe("Build everything");
-    expect(assistantModeNote("assists")).toBe("Ask first");
+describe("Mayka's say", () => {
+  it("follows the project's level, and the app flag on older coordinators", () => {
+    expect(sayLevel({ app: true, assistant_mode: "assists" })).toBe("assists");
+    expect(sayLevel({ app: false, assistant_mode: "builds" })).toBe("builds");
+    expect(sayLevel({ app: true })).toBe("builds");
+    expect(sayLevel({})).toBe("assists");
+    expect(sayLevelInWords("builds").label).toBe("Build everything");
+    expect(sayLevelInWords("assists").label).toBe("Ask first");
   });
 
   it("shows what Mayka took as a line, from the backend's fields alone", () => {

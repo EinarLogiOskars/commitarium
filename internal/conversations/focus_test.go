@@ -35,10 +35,9 @@ func TestTheFocusTellsTheAssistantWhatTheUserMeans(t *testing.T) {
 	}
 }
 
-// Opened on a work order that already started because the assistant builds
-// everything, the assistant says so plainly, offers to pass the user's wishes
-// to the working agent, and points at Assists me, rather than clarifying it
-// as if it were a draft.
+// Opened on a work order that already started, the assistant says so
+// plainly, offers to pass the user's wishes to the working agent, and can
+// point at Ask first, rather than clarifying it as if it were a draft.
 func TestTheFocusTellsTheAssistantAWorkOrderAlreadyStarted(t *testing.T) {
 	service, worker := newTestService(t)
 	service.config.Projects = gapProjects{mode: project.AssistantModeBuilds}
@@ -54,9 +53,9 @@ func TestTheFocusTellsTheAssistantAWorkOrderAlreadyStarted(t *testing.T) {
 	instructions := worker.puts[0].Instructions
 	for _, want := range []string{
 		"“Add a beginner glossary” (fea_glossary, running (implementing))",
-		"already started when you added it",
+		"already started, so do not clarify it as if it were a draft",
 		"recover_work_order with how message",
-		"\"Assists me\", in Project settings",
+		"with Ask first, in Project settings or by telling you",
 	} {
 		if !strings.Contains(instructions, want) {
 			t.Fatalf("instructions lack %q:\n%s", want, instructions)

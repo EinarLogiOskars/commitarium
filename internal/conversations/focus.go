@@ -142,9 +142,8 @@ func (service *Service) workOrder(ctx context.Context, scope, id string) (featur
 }
 
 // focusInstructions tell the assistant what the user opened it on, where
-// that stands, and how to carry it through. builds is whether the assistant
-// builds everything in the project, which starts work as soon as it is added.
-func (service *Service) focusInstructions(ctx context.Context, scope string, focus *Focus, builds bool) string {
+// that stands, and how to carry it through.
+func (service *Service) focusInstructions(ctx context.Context, scope string, focus *Focus) string {
 	if focus == nil {
 		return ""
 	}
@@ -165,18 +164,11 @@ func (service *Service) focusInstructions(ctx context.Context, scope string, foc
 		case item.State == feature.StateCancelled:
 			text += " It was closed without merging."
 		case item.State != feature.StateDraft && item.State != feature.StateReady:
-			text += " It has already started, so do not clarify it as if it were a draft."
-			if builds {
-				text += " Say so plainly in a line (\"This project builds everything, so it already started when you " +
-					"added it\")."
-			}
-			text += " Offer to pass what the user wants to the agent working on it as guidance: once they say " +
-				"what, propose recover_work_order with how message and their wishes as guidance (continue with " +
-				"guidance when it is blocked)."
-			if builds {
-				text += " Mention once that \"Assists me\", in Project settings, lets them shape work orders before " +
-					"they start."
-			}
+			text += " It has already started, so do not clarify it as if it were a draft: say so plainly in a line. " +
+				"Offer to pass what the user wants to the agent working on it as guidance: once they say what, " +
+				"propose recover_work_order with how message and their wishes as guidance (continue with guidance " +
+				"when it is blocked). If your say is Build everything and they wanted to shape it first, mention " +
+				"once that with Ask first, in Project settings or by telling you, you ask before work starts."
 		}
 		if item.State == feature.StateDraft {
 			text += " To clarify it, work out with the user what they want and why, asking only what changes the " +

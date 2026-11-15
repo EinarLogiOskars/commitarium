@@ -19,7 +19,7 @@ import { ProjectSyncCard } from "./ProjectSyncCard";
 import { RepositoryCard } from "./RepositoryCard";
 import { StackPicker } from "./StackPicker";
 import { VisionView } from "./VisionView";
-import { assistantMode, offersAutopilot } from "./assistantMode";
+import { offersAutopilot, sayLevel } from "./maykaSay";
 import { WorkOrderRail } from "./WorkOrderRail";
 import { autopilotOn, shownMode, type PageMode, type PageTarget } from "./pageTarget";
 import { usePreview } from "./usePreview";
@@ -225,7 +225,7 @@ export function ProjectPageBody({
       return (
         <VisionView
           projectId={id}
-          offerAutopilot={project ? offersAutopilot(assistantMode(project)) : true}
+          offerAutopilot={project ? offersAutopilot(sayLevel(project)) : true}
           setup={
             needsStack
               ? {

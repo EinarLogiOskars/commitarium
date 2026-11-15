@@ -63,10 +63,10 @@ type sharedState struct {
 	Watched   map[string]string `json:"watched,omitempty"`
 	// PendingEvents are what the assistant has yet to hear, by the chat
 	// whose next turn tells it.
-	PendingEvents map[string][]string `json:"pending_events,omitempty"`
-	AutoContinues map[string]int      `json:"auto_continues,omitempty"`
-	Refusals      int                 `json:"refusals,omitempty"`
-	BuildsSince   *time.Time          `json:"builds_since,omitempty"`
+	PendingEvents        map[string][]string `json:"pending_events,omitempty"`
+	AutoContinues        map[string]int      `json:"auto_continues,omitempty"`
+	Refusals             int                 `json:"refusals,omitempty"`
+	BuildEverythingSince *time.Time          `json:"builds_since,omitempty"`
 	// IdleLook is what the idle look last told, as a fingerprint (idle.go).
 	IdleLook        string     `json:"idle_look,omitempty"`
 	PreviewFailedAt *time.Time `json:"preview_failed_at,omitempty"`
@@ -135,7 +135,7 @@ func join(shared sharedState, chat chatState) record {
 		Turn: chat.Turn, AttemptID: chat.AttemptID, SessionAgent: chat.SessionAgent, SessionModel: chat.SessionModel,
 		Keys: chat.Keys, LastTurn: chat.LastTurn, Watched: shared.Watched,
 		PendingEvents: shared.PendingEvents[chat.ID], AutoContinues: shared.AutoContinues,
-		Refusals: shared.Refusals, BuildsSince: shared.BuildsSince, IdleLook: shared.IdleLook,
+		Refusals: shared.Refusals, BuildEverythingSince: shared.BuildEverythingSince, IdleLook: shared.IdleLook,
 		PreviewFailedAt: shared.PreviewFailedAt, Helpers: shared.Helpers, Retry: chat.Retry,
 		Archived: chat.Archived, CreatedAt: chat.CreatedAt, UsedAt: chat.UsedAt, TitleBy: chat.TitleBy,
 	}
@@ -157,7 +157,7 @@ func (stored record) split() (sharedState, chatState) {
 	return sharedState{
 		Scope: stored.Scope, Notes: stored.Notes, Goal: stored.Goal, Launch: stored.Launch,
 		Developer: stored.Developer, Watched: stored.Watched, AutoContinues: stored.AutoContinues,
-		Refusals: stored.Refusals, BuildsSince: stored.BuildsSince, IdleLook: stored.IdleLook,
+		Refusals: stored.Refusals, BuildEverythingSince: stored.BuildEverythingSince, IdleLook: stored.IdleLook,
 		PreviewFailedAt: stored.PreviewFailedAt, Helpers: stored.Helpers,
 	}, chatState{
 		ID: stored.Chat, Scope: stored.Scope, Title: stored.Title, TitleBy: stored.TitleBy, Archived: stored.Archived,
@@ -190,8 +190,8 @@ func (current *sharedState) merge(base, ours sharedState, chat string, events []
 	if base.Refusals != ours.Refusals {
 		current.Refusals = ours.Refusals
 	}
-	if !same(base.BuildsSince, ours.BuildsSince) {
-		current.BuildsSince = ours.BuildsSince
+	if !same(base.BuildEverythingSince, ours.BuildEverythingSince) {
+		current.BuildEverythingSince = ours.BuildEverythingSince
 	}
 	if base.IdleLook != ours.IdleLook {
 		current.IdleLook = ours.IdleLook

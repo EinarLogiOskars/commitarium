@@ -489,7 +489,7 @@ func (api *API) approveConversationActionHandler(w http.ResponseWriter, r *http.
 		}
 		builds := false
 		if owner, err := api.projects.GetByID(r.Context(), scope); err == nil {
-			builds = owner.AssistantBuilds()
+			builds = owner.BuildsEverything()
 		}
 		if reason := conversations.HardLimit(action, conversations.Limits{
 			Builds: builds, Theirs: theirs, Premium: premium,

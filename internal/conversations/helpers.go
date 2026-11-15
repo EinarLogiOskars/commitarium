@@ -294,7 +294,7 @@ func (service *Service) helpersChangedIn(ctx context.Context, scope, chat string
 				service.noteResearch(ctx, scope, helper.Title, state.Text)
 				continue
 			}
-			stored.propose(*helper, state.Text, service.assistantBuilds(ctx, scope), now)
+			stored.propose(*helper, state.Text, service.buildsEverything(ctx, scope), now)
 		case HelperFinished:
 			helper.Done = true
 		case HelperFailed:

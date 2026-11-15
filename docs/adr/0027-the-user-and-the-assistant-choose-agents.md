@@ -1,6 +1,6 @@
 # ADR-027: The user and the assistant choose agents; the coordinator only refuses
 
-- Status: Accepted (amends [ADR-016](0016-run-agents-per-provider-account.md) and [ADR-022](0022-one-assistant-that-proposes-and-the-user-approves.md); amended by [ADR-031](0031-choose-models-and-review-where-it-pays.md): the assistant chooses by the model guide, and its efforts are capped)
+- Status: Accepted (amends [ADR-016](0016-run-agents-per-provider-account.md) and [ADR-022](0022-one-assistant-that-proposes-and-the-user-approves.md); amended by [ADR-031](0031-choose-models-and-review-where-it-pays.md): the assistant chooses by the model guide, and its efforts are capped; the sections on how the assistant works as a project setting and on building everything waking it are superseded by [ADR-041](0041-one-mayka-with-her-own-say.md): one assistant whose say has a level, Ask first or Build everything, kept in `assistant_mode`, and her own words; she takes or asks per action under hard limits, and building everything no longer takes over the user's work orders)
 - Date: 2026-10-14
 
 ## Context
@@ -87,7 +87,7 @@ assistant can act on. When the user asks for it, the assistant proposes the
 action as a card; the user's approval of a card is allowed on any work order,
 which is how the user hands one over.
 
-**How the assistant works is a project setting.** `assistant_mode` (migration
+**How the assistant works is a project setting.** (Superseded by ADR-041.) `assistant_mode` (migration
 00053) is `assists` ("Assists me", the default for every project and app: the
 user works themselves; every action is a card the user approves, and only
 work the assistant created or was handed runs on its own; autopilot goals the
@@ -105,7 +105,9 @@ windows and how the assistant speaks to an app's user. Projects answer it and
 `PUT /api/v1/projects/{id}/assistant-mode` changes it; the desktop shows it in
 Project settings and in the assistant drawer.
 
-**Building everything wakes the assistant by itself.** The assistant acts
+**Building everything wakes the assistant by itself.** (Superseded by
+ADR-041: wakes say what changed, gaps are facts in her state, and an idle
+look replaces the gap check.) The assistant acts
 only when woken, and there is no model heartbeat: turns spend usage. So
 where it builds everything:
 

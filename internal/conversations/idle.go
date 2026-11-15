@@ -99,7 +99,7 @@ func (watcher Watcher) Facts(ctx context.Context, scope string) []string {
 func (watcher Watcher) idleLook(ctx context.Context, scope string) {
 	service := watcher.Service
 	current, err := service.config.Projects.GetByID(ctx, scope)
-	if err != nil || !current.AssistantBuilds() || watcher.Visions == nil || watcher.Toolchains == nil {
+	if err != nil || !current.BuildsEverything() || watcher.Visions == nil || watcher.Toolchains == nil {
 		return
 	}
 	stored, err := service.readEvery(scope)
@@ -388,7 +388,7 @@ func (stored record) handles(workOrderID string) bool {
 		switch {
 		case action.Status == ActionProposed:
 			return true
-		case action.Status == ActionDismissed && (stored.BuildsSince == nil || action.UpdatedAt.After(*stored.BuildsSince)):
+		case action.Status == ActionDismissed && (stored.BuildEverythingSince == nil || action.UpdatedAt.After(*stored.BuildEverythingSince)):
 			return true
 		}
 	}

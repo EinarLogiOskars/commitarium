@@ -227,7 +227,7 @@ func (describer StateDescriber) writeProject(ctx context.Context, builder *strin
 	builder.WriteString(fmt.Sprintf("Defaults: merge %s; autonomy %s; independent tests %t.\n",
 		current.MergePolicy, current.AutonomyPolicy, current.IndependentAcceptanceTests))
 	// Her say (ADR-041): the level the user sees, and her own words.
-	builder.WriteString("How much you do here (your say): " + sayLevel(current.AssistantBuilds()) + ".")
+	builder.WriteString("How much you do here (your say): " + sayLevel(current.BuildsEverything()) + ".")
 	if describer.Say != nil {
 		if say := describer.Say(current.ID); say.Words != "" {
 			builder.WriteString(" Your words: " + say.Words)

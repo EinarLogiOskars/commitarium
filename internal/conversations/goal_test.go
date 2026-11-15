@@ -405,14 +405,12 @@ func TestHowTheAssistantWorksFollowsTheProjectsSetting(t *testing.T) {
 				t.Fatal(err)
 			}
 			instructions := worker.puts[0].Instructions
-			if builds := strings.Contains(instructions, "Your say here is Build everything"); builds != test.applies {
-				t.Fatalf("builds instructions = %t, want %t", builds, test.applies)
-			}
-			// Building everything, it reports in a line or two and asks only
-			// what is the user's to decide.
-			if short := strings.Contains(instructions, "report it in one or two short lines") &&
-				strings.Contains(instructions, "never say that nothing needs the user"); short != test.applies {
-				t.Fatalf("short updates = %t, want %t", short, test.applies)
+			// One set of instructions at every level: the level is a fact
+			// in her state, not a branch of what she is told.
+			if !strings.Contains(instructions, "How you carry the work here:") ||
+				!strings.Contains(instructions, "report it in one or two short lines") ||
+				strings.Contains(instructions, "Your say here is") {
+				t.Fatalf("instructions lack the one set of work instructions:\n%s", instructions)
 			}
 			if app := strings.Contains(instructions, "This project is an app the user uses"); app != test.project.app {
 				t.Fatalf("app instructions = %t, want %t", app, test.project.app)
