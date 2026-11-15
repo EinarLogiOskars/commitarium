@@ -956,3 +956,12 @@ func TestTakingACloseOfAHandedWorkOrderWaitsForTheUser(t *testing.T) {
 		})
 	}
 }
+
+// A goal's instructions agree with her say: outside the goal she takes or
+// asks as it says, rather than every action waiting for approval (ADR-041).
+func TestGoalInstructionsLeaveTheRestToHerSay(t *testing.T) {
+	text := goalInstructions(&Goal{Title: "Finish P0", Status: GoalActive})
+	if strings.Contains(text, "still wait for approval") || !strings.Contains(text, "take or ask as your say says") {
+		t.Fatalf("goal instructions = %s", text)
+	}
+}

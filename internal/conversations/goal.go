@@ -1096,8 +1096,8 @@ func goalInstructions(goal *Goal) string {
 		"what it needs. When autopilot made a duplicate work order for an item, propose close_work_order for the one that " +
 		"does not deliver it; autopilot closes its own duplicates. When a goal item's work order has run out of " +
 		"recovery, propose close_work_order for it together with create_work_order for the same vision_item_id; " +
-		"autopilot replaces it. Propose nothing outside the goal unless the " +
-		"user asks; such actions still wait for approval. A work order the user created by hand after the goal " +
-		"started is theirs, even on a goal item: actions on it wait for their approval.")
+		"autopilot replaces it. Outside the goal, take or ask as your say says. A work order the user created by " +
+		"hand after the goal started is theirs, even on a goal item: actions on it wait for their approval unless " +
+		"they ask you in the chat to act on it.")
 	return builder.String()
 }
