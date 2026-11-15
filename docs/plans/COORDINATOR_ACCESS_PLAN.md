@@ -121,3 +121,20 @@ PRs, so it is built after them, on top.
 - Whether the run token should also be limited by role (only the lead moves
   plan steps, only the reviewer moves acceptance tests). Left out for now,
   since the CLI does not limit it today either.
+
+## Live test (0.15)
+
+1. **Local start.** Quit and start the app. The stack comes up, and
+   `.commitarium/internal/coordinator-token` exists. Projects, chats, the
+   Vision page, app windows and previews all load.
+2. **A first run.** On a fresh data folder, the app works once the stack is
+   up, with no reload.
+3. **Agents.** On a work order, run on Codex and on Claude, the lead checks
+   off plan steps and the reviewer moves acceptance tests.
+4. **Refused.** From a worker container,
+   `wget -S -O- http://coordinator:8080/api/v1/projects` answers 401.
+   With `$COMMITARIUM_RUN_CREDENTIAL` on `…/assistant/conversations/<p>/actions/<a>/approve`,
+   it answers 403.
+5. **A server.** A paired desktop works through the gateway. On the server,
+   `sudo sh scripts/check-isolation.sh` reports that the coordinator refuses a
+   call with no token.
