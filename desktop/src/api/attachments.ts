@@ -111,7 +111,7 @@ export async function readAttachment(owner: string, name: string): Promise<Blob>
   try {
     response = await fetch(
       `${COORDINATOR_BASE}${attachmentsPath(owner)}/${encodeURIComponent(name)}`,
-      { headers: coordinatorAuth() },
+      { headers: await coordinatorAuth() },
     );
   } catch (e) {
     throw new NetworkError(`cannot reach coordinator: ${String(e)}`);

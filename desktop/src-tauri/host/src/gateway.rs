@@ -61,6 +61,9 @@ pub struct Upstreams {
     pub host_port: u16,
     pub host_token: String,
     pub coordinator_port: u16,
+    /// The coordinator's owner token, read when a call is forwarded, since
+    /// bootstrap may make it after the gateway starts.
+    pub coordinator_token: Box<dyn Fn() -> String + Send + Sync>,
     pub forgejo_port: u16,
     /// Whether a port belongs to a running preview, the only other thing on
     /// loopback a device may reach.
@@ -397,17 +400,25 @@ impl Gateway {
     }
 
     /// The port, the path there, and the token that service wants.
-    fn route<'a>(&'a self, path: &'a str) -> Option<(u16, &'a str, Option<&'a str>)> {
+    fn route<'a>(&'a self, path: &'a str) -> Option<(u16, &'a str, Option<String>)> {
         let under = |prefix: &str| {
             path.strip_prefix(prefix)
                 .filter(|rest| rest.starts_with('/'))
         };
         let upstreams = &self.upstreams;
         if let Some(rest) = under("/host") {
-            return Some((upstreams.host_port, rest, Some(&upstreams.host_token)));
+            return Some((
+                upstreams.host_port,
+                rest,
+                Some(upstreams.host_token.clone()),
+            ));
         }
         if let Some(rest) = under("/coordinator") {
-            return Some((upstreams.coordinator_port, rest, None));
+            return Some((
+                upstreams.coordinator_port,
+                rest,
+                Some((upstreams.coordinator_token)()),
+            ));
         }
         under("/forgejo").map(|rest| (upstreams.forgejo_port, rest, None))
     }

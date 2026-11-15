@@ -240,6 +240,7 @@ fn projects() -> Option<HashSet<String>> {
     let projects = crate::runtime::block_on(async {
         reqwest::Client::new()
             .get(crate::preview::coordinator_url("/api/v1/projects"))
+            .bearer_auth(crate::bootstrap::coordinator_token())
             .timeout(Duration::from_secs(10))
             .send()
             .await

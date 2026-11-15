@@ -97,6 +97,7 @@ pub fn serve(data_dir: PathBuf) -> Result<(), String> {
             host_port: port,
             host_token: gateway_token,
             coordinator_port: port_setting("COMMITARIUM_COORDINATOR_PORT", 8080),
+            coordinator_token: Box::new(crate::bootstrap::coordinator_token),
             forgejo_port: port_setting("COMMITARIUM_FORGEJO_PORT", 3001),
             is_preview: Box::new(move |port| previews.serves_port(port)),
         },

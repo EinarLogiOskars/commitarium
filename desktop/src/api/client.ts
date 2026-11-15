@@ -8,8 +8,8 @@ import { fetch } from "@tauri-apps/plugin-http";
 import { connectedServer, TAILSCALE_HINT, throughTailscale } from "../connection";
 
 // The coordinator listens here under Compose. Loopback only, by design. In
-// remote mode this is the app's bridge, also on loopback (ADR-040), which wants
-// the token below.
+// remote mode this is the app's bridge, also on loopback (ADR-040). Both want
+// the token below (COORDINATOR_ACCESS_PLAN.md).
 export let COORDINATOR_BASE = "http://127.0.0.1:8080";
 let coordinatorToken: string | null = null;
 
@@ -19,9 +19,21 @@ export function connectBridge(url: string, token: string) {
   coordinatorToken = token;
 }
 
+// On this computer the token is asked for until the stack has made one.
+let tokenSource: (() => Promise<string | null>) | null = null;
+
+/** Where this computer's coordinator token comes from. */
+export function askCoordinatorToken(source: () => Promise<string | null>) {
+  tokenSource = source;
+}
+
 /** Added to each coordinator call. */
-export const coordinatorAuth = (): Record<string, string> =>
-  coordinatorToken ? { Authorization: `Bearer ${coordinatorToken}` } : {};
+export async function coordinatorAuth(): Promise<Record<string, string>> {
+  if (!coordinatorToken && tokenSource) {
+    coordinatorToken = await tokenSource().catch(() => null);
+  }
+  return coordinatorToken ? { Authorization: `Bearer ${coordinatorToken}` } : {};
+}
 
 /** The coordinator's error envelope: {"error":{"code","message"}}. */
 export interface ApiErrorBody {
@@ -56,7 +68,7 @@ interface RequestOptions {
 }
 
 export async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
-  const headers: Record<string, string> = coordinatorAuth();
+  const headers: Record<string, string> = await coordinatorAuth();
   if (options.body !== undefined) headers["Content-Type"] = "application/json";
   if (options.idempotencyKey) headers["Idempotency-Key"] = options.idempotencyKey;
 
@@ -75,6 +87,8 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
   const parsed = text ? safeJson(text) : undefined;
 
   if (!response.ok) {
+    // A token made since it was read, or none yet: ask again next time.
+    if (response.status === 401 && tokenSource) coordinatorToken = null;
     const body = parsed as ApiErrorBody | undefined;
     if (body?.error) throw new ApiError(body.error.code, body.error.message, response.status);
     // A server that does not answer reaches here as an empty 502 from the

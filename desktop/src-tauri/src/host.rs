@@ -325,8 +325,14 @@ pub(crate) async fn coordinator(app: &AppHandle) -> Result<(String, Option<Strin
     let connection = connected(app).await?;
     Ok(match connection.coordinator_url {
         Some(url) => (url, connection.coordinator_token),
-        None => ("http://127.0.0.1:8080".into(), None),
+        None => ("http://127.0.0.1:8080".into(), local_coordinator_token()),
     })
+}
+
+/// This computer's coordinator token (COORDINATOR_ACCESS_PLAN.md), once
+/// bootstrap has made it.
+fn local_coordinator_token() -> Option<String> {
+    Some(commitarium_host::bootstrap::coordinator_token()).filter(|token| !token.is_empty())
 }
 
 /// A read on the host, starting it again if it has gone.
@@ -438,6 +444,7 @@ pub(crate) fn local_running_work() -> Vec<Value> {
                 .ok()?;
             let answer: Value = client
                 .get("http://127.0.0.1:8080/api/v1/attention")
+                .bearer_auth(commitarium_host::bootstrap::coordinator_token())
                 .send()
                 .await
                 .ok()?
@@ -786,10 +793,18 @@ fn grant_main_window(app: &AppHandle, url: &str) -> Result<(), String> {
     .map_err(|e| format!("reach the host: {e}"))
 }
 
-/// `None` on this computer, where an app window finds the coordinator itself.
+/// How a window reaches the coordinator: the bridge on a server; on this
+/// computer the coordinator itself, with its token, or `None` until the
+/// stack has made one.
 #[tauri::command]
 pub fn coordinator_connection(app: AppHandle) -> Option<WindowConnection> {
-    let connection = app.state::<Host>().remote().and_then(Result::ok)?;
+    let Some(remote) = app.state::<Host>().remote() else {
+        return local_coordinator_token().map(|token| WindowConnection {
+            coordinator_url: "http://127.0.0.1:8080".into(),
+            token,
+        });
+    };
+    let connection = remote.ok()?;
     Some(WindowConnection {
         coordinator_url: connection.coordinator_url?,
         token: connection.coordinator_token?,

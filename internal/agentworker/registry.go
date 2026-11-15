@@ -39,6 +39,8 @@ type Config struct {
 	TokenDir            string
 	RequestTimeout      time.Duration
 	AttemptStartTimeout time.Duration
+	// RunToken signs each attempt's run token (httpapi.Callers.RunToken).
+	RunToken func(projectID, featureID string) string
 }
 
 type Registry struct {
@@ -89,6 +91,7 @@ func (registry *Registry) Client(agentID string) (*workerhttp.Client, error) {
 		BearerToken:         token,
 		RequestTimeout:      registry.config.RequestTimeout,
 		AttemptStartTimeout: registry.config.AttemptStartTimeout,
+		RunToken:            registry.config.RunToken,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create agent %q worker client: %w", agentID, err)

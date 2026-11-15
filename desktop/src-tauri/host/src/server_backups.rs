@@ -211,6 +211,7 @@ fn agents_working() -> bool {
     block_on(async {
         let response = reqwest::Client::new()
             .get(preview::coordinator_url("/api/v1/attention"))
+            .bearer_auth(crate::bootstrap::coordinator_token())
             .send()
             .await
             .ok()?;

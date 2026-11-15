@@ -282,6 +282,18 @@ func (resolver *RootedEnvironmentResolver) prepareToolchain(
 	return variables, nil
 }
 
+// withRunToken gives the agent's commands the coordinator token for its own
+// work order (COORDINATOR_ACCESS_PLAN.md), which commitarium-artifact sends.
+// The name avoids TOKEN, KEY and SECRET, which Codex strips from the
+// environment of the commands it runs.
+func withRunToken(environment worker.LaunchEnvironment, token string) worker.LaunchEnvironment {
+	if token == "" {
+		return environment
+	}
+	environment.Variables = setVariable(cloneVariables(environment.Variables), "COMMITARIUM_RUN_CREDENTIAL", token)
+	return environment
+}
+
 func setVariable(variables []string, name string, value string) []string {
 	prefix := name + "="
 	for index, variable := range variables {

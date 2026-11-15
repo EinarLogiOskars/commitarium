@@ -67,3 +67,21 @@ func TestTransitionReadsPlanAndRecordsExactStep(t *testing.T) {
 		t.Fatalf("unexpected output %q", output.String())
 	}
 }
+
+func TestTheRunCredentialIsSentAsABearerToken(t *testing.T) {
+	var seen string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen = r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+	client := &http.Client{Transport: credentialed{next: http.DefaultTransport, credential: "abc"}}
+	response, err := client.Get(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if seen != "Bearer abc" {
+		t.Fatalf("Authorization = %q", seen)
+	}
+}

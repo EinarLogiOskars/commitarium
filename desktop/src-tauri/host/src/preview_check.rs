@@ -107,6 +107,7 @@ pub async fn run_preview_check(check_id: String) -> Result<PreviewCheckRun, Stri
             .post(preview::coordinator_url(&format!(
                 "/api/v1/preview-checks/{check_id}/claim"
             )))
+            .bearer_auth(crate::bootstrap::coordinator_token())
             .body(Vec::new())
             .send()
             .await
@@ -156,6 +157,7 @@ pub async fn run_preview_check(check_id: String) -> Result<PreviewCheckRun, Stri
             .post(preview::coordinator_url(&format!(
                 "/api/v1/preview-checks/{check_id}/complete"
             )))
+            .bearer_auth(crate::bootstrap::coordinator_token())
             .json(&Completion {
                 passed,
                 evidence: &evidence,
@@ -182,6 +184,7 @@ async fn check_inputs(
             .get(preview::coordinator_url(&format!(
                 "/api/v1/projects/{project_id}/toolchain"
             )))
+            .bearer_auth(crate::bootstrap::coordinator_token())
             .send()
             .await
             .map_err(|e| format!("request project stack from coordinator: {e}"))?,
@@ -196,6 +199,7 @@ async fn check_inputs(
             .get(preview::coordinator_url(&format!(
                 "/api/v1/projects/{project_id}/handoff"
             )))
+            .bearer_auth(crate::bootstrap::coordinator_token())
             .send()
             .await
             .map_err(|e| format!("request project handoff from coordinator: {e}"))?,

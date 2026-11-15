@@ -156,6 +156,7 @@ fn valid(preview: &TestPreview) -> bool {
 pub(crate) async fn look(client: &reqwest::Client, ready: impl Fn() + Clone + Send + 'static) {
     let Ok(response) = client
         .get(preview::coordinator_url("/api/v1/test-previews"))
+        .bearer_auth(crate::bootstrap::coordinator_token())
         .send()
         .await
     else {
@@ -270,6 +271,7 @@ async fn start(client: &reqwest::Client, preview: &TestPreview) -> Result<String
                 "/api/v1/projects/{}/toolchain",
                 preview.project_id
             )))
+            .bearer_auth(crate::bootstrap::coordinator_token())
             .send()
             .await
             .map_err(|e| format!("request project stack from coordinator: {e}"))?,
@@ -288,6 +290,7 @@ async fn start(client: &reqwest::Client, preview: &TestPreview) -> Result<String
                 "/api/v1/projects/{}/handoff",
                 preview.project_id
             )))
+            .bearer_auth(crate::bootstrap::coordinator_token())
             .send()
             .await
             .map_err(|e| format!("request project handoff from coordinator: {e}"))?,
@@ -601,7 +604,9 @@ async fn post<T: Serialize>(
     path: &str,
     body: Option<&T>,
 ) -> Result<(), String> {
-    let request = client.post(preview::coordinator_url(path));
+    let request = client
+        .post(preview::coordinator_url(path))
+        .bearer_auth(crate::bootstrap::coordinator_token());
     let request = match body {
         Some(body) => request.json(body),
         None => request.body(Vec::new()),

@@ -3,7 +3,7 @@ import ReactDOM from "react-dom/client";
 import App from "./App";
 import { AppWindow } from "./views/AppWindow";
 import { StartChoice } from "./views/StartChoice";
-import { connectBridge } from "./api/client";
+import { askCoordinatorToken, connectBridge } from "./api/client";
 import { setServer } from "./connection";
 import { bridgeConnection, connectionMode, coordinatorConnection } from "./ipc";
 import { applyTheme, readTheme } from "./settings/theme";
@@ -20,14 +20,19 @@ const root = ReactDOM.createRoot(document.getElementById("root") as HTMLElement)
 const show = (page: React.ReactNode) => root.render(<React.StrictMode>{page}</React.StrictMode>);
 
 async function start() {
+  // On this computer the coordinator's token is read once the stack has made
+  // it; on a server the bridge's token is set below.
+  const localToken = () => coordinatorConnection().then((connection) => connection?.token ?? null);
   if (appProject) {
     const connection = await coordinatorConnection().catch(() => null);
     if (connection) connectBridge(connection.coordinator_url, connection.token);
+    else askCoordinatorToken(localToken);
     show(<AppWindow projectId={appProject} preview={appPreview} />);
     return;
   }
   const { mode, server } = await connectionMode().catch(() => ({ mode: "local", server: null }));
   if (mode === null) {
+    askCoordinatorToken(localToken);
     show(<StartChoice onLocal={() => show(<App />)} />);
     return;
   }
@@ -38,6 +43,8 @@ async function start() {
         if (coordinator_url) connectBridge(coordinator_url, token);
       })
       .catch(() => {}); // The boot screen says so and offers a way out.
+  } else {
+    askCoordinatorToken(localToken);
   }
   show(<App />);
 }

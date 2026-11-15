@@ -6,9 +6,16 @@ COMMITARIUM_COORDINATOR_PORT=$(python3 -c 'import socket; sock=socket.socket(); 
 export COMMITARIUM_COORDINATOR_PORT
 base_url="http://127.0.0.1:$COMMITARIUM_COORDINATOR_PORT"
 export COMMITARIUM_SIMULATED_STEP_DELAY="2s"
+# The coordinator wants its token from every caller but /health.
+token_file=$(mktemp)
+python3 -c 'import secrets; print(secrets.token_hex(32))' >"$token_file"
+COMMITARIUM_COORDINATOR_TOKEN_SOURCE="$token_file"
+export COMMITARIUM_COORDINATOR_TOKEN_SOURCE
+auth="Authorization: Bearer $(cat "$token_file")"
 
 cleanup() {
     docker compose -p "$project_name" down --volumes --remove-orphans >/dev/null 2>&1 || true
+    rm -f "$token_file"
 }
 trap cleanup EXIT INT TERM
 
@@ -32,7 +39,7 @@ wait_for_run_status() {
     expected="$1"
     attempts=0
     while [ "$attempts" -lt 160 ]; do
-        run_json=$(curl --fail --silent "$base_url/api/v1/runs/$run_id")
+        run_json=$(curl --fail --silent --header "$auth" "$base_url/api/v1/runs/$run_id")
         status=$(printf '%s' "$run_json" | json_value "['status']")
         if [ "$status" = "$expected" ]; then
             printf '%s' "$run_json"
@@ -48,18 +55,18 @@ wait_for_run_status() {
 docker compose -p "$project_name" up --build --detach coordinator
 wait_for_health
 
-project_json=$(curl --fail --silent --request POST "$base_url/api/v1/projects" \
+project_json=$(curl --fail --silent --header "$auth" --request POST "$base_url/api/v1/projects" \
     --header 'Content-Type: application/json' \
     --data '{"name":"Recovery container test"}')
 project_id=$(printf '%s' "$project_json" | json_value "['id']")
 
-feature_json=$(curl --fail --silent --request POST \
+feature_json=$(curl --fail --silent --header "$auth" --request POST \
     "$base_url/api/v1/projects/$project_id/features" \
     --header 'Content-Type: application/json' \
     --data '{"title":"Recover an interrupted run","description":"Verify restart-safe simulated recovery."}')
 feature_id=$(printf '%s' "$feature_json" | json_value "['id']")
 
-start_json=$(curl --fail --silent --request POST \
+start_json=$(curl --fail --silent --header "$auth" --request POST \
     "$base_url/api/v1/projects/$project_id/features/$feature_id/runs" \
     --header 'Idempotency-Key: compose-recovery-test' \
     --header 'Content-Length: 0')
@@ -67,7 +74,7 @@ run_id=$(printf '%s' "$start_json" | json_value "['id']")
 
 attempts=0
 while [ "$attempts" -lt 40 ]; do
-    run_json=$(curl --fail --silent "$base_url/api/v1/runs/$run_id")
+    run_json=$(curl --fail --silent --header "$auth" "$base_url/api/v1/runs/$run_id")
     active_session_id=$(printf '%s' "$run_json" | python3 -c '
 import json,sys
 data=json.load(sys.stdin)
@@ -125,7 +132,7 @@ if [ "$recovery_attempt" -lt 2 ]; then
     exit 1
 fi
 
-events_json=$(curl --fail --silent "$base_url/api/v1/sessions/$recovered_session_id/events")
+events_json=$(curl --fail --silent --header "$auth" "$base_url/api/v1/sessions/$recovered_session_id/events")
 printf '%s' "$events_json" | python3 -c '
 import json,sys
 events=json.load(sys.stdin)
@@ -133,7 +140,7 @@ assessments=[item for item in events if item["type"] == "recovery_assessment"]
 assert len(assessments) >= 2, events
 '
 
-curl --fail --silent --request POST \
+curl --fail --silent --header "$auth" --request POST \
     "$base_url/api/v1/sessions/$recovered_session_id/commands" \
     --header 'Content-Type: application/json' \
     --header 'Idempotency-Key: approve-compose-recovery' \

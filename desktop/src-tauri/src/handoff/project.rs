@@ -978,6 +978,7 @@ async fn fetch_project_handoff(project_id: &str) -> Result<ProjectHandoff, Strin
         .get(format!(
             "{COORDINATOR_BASE}/api/v1/projects/{project_id}/handoff"
         ))
+        .bearer_auth(commitarium_host::bootstrap::coordinator_token())
         .send()
         .await
         .map_err(|error| format!("request project handoff from coordinator: {error}"))?;

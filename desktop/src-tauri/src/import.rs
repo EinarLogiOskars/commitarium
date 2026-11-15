@@ -386,6 +386,7 @@ pub async fn import_project(
     let client = reqwest::Client::new();
     let resp = client
         .put(format!("{COORDINATOR_BASE}/api/v1/project-imports/{id}"))
+        .bearer_auth(commitarium_host::bootstrap::coordinator_token())
         .multipart(form)
         .send()
         .await

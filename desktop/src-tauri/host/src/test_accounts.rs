@@ -73,6 +73,7 @@ pub(crate) async fn fetch(
         .get(crate::preview::coordinator_url(&format!(
             "/api/v1/projects/{project_id}/test-accounts/preview"
         )))
+        .bearer_auth(crate::bootstrap::coordinator_token())
         .send()
         .await
         .map_err(|_| "the coordinator could not be reached for the test accounts".to_string())?;

@@ -31,6 +31,9 @@ type ClientConfig struct {
 	RequestTimeout      time.Duration
 	AttemptStartTimeout time.Duration
 	HTTPClient          *http.Client
+	// RunToken, when set, gives each attempt the token its agent uses to
+	// reach its own work order's plan and tests on the coordinator.
+	RunToken func(projectID, featureID string) string
 }
 
 // RemoteError is a deliberate protocol error returned by a reachable worker.
@@ -62,6 +65,7 @@ type Client struct {
 	requestTimeout      time.Duration
 	attemptStartTimeout time.Duration
 	httpClient          *http.Client
+	runToken            func(projectID, featureID string) string
 }
 
 var _ Service = (*Client)(nil)
@@ -106,6 +110,7 @@ func NewClient(config ClientConfig) (*Client, error) {
 		requestTimeout:      config.RequestTimeout,
 		attemptStartTimeout: attemptStartTimeout,
 		httpClient:          clientCopy,
+		runToken:            config.RunToken,
 	}, nil
 }
 
@@ -172,6 +177,11 @@ func (client *Client) PutAttempt(
 	identity MutationIdentity,
 	request PutAttemptRequest,
 ) (Attempt, bool, error) {
+	if client.runToken != nil && request.Assignment.Role != RoleConsultant {
+		// Only a work order's own agents move its plan and tests; Mayka's
+		// turns and consultants get no token.
+		request.RunToken = client.runToken(request.Assignment.ProjectID, request.Assignment.FeatureID)
+	}
 	if err := request.Validate(identity); err != nil {
 		return Attempt{}, false, err
 	}

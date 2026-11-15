@@ -101,6 +101,9 @@ async fn rebuild(app: AppHandle) -> Result<RebuildOutcome, String> {
         if !cli_updates::all_workers_idle()? {
             return Ok(RebuildOutcome::Busy);
         }
+        // A coordinator from before its token mounts one, which must be a
+        // file before Docker sees a missing source and makes a directory.
+        commitarium_host::bootstrap::prepare_transport_secrets(&docker::compose_file()?)?;
         docker::compose(&[], &["up", "-d", SERVICE])?;
         if let (Some(image), Some(commit)) = (running_image().map(|(id, _)| id), commit) {
             save_record(&app, &Record { image, commit });

@@ -146,6 +146,7 @@ async fn fetch_handoff(project_id: &str, feature_id: &str) -> Result<CompletedHa
         .get(format!(
             "{COORDINATOR_BASE}/api/v1/projects/{project_id}/features/{feature_id}/handoff"
         ))
+        .bearer_auth(commitarium_host::bootstrap::coordinator_token())
         .send()
         .await
         .map_err(|e| format!("request completed handoff from coordinator: {e}"))?;
