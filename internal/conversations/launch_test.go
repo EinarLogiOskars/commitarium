@@ -129,10 +129,10 @@ func TestAnAppAppliesTheAssistantsWorkWithoutAGoal(t *testing.T) {
 	}
 	stored.Actions = append(stored.Actions,
 		Action{ID: "act_change", Status: ActionProposed, AssistantAction: featureartifact.AssistantAction{
-			Type: featureartifact.AssistantCreateWorkOrder, Reason: "Asked", Title: "Blue buttons", Steps: "quick"}},
+			Type: featureartifact.AssistantCreateWorkOrder, Reason: "Asked", Title: "Blue buttons", Steps: "quick", Take: true}},
 		Action{ID: "act_premium", Status: ActionProposed, Premium: []string{"claude-fable-5-1"},
 			AssistantAction: featureartifact.AssistantAction{
-				Type: featureartifact.AssistantCreateWorkOrder, Reason: "Asked", Title: "Rewrite", Steps: "full"}},
+				Type: featureartifact.AssistantCreateWorkOrder, Reason: "Asked", Title: "Rewrite", Steps: "full", Take: true}},
 	)
 	if err := service.write(stored); err != nil {
 		t.Fatal(err)

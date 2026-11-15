@@ -21,7 +21,7 @@ func filtersAfterFoundation(t *testing.T, steps string) (*Service, *featuresStub
 	service.config.Projects = gapProjects{mode: project.AssistantModeBuilds}
 	features := &featuresStub{features: []feature.Feature{
 		{ID: "fea_base", Title: "Lay the foundation", State: feature.StatePlanning},
-		{ID: "fea_filters", Title: "Add filters", State: feature.StateReady},
+		{ID: "fea_filters", Title: "Add filters", State: feature.StateReady, CreatedBy: feature.CreatedByAssistant},
 	}}
 	service.config.Features = features
 	stored, err := service.read("prj_test")
@@ -30,7 +30,7 @@ func filtersAfterFoundation(t *testing.T, steps string) (*Service, *featuresStub
 	}
 	stored.Actions = append(stored.Actions, Action{ID: "act_filters", Status: ActionProposed,
 		AssistantAction: featureartifact.AssistantAction{Type: featureartifact.AssistantStartWorkOrder,
-			WorkOrderID: "fea_filters", After: "fea_base", Steps: steps}})
+			WorkOrderID: "fea_filters", After: "fea_base", Steps: steps, Take: true}})
 	if err := service.write(stored); err != nil {
 		t.Fatal(err)
 	}

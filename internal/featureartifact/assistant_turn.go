@@ -166,7 +166,21 @@ const (
 	// the planning round. Applying it starts, resumes, or moves the
 	// project's planning to that chat, as the chat's plan switch does.
 	AssistantStartPlanning AssistantActionType = "start_planning"
+	// AssistantSetSay records how much Mayka does in the project, as the
+	// user told her (ADR-041): Level, when set, is ask_first or
+	// build_everything, and Words, when set, replace her own words for the
+	// rest ("advise only", "deploy after each change"). Applied at once.
+	AssistantSetSay AssistantActionType = "set_say"
 )
+
+// The levels of Mayka's say in a project (ADR-041).
+const (
+	SayAskFirst        = "ask_first"
+	SayBuildEverything = "build_everything"
+)
+
+// MaxSayWordsBytes bounds Mayka's words in her say.
+const MaxSayWordsBytes = 2000
 
 // PlanItem is one item of the build plan at a priority, 0 for P0. Items,
 // when any, are its sub-items: the slices of a feature planned as one item
@@ -293,6 +307,14 @@ type AssistantAction struct {
 	// a throwaway preview of the default branch with the test accounts, a
 	// headless browser, and reports with screenshots (HELPERS_PLAN.md, H6).
 	TestApp bool `json:"test_app,omitempty"`
+	// Take is Mayka's choice for this action (ADR-041): true takes it,
+	// applied right after her turn unless a hard limit stops it; false asks
+	// for it, as a card the user approves.
+	Take bool `json:"take,omitempty"`
+	// Level and Words, for set_say: the say's new level (ask_first or
+	// build_everything), and her words for the rest; empty keeps each.
+	Level string `json:"level,omitempty"`
+	Words string `json:"words,omitempty"`
 }
 
 // AppAddress is an address under one of the server's domains: Name is empty
@@ -409,6 +431,7 @@ func (turn AssistantTurn) Normalize() (AssistantTurn, error) {
 			&action.ReviewerPlanModel, &action.ReviewerPlanEffort, &action.ReviewerEffort,
 			&action.WorkOrderID, &action.When, &action.How, &action.Guidance, &action.After, &action.Helper,
 			&action.AppBrief, &action.Frameworks, &action.PlanStep, &action.PlanDocument, &action.App,
+			&action.Level, &action.Words,
 		} {
 			*field = strings.TrimSpace(*field)
 		}
@@ -704,6 +727,18 @@ func (action AssistantAction) validate() error {
 	case AssistantStartAutopilot:
 		if action.Priority < 0 || action.Priority > maxVisionPriority {
 			return fmt.Errorf("priority runs from 0 to %d", maxVisionPriority)
+		}
+	case AssistantSetSay:
+		switch action.Level {
+		case "", SayAskFirst, SayBuildEverything:
+		default:
+			return fmt.Errorf("level must be ask_first or build_everything")
+		}
+		if action.Level == "" && action.Words == "" {
+			return fmt.Errorf("set_say needs a level or words")
+		}
+		if len(action.Words) > MaxSayWordsBytes {
+			return fmt.Errorf("the say's words are too long")
 		}
 	case AssistantChangeModels:
 		if action.WorkOrderID == "" || (action.LeadModel == "" && action.ReviewerModel == "") {

@@ -454,19 +454,6 @@ func (api *API) approveConversationActionHandler(w http.ResponseWriter, r *http.
 			return
 		}
 	}
-	// The user's approval may act on any work order; autopilot's only on the
-	// assistant's own (ADR-027).
-	if approvedByAutopilot(r.Context()) {
-		refusal, err := api.usersWorkOrder(r.Context(), scope, action)
-		if err != nil {
-			writeConversationError(w, err)
-			return
-		}
-		if refusal != "" {
-			writeError(w, http.StatusConflict, "work_order_is_users", refusal)
-			return
-		}
-	}
 	chosen := make([]string, 0, 4)
 	if action.Type == featureartifact.AssistantCreateWorkOrder || action.Type == featureartifact.AssistantStartWorkOrder {
 		for _, choice := range []struct {
@@ -490,6 +477,26 @@ func (api *API) approveConversationActionHandler(w http.ResponseWriter, r *http.
 	if err != nil {
 		writeConversationError(w, err)
 		return
+	}
+	// The user's approval may act on any work order and model; the
+	// watcher's, for an action Mayka took, stops at the hard limits
+	// (ADR-041).
+	if approvedByAutopilot(r.Context()) {
+		theirs, err := api.usersWorkOrder(r.Context(), scope, action)
+		if err != nil {
+			writeConversationError(w, err)
+			return
+		}
+		builds := false
+		if owner, err := api.projects.GetByID(r.Context(), scope); err == nil {
+			builds = owner.AssistantBuilds()
+		}
+		if reason := conversations.HardLimit(action, conversations.Limits{
+			Builds: builds, Theirs: theirs, Premium: premium,
+		}); reason != "" {
+			writeError(w, http.StatusConflict, "left_for_user", "it waits for the user's approval: "+reason)
+			return
+		}
 	}
 	if len(premium) > 0 && !body.ConfirmPremium {
 		writeError(w, http.StatusConflict, "premium_approval_required",
@@ -577,6 +584,8 @@ func (api *API) approveConversationActionHandler(w http.ResponseWriter, r *http.
 		result, ok = api.applyBuildPlan(w, r, scope)
 	case featureartifact.AssistantStartPlanning:
 		result, ok = api.applyStartPlanning(w, r, scope, action)
+	case featureartifact.AssistantSetSay:
+		result, ok = api.applySetSay(w, r, scope, action)
 	case featureartifact.AssistantSetUpStack:
 		result, workOrderID, ok = api.applySetUpStack(w, r, scope)
 	case featureartifact.AssistantCloseWorkOrder:
@@ -681,19 +690,12 @@ func (api *API) staleResult(ctx context.Context, scope string, action conversati
 	return conversations.StaleResult(action.AssistantAction, stored.State, blocked, canTell), nil
 }
 
-// usersWorkOrder says why the assistant may not act on its own on the work
-// order an action names, when the user created it by hand and did not hand
-// it over with an autopilot goal; empty when it may.
+// usersWorkOrder is the title of the work order an action acts on when the
+// user created it by hand and did not hand it over with an autopilot goal:
+// whatever Mayka's say, it is theirs (ADR-041). Empty when it is hers, or the
+// action names none.
 func (api *API) usersWorkOrder(ctx context.Context, scope string, action conversations.Action) (string, error) {
-	switch action.Type {
-	case featureartifact.AssistantStartWorkOrder, featureartifact.AssistantChangeModels,
-		featureartifact.AssistantContinueWorkOrder, featureartifact.AssistantRecoverWorkOrder,
-		featureartifact.AssistantCloseWorkOrder, featureartifact.AssistantWriteBrief, featureartifact.AssistantAcceptBrief,
-		featureartifact.AssistantAddVisionItem:
-	default:
-		return "", nil
-	}
-	if action.WorkOrderID == "" {
+	if action.WorkOrderID == "" || action.Type == featureartifact.AssistantCreateWorkOrder || api.features == nil {
 		return "", nil
 	}
 	stored, err := api.features.GetByID(ctx, scope, action.WorkOrderID)
@@ -707,10 +709,6 @@ func (api *API) usersWorkOrder(ctx context.Context, scope string, action convers
 	if stored.CreatedBy == feature.CreatedByAssistant {
 		return "", nil
 	}
-	// Building everything, the assistant takes over the user's work orders.
-	if owner, err := api.projects.GetByID(ctx, scope); err == nil && owner.AssistantBuilds() {
-		return "", nil
-	}
 	conversation, err := api.conversations.Get(ctx, scope)
 	if err != nil {
 		return "", err
@@ -718,8 +716,7 @@ func (api *API) usersWorkOrder(ctx context.Context, scope string, action convers
 	if conversation.Goal.Hands(stored.ID) {
 		return "", nil
 	}
-	return fmt.Sprintf("“%s” is the user's work order: Commitarium does not start, continue, change, or close it "+
-		"on its own. Tell the user it is waiting for them; your card stays for their approval.", stored.Title), nil
+	return stored.Title, nil
 }
 
 func (api *API) applyCreateWorkOrder(

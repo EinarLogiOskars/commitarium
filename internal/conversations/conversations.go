@@ -155,6 +155,9 @@ type Action struct {
 	// (their work order, Back to Ready, a premium model, a refusal, or too
 	// many continues); it clears once the action is applied.
 	LeftForUser bool `json:"left_for_user,omitempty"`
+	// LeftReason says in plain words why it was left for the user: the
+	// hard limit that stopped it, or why it could not be applied.
+	LeftReason string `json:"left_reason,omitempty"`
 	// Queued marks an action autopilot holds until the work it follows
 	// (After) has merged.
 	Queued bool `json:"queued,omitempty"`
@@ -189,6 +192,9 @@ type Conversation struct {
 	Notes    string    `json:"notes"`
 	// Goal is the autopilot goal, the latest one even once it ended.
 	Goal *Goal `json:"goal,omitempty"`
+	// Say is Mayka's own words on how much she does in the project
+	// (ADR-041); its level is the project's assistant mode.
+	Say *Say `json:"say,omitempty"`
 	// Queued are the user's messages sent while the assistant answered; they
 	// start its next turn.
 	Queued []Message `json:"queued,omitempty"`
@@ -770,7 +776,7 @@ func (service *Service) Resolve(ctx context.Context, scope, actionID string, sta
 		// work it changed from the project's state on its next turn.
 		action.Status, action.Result, action.UpdatedAt = status, strings.TrimSpace(result), service.now()
 		if status == ActionApplied {
-			action.LeftForUser = false
+			action.LeftForUser, action.LeftReason = false, ""
 		}
 		if created.WorkOrderID != "" {
 			action.WorkOrderID = created.WorkOrderID

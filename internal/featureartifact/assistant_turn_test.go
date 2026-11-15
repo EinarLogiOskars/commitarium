@@ -254,3 +254,25 @@ func TestQuestionsLeaveOutCatchAllAnswers(t *testing.T) {
 		t.Fatalf("questions = %+v", got)
 	}
 }
+
+// Her say names a level of the two, words, or both; take rides on every
+// action (ADR-041).
+func TestASayNamesALevelOrWords(t *testing.T) {
+	turn, err := AssistantTurn{Actions: []AssistantAction{
+		{Type: AssistantSetSay, Reason: "The user said so", Level: SayBuildEverything, Words: " Deploy after each change. "},
+		{Type: AssistantSetSay, Reason: "The user said so", Words: "Advise only."},
+		{Type: AssistantCreateWorkOrder, Reason: "Asked", Title: "Sort", Take: true},
+	}}.Normalize()
+	if err != nil || turn.Actions[0].Words != "Deploy after each change." || !turn.Actions[2].Take {
+		t.Fatalf("normalized = %+v, %v", turn, err)
+	}
+	for _, action := range []AssistantAction{
+		{Type: AssistantSetSay, Reason: "Nothing"},
+		{Type: AssistantSetSay, Reason: "A third level", Level: "advise_only"},
+		{Type: AssistantSetSay, Reason: "Too long", Words: strings.Repeat("x", MaxSayWordsBytes+1)},
+	} {
+		if _, err := (AssistantTurn{Actions: []AssistantAction{action}}).Normalize(); !errors.Is(err, ErrInvalidArtifact) {
+			t.Fatalf("%s = %v, want it refused", action.Reason, err)
+		}
+	}
+}

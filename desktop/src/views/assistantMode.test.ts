@@ -1,13 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AssistantAction } from "../api/assistant";
-import {
-  appliesItself,
-  assistantMode,
-  assistantModeNote,
-  autoAppliedInBuilds,
-  autopilotHandles,
-} from "./assistantMode";
-import type { AutopilotGoal } from "../api/assistant";
+import { appliesItself, assistantMode, assistantModeNote } from "./assistantMode";
 
 const action = (overrides: Partial<AssistantAction>): AssistantAction =>
   ({
@@ -26,112 +19,44 @@ describe("assistant mode", () => {
     expect(assistantMode({ app: false, assistant_mode: "builds" })).toBe("builds");
     expect(assistantMode({ app: true })).toBe("builds");
     expect(assistantMode({})).toBe("assists");
-    expect(assistantModeNote("builds")).toBe("Builds everything");
-    expect(assistantModeNote("assists")).toBe("Assists you");
+    expect(assistantModeNote("builds")).toBe("Build everything");
+    expect(assistantModeNote("assists")).toBe("Ask first");
   });
 
-  it("shows the assistant's own work as a line and what waits for the user as a card", () => {
-    expect(appliesItself(action({}))).toBe(true);
+  it("shows what Mayka took as a line, from the backend's fields alone", () => {
+    // Taken, before and after it is applied, whatever the mode or the type.
+    expect(appliesItself(action({ take: true }))).toBe(true);
+    expect(appliesItself(action({ type: "close_work_order", take: true }))).toBe(true);
+    expect(appliesItself(action({ take: true, queued: true }))).toBe(true);
+    expect(appliesItself(action({ auto_tried: true }))).toBe(true);
     expect(appliesItself(action({ status: "applied", auto_tried: true }))).toBe(true);
-    // Left for the user: on a work order they made, or refused.
-    expect(appliesItself(action({ auto_tried: true }))).toBe(false);
-    expect(appliesItself(action({ premium: ["claude-fable-5-1"] }))).toBe(false);
-    expect(appliesItself(action({ type: "close_work_order" }))).toBe(false);
-    expect(appliesItself(action({ status: "dismissed" }))).toBe(false);
-    // What is done is a result in a line, never a card that says "Done".
-    expect(appliesItself(action({ type: "close_work_order", status: "applied" }))).toBe(true);
-    expect(appliesItself(action({ type: "recover_work_order", how: "recheck" }))).toBe(true);
+    expect(appliesItself(action({ type: "update_plan", status: "applied", take: true }))).toBe(
+      true,
+    );
+  });
+
+  it("keeps what she asked for, and what a hard limit left for the user, as a card", () => {
+    // Asked for: a card before and after the user approves it.
+    expect(appliesItself(action({}))).toBe(false);
+    expect(appliesItself(action({ type: "create_work_order" }))).toBe(false);
+    expect(appliesItself(action({ status: "applied" }))).toBe(false);
+    // A hard limit stopped it, with the reason on the card.
     expect(
       appliesItself(
-        action({ type: "recover_work_order", how: "recheck", status: "applied", auto_tried: true }),
+        action({
+          take: true,
+          auto_tried: true,
+          left_for_user: true,
+          left_reason: "“Dark mode” is your work order, so it waits for you.",
+        }),
       ),
-    ).toBe(true);
-    // Sending work back to Ready is always the user's call.
-    expect(appliesItself(action({ type: "recover_work_order", how: "back_to_ready" }))).toBe(false);
-    // The plan being written fills in by itself; building it is the user's card.
-    expect(appliesItself(action({ type: "update_plan" }))).toBe(true);
-    expect(appliesItself(action({ type: "build_plan" }))).toBe(false);
-  });
-
-  it("says which proposals Commitarium applies by itself where Mayka builds everything", () => {
-    const none = {};
-    const create = action({ type: "create_work_order", title: "Add the notification engine" });
-    expect(autoAppliedInBuilds(create, none)).toBe(true);
-    // Taken over and being applied: still a line, not a card that flashes.
-    expect(autoAppliedInBuilds({ ...create, auto_tried: true }, none)).toBe(true);
-    // Left for the user: a card again.
-    expect(autoAppliedInBuilds({ ...create, auto_tried: true, left_for_user: true }, none)).toBe(
-      false,
-    );
-    // Premium models, and what only the user starts, stay cards.
-    expect(autoAppliedInBuilds({ ...create, premium: ["claude-fable-5-1"] }, none)).toBe(false);
-    for (const type of ["plan_project", "create_app", "start_planning", "build_plan"] as const) {
-      expect(autoAppliedInBuilds(action({ type }), none)).toBe(false);
-    }
-    // Only what is still proposed.
-    expect(autoAppliedInBuilds({ ...create, status: "applied" }, none)).toBe(false);
-    expect(autoAppliedInBuilds({ ...create, status: "dismissed" }, none)).toBe(false);
-    // Building everything, starting over and closing are Mayka's, except a
-    // running goal's item, which closes only in recovery.
-    expect(
-      autoAppliedInBuilds(action({ type: "recover_work_order", how: "back_to_ready" }), none),
-    ).toBe(true);
-    const goal: AutopilotGoal = {
-      title: "Finish P0",
-      level: 0,
-      items: [{ id: "p0.1", label: "P0.1", title: "Sort", work_order_id: "wo_9", done: false }],
-      status: "active",
-      started_at: "2026-10-14T12:00:00Z",
-    };
-    expect(
-      autoAppliedInBuilds(action({ type: "close_work_order", work_order_id: "wo_2" }), {
-        goal,
-      }),
-    ).toBe(true);
-    expect(
-      autoAppliedInBuilds(action({ type: "close_work_order", work_order_id: "wo_9" }), {
-        goal,
-      }),
     ).toBe(false);
-    expect(autoAppliedInBuilds(action({ type: "start_autopilot" }), { goal })).toBe(false);
-    expect(autoAppliedInBuilds(action({ type: "start_autopilot" }), none)).toBe(true);
-  });
-
-  it("says which actions autopilot handles where Mayka only assists", () => {
-    const goal = {
-      title: "Finish the vision",
-      level: -1,
-      status: "active" as const,
-      started_at: "",
-      items: [
-        {
-          id: "overview",
-          label: "P0.2",
-          title: "Overview",
-          work_order_id: "fea_overview",
-          done: false,
-        },
-      ],
-    };
-    const start = action({ type: "start_work_order", work_order_id: "fea_overview" });
-    expect(autopilotHandles(start, goal)).toBe(true);
+    // A premium model waits for the user even before Commitarium marks it.
+    expect(appliesItself(action({ take: true, premium: ["claude-fable-5-1"] }))).toBe(false);
+    expect(appliesItself(action({ take: true, status: "dismissed" }))).toBe(false);
     expect(
-      autopilotHandles(action({ type: "create_work_order", vision_item_id: "overview" }), goal),
-    ).toBe(true);
-    // Outside the goal, or with autopilot off: the user's card.
-    expect(
-      autopilotHandles(action({ type: "start_work_order", work_order_id: "fea_other" }), goal),
-    ).toBe(false);
-    expect(autopilotHandles(start, { ...goal, status: "stopped" })).toBe(false);
-    expect(autopilotHandles(action({ type: "write_vision" }), goal)).toBe(false);
-    // Taken over: autopilot's, unless it left it for the user.
-    expect(
-      autopilotHandles(action({ type: "start_work_order", auto_tried: true }), undefined),
-    ).toBe(true);
-    expect(
-      autopilotHandles(
-        action({ type: "start_work_order", auto_tried: true, left_for_user: true }),
-        goal,
+      appliesItself(
+        action({ type: "create_app", status: "applied", take: true, start_failed: "No" }),
       ),
     ).toBe(false);
   });

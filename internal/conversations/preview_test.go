@@ -99,7 +99,8 @@ func TestAnAppSetsItsPreviewUpWithoutTheUser(t *testing.T) {
 			t.Fatal(err)
 		}
 		stored.Actions = append(stored.Actions, Action{ID: "act_preview", Status: ActionProposed,
-			AssistantAction: featureartifact.AssistantAction{Type: featureartifact.AssistantSetUpPreview, Reason: "It does not open"}})
+			AssistantAction: featureartifact.AssistantAction{Type: featureartifact.AssistantSetUpPreview, Reason: "It does not open",
+				Take: app}})
 		if err := service.write(stored); err != nil {
 			t.Fatal(err)
 		}
@@ -121,7 +122,7 @@ func TestADeployAlwaysWaitsForTheUser(t *testing.T) {
 		t.Fatal(err)
 	}
 	stored.Actions = append(stored.Actions, Action{ID: "act_deploy", Status: ActionProposed,
-		AssistantAction: featureartifact.AssistantAction{Type: featureartifact.AssistantDeployApp, Reason: "Asked to ship it"}})
+		AssistantAction: featureartifact.AssistantAction{Type: featureartifact.AssistantDeployApp, Reason: "Asked to ship it", Take: true}})
 	// Nor does the apps page change on its own: it is in front of visitors too.
 	stored.Actions = append(stored.Actions,
 		Action{ID: "act_page", Status: ActionProposed, AssistantAction: featureartifact.AssistantAction{

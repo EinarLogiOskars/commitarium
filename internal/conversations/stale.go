@@ -54,13 +54,13 @@ func (stored *record) settleStale(
 	for index := range stored.Actions {
 		action := &stored.Actions[index]
 		if action.Status == ActionProposed && planBuilt && action.Type == featureartifact.AssistantBuildPlan {
-			action.LeftForUser = false
+			action.LeftForUser, action.LeftReason = false, ""
 			action.Status, action.Settled, action.Result, action.UpdatedAt = ActionApplied, true, AlreadyBuilt, at
 			settled = true
 			continue
 		}
 		if action.Status == ActionProposed && stored.Goal.covers(*action) {
-			action.LeftForUser = false
+			action.LeftForUser, action.LeftReason = false, ""
 			action.Status, action.Settled, action.Result, action.UpdatedAt = ActionApplied, true,
 				"No longer needed: autopilot is on it.", at
 			settled = true
@@ -86,7 +86,7 @@ func (stored *record) settleStale(
 			stored.addEvent(fmt.Sprintf("You started “%s”, so it no longer waits for “%s”.",
 				titles[action.WorkOrderID], followsName(action.After, titles)), at)
 		}
-		action.LeftForUser = false
+		action.LeftForUser, action.LeftReason = false, ""
 		action.Status, action.Settled, action.Queued, action.Result, action.UpdatedAt = ActionApplied, true, false, result, at
 		settled = true
 	}
@@ -118,7 +118,7 @@ func (service *Service) Settle(ctx context.Context, scope, actionID, result stri
 			return Conversation{}, ErrNotPending
 		}
 		now := service.now()
-		action.LeftForUser = false
+		action.LeftForUser, action.LeftReason = false, ""
 		action.Status, action.Settled, action.Queued, action.Result, action.UpdatedAt = ActionApplied, true, false, result, now
 		stored.UpdatedAt = now
 		return stored.Conversation, service.write(stored)
@@ -139,7 +139,7 @@ func (service *Service) planBuilt(ctx context.Context, scope string) bool {
 // settleIfStale settles an action that is no longer needed, as its work
 // order is now, and reports whether it did.
 func (service *Service) settleIfStale(ctx context.Context, scope string, action Action) bool {
-	_, _, states, _ := service.workOrders(ctx, scope)
+	_, _, states := service.workOrders(ctx, scope)
 	state, known := states[action.WorkOrderID]
 	if action.WorkOrderID == "" || !known {
 		return false

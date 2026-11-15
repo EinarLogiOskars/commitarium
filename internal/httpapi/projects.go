@@ -530,34 +530,11 @@ func (api *API) updateProjectAssistantModeHandler(w http.ResponseWriter, r *http
 	if !decodeSingleJSON(w, r, &request) {
 		return
 	}
-	settings, ok := api.projects.(ProjectAssistantModeService)
-	if !ok {
+	if _, ok := api.projects.(ProjectAssistantModeService); !ok {
 		writeError(w, http.StatusServiceUnavailable, "assistant_mode_unavailable", "the assistant's mode cannot be changed")
 		return
 	}
-	before, err := api.projects.GetByID(r.Context(), r.PathValue("id"))
-	if err != nil && !errors.Is(err, project.ErrNotFound) {
-		log.Printf("read project %q before its assistant mode: %v", r.PathValue("id"), err)
-	}
-	updated, err := settings.UpdateAssistantMode(r.Context(), r.PathValue("id"), request.AssistantMode)
-	if err == nil && updated.AssistantBuilds() && !before.AssistantBuilds() {
-		// Building everything runs on its own: runs go through to the merge
-		// gate and merge once every gate passes, as a new app's do, so no
-		// phase or merge waits on a user who handed the project over.
-		if _, autoErr := api.projects.UpdateAutonomyPolicy(r.Context(), updated.ID, project.AutonomyPolicyRunToCompletion); autoErr == nil {
-			updated.AutonomyPolicy = project.AutonomyPolicyRunToCompletion
-		} else {
-			log.Printf("run project %q to completion: %v", updated.ID, autoErr)
-		}
-		if _, autoErr := api.projects.UpdateMergePolicy(r.Context(), updated.ID, project.MergePolicyAutoAfterGates); autoErr == nil {
-			updated.MergePolicy = project.MergePolicyAutoAfterGates
-		} else {
-			log.Printf("merge project %q after its gates: %v", updated.ID, autoErr)
-		}
-		// Switching to building everything hands the project over: the
-		// assistant takes it from here at once.
-		api.handOverToAssistant(r.Context(), updated.ID)
-	}
+	updated, err := api.setAssistantMode(r.Context(), r.PathValue("id"), request.AssistantMode)
 	if err != nil {
 		switch {
 		case errors.Is(err, project.ErrNotFound):
@@ -572,6 +549,43 @@ func (api *API) updateProjectAssistantModeHandler(w http.ResponseWriter, r *http
 	}
 	writeJSON(w, http.StatusOK, newProjectResponse(updated), "project")
 }
+
+// setAssistantMode sets a project's assistant mode, the level of Mayka's say
+// (ADR-041), from the Project settings switcher or her set_say. Switching to
+// building everything also runs the project's work to completion and merges
+// it after its gates, and hands the project over to her.
+func (api *API) setAssistantMode(ctx context.Context, projectID string, mode project.AssistantMode) (project.Project, error) {
+	settings, ok := api.projects.(ProjectAssistantModeService)
+	if !ok {
+		return project.Project{}, errAssistantModeUnavailable
+	}
+	before, err := api.projects.GetByID(ctx, projectID)
+	if err != nil && !errors.Is(err, project.ErrNotFound) {
+		log.Printf("read project %q before its assistant mode: %v", projectID, err)
+	}
+	updated, err := settings.UpdateAssistantMode(ctx, projectID, mode)
+	if err == nil && updated.AssistantBuilds() && !before.AssistantBuilds() {
+		// Building everything runs on its own: runs go through to the merge
+		// gate and merge once every gate passes, as a new app's do, so no
+		// phase or merge waits on a user who handed the project over.
+		if _, autoErr := api.projects.UpdateAutonomyPolicy(ctx, updated.ID, project.AutonomyPolicyRunToCompletion); autoErr == nil {
+			updated.AutonomyPolicy = project.AutonomyPolicyRunToCompletion
+		} else {
+			log.Printf("run project %q to completion: %v", updated.ID, autoErr)
+		}
+		if _, autoErr := api.projects.UpdateMergePolicy(ctx, updated.ID, project.MergePolicyAutoAfterGates); autoErr == nil {
+			updated.MergePolicy = project.MergePolicyAutoAfterGates
+		} else {
+			log.Printf("merge project %q after its gates: %v", updated.ID, autoErr)
+		}
+		// Switching to building everything hands the project over: the
+		// assistant takes it from here at once.
+		api.handOverToAssistant(ctx, updated.ID)
+	}
+	return updated, err
+}
+
+var errAssistantModeUnavailable = errors.New("the assistant's mode cannot be changed")
 
 func (api *API) updateProjectAutonomyPolicyHandler(w http.ResponseWriter, r *http.Request) {
 	request := autonomyPolicyRequest{}

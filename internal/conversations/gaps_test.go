@@ -352,7 +352,7 @@ func queuedCountsAfterSort(t *testing.T) (*Service, *featuresStub) {
 	}
 	create := func(id, title, after string) Action {
 		return Action{ID: id, Status: ActionProposed, AssistantAction: featureartifact.AssistantAction{
-			Type: featureartifact.AssistantCreateWorkOrder, Reason: "Asked", Title: title, Steps: "quick", After: after}}
+			Type: featureartifact.AssistantCreateWorkOrder, Reason: "Asked", Title: title, Steps: "quick", After: after, Take: true}}
 	}
 	stored.Actions = append(stored.Actions, create("act_sort", "Add sort by", ""), create("act_count", "Show counts", "Add sort by"))
 	if err := service.write(stored); err != nil {

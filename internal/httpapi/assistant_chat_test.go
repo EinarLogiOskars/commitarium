@@ -45,6 +45,13 @@ type conversationStub struct {
 	// retries counts RetryTurn calls; retryErr is what they answer.
 	retries  int
 	retryErr error
+	// say is Mayka's words in the project's say, as set_say kept them.
+	say string
+}
+
+func (stub *conversationStub) SetSay(_ context.Context, _, words string) error {
+	stub.say = words
+	return nil
 }
 
 func (stub *conversationStub) RetryTurn(_ context.Context, scope string) (conversations.Conversation, error) {
@@ -191,8 +198,8 @@ func TestAutopilotAppliesActionsThroughTheSameApproval(t *testing.T) {
 	handler := NewWithWorkspaceRealWorkflowDeletionAndModels(projects, features, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, stub, testAgents())
 	apply := AssistantActionApplier(handler)
 
-	if err := apply(t.Context(), "prj_test", "act_1"); err == nil || !strings.Contains(err.Error(), "explicit approval") ||
-		features.createCalls != 0 {
+	if err := apply(t.Context(), "prj_test", "act_1"); err == nil ||
+		!strings.Contains(err.Error(), "it uses claude-fable-5-1, which needs your approval") || features.createCalls != 0 {
 		t.Fatalf("autopilot got past the premium approval: %v", err)
 	}
 
@@ -267,9 +274,10 @@ func TestAHeldCreateIsNotStartedAndListsWhatItWaitsFor(t *testing.T) {
 	}
 }
 
-// Autopilot never acts on a work order the user created by hand, unless the
-// user handed it over with a goal; the user's own approval of the same card
-// may (ADR-027).
+// Mayka never acts on a work order the user created by hand on her own,
+// whatever her say, unless the user handed it over with a goal or asked for
+// that action in the chat; the user's own approval of the same card may
+// (ADR-041).
 func TestAutopilotLeavesTheUsersWorkOrdersToTheUser(t *testing.T) {
 	stub := &conversationStub{action: conversations.Action{
 		ID: "act_1", Status: conversations.ActionProposed,
@@ -287,8 +295,8 @@ func TestAutopilotLeavesTheUsersWorkOrdersToTheUser(t *testing.T) {
 	apply := AssistantActionApplier(handler)
 
 	err := apply(t.Context(), "prj_test", "act_1")
-	if err == nil || !strings.Contains(err.Error(), "“Prevent logging future nights” is the user's work order") ||
-		!strings.Contains(err.Error(), "waiting for them") || workflow.receivedRunID != "" || stub.resolvedStatus != "" {
+	if err == nil || !strings.Contains(err.Error(), "“Prevent logging future nights” is your work order, so it waits for you") ||
+		workflow.receivedRunID != "" || stub.resolvedStatus != "" {
 		t.Fatalf("autopilot acted on the user's work order: %v (run %q)", err, workflow.receivedRunID)
 	}
 
@@ -305,6 +313,13 @@ func TestAutopilotLeavesTheUsersWorkOrdersToTheUser(t *testing.T) {
 	stub.goal = &conversations.Goal{Status: conversations.GoalActive, Handed: []string{"fea_users"}}
 	if err := apply(t.Context(), "prj_test", "act_1"); err != nil || workflow.receivedRunID != "run_1" {
 		t.Fatalf("a handed work order: %v (run %q)", err, workflow.receivedRunID)
+	}
+
+	// Asked for by the user in the chat, she may take it.
+	stub.resolvedStatus, workflow.receivedRunID, stub.goal = "", "", nil
+	stub.action.Asked = true
+	if err := apply(t.Context(), "prj_test", "act_1"); err != nil || workflow.receivedRunID != "run_1" {
+		t.Fatalf("an asked continue: %v (run %q)", err, workflow.receivedRunID)
 	}
 }
 

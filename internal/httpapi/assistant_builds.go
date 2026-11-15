@@ -22,7 +22,8 @@ import (
 // Building everything (ADR-027), the assistant owns the project but acts
 // only when woken. What the user does there wakes it: switching the project
 // to building everything hands it over, and a work order the user creates by
-// hand is the assistant's to take over. The watcher's gap check
+// hand is one the assistant suggests how to run; it stays the user's
+// (ADR-041). The watcher's gap check
 // (conversations/gaps.go) wakes it for what is still missing.
 
 // assistantWaker wakes a project's assistant for what the user did.
@@ -63,10 +64,10 @@ func (api *API) wakeForUsersWorkOrder(ctx context.Context, created feature.Featu
 	if err != nil || !owner.AssistantBuilds() {
 		return
 	}
-	note := fmt.Sprintf("You added “%s”; Mayka takes it from here.", created.Title)
-	text := fmt.Sprintf("The user created the work order “%s” (%s) by hand. You build everything here, so it is "+
-		"yours: start it with the agents and models you choose, or queue it with after when it changes the same "+
-		"part of the app as running work. Unless the user started it already.", created.Title, created.ID)
+	note := fmt.Sprintf("You added “%s”; Mayka suggests how to run it.", created.Title)
+	text := fmt.Sprintf("The user created the work order “%s” (%s) by hand. It is theirs: ask to start it (take "+
+		"false) with the agents and models you choose, or with after when it changes the same part of the app as "+
+		"running work. Unless the user started it already.", created.Title, created.ID)
 	if err := waker.Wake(ctx, created.ProjectID, note, text); err != nil {
 		log.Printf("tell the assistant of project %q about work order %q: %v", created.ProjectID, created.ID, err)
 	}

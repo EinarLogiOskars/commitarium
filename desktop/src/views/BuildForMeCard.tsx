@@ -51,7 +51,7 @@ export function BuildForMeCard({ projectId }: { projectId: string }) {
       <p className="assistant-action__desc">
         <strong>Build it for me.</strong> Mayka plans the work from the vision and runs it: agents
         build, review and merge on their own, and she comes to you only when something needs a
-        decision. You can switch back to Assists me at any time in Project settings.
+        decision. You can switch back to Ask first at any time in Project settings.
       </p>
       {error && <div className="banner banner--error">{error}</div>}
       <div className="row">
