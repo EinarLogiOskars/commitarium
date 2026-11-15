@@ -138,6 +138,20 @@ call applies with the coordinator's hard limits (asked actions still return
 "waiting for the user's approval"), and the cost of longer turns. If the
 spike fails, Decision 1 alone still delivers most of the gain.
 
+**Trial, 2026-11-15.** Codex 0.153.4 works: an MCP server or the
+app-server's dynamic tools run in the read-only sandbox (MCP tools need
+`default_tools_approval_mode: "approve"` or `readOnlyHint`), structured
+output holds, and a card comes back as "waiting for the user's approval".
+Claude Code loads a per-run MCP server in plan mode with `--mcp-config`,
+`--strict-mcp-config` and `--allowedTools`; plan mode allows only tools
+marked `readOnlyHint` (or her turns move to `dontAsk` with only Read, Grep
+and Glob). A live Claude turn on the image's 2.1.270 is still owed. The
+simplest path: the worker relays each tool call to the coordinator over its
+existing event stream and command channel, which applies it through the
+approve path and answers; nothing in the agent's container calls the
+coordinator. Guard against applying an action twice (turn and call ID as
+the key), cap calls per turn, and always answer before the tool times out.
+
 ## Decision 3: workspaces
 
 A workspace is a layer above projects, with its own chats, chat history,
@@ -201,6 +215,8 @@ notes and say. Projects stay as they are.
 7. The workspace chat: multi-project state, actions naming a project,
    creating projects inside, event routing, notes and say inheritance.
 8. The sidebar and the desktop views.
+
+The live-test checklist for Phase 1 is [MAYKA_SCENARIOS.md](../MAYKA_SCENARIOS.md).
 
 **Phase 3: across projects**
 
