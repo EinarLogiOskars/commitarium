@@ -39,6 +39,8 @@ func TestHardLimits(t *testing.T) {
 			"“Dark mode” is your work order, so it waits for you."},
 		{"closing the user's work order they asked her to close", limitAction(featureartifact.AssistantCloseWorkOrder,
 			func(action *featureartifact.AssistantAction) { action.Asked = true }), theirs, ""},
+		{"back to Ready under Ask first, asked", limitAction(featureartifact.AssistantRecoverWorkOrder,
+			func(action *featureartifact.AssistantAction) { action.How, action.Asked = "back_to_ready", true }), Limits{}, ""},
 		{"closing her own work", limitAction(featureartifact.AssistantCloseWorkOrder, nil), Limits{}, ""},
 		{"a new app", limitAction(featureartifact.AssistantCreateApp, nil), Limits{},
 			"a new app or project waits for your approval."},
@@ -232,6 +234,55 @@ func TestAnEventTurnAsksForNothing(t *testing.T) {
 			}
 			if got := conversation.Actions[0].Asked; got != test.want {
 				t.Fatalf("asked = %t, want %t", got, test.want)
+			}
+		})
+	}
+}
+
+// Her level follows the user: a turn woken by events may note words, never
+// change how much she does (ADR-041).
+func TestAnEventTurnKeepsTheSaysLevel(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		start     func(service *Service) error
+		wantLevel string
+		wantCount int
+		words     string
+	}{
+		{"the user's message", func(service *Service) error {
+			_, err := service.Send(t.Context(), "prj_test", "Just build it", "msg-1")
+			return err
+		}, "build_everything", 1, ""},
+		{"an event, level only", func(service *Service) error {
+			if err := service.Wake(t.Context(), "prj_test", "Note", "Dark mode merged."); err != nil {
+				return err
+			}
+			return service.wakeChats(t.Context(), "prj_test")
+		}, "", 0, ""},
+		{"an event, with words", func(service *Service) error {
+			if err := service.Wake(t.Context(), "prj_test", "Note", "Dark mode merged."); err != nil {
+				return err
+			}
+			return service.wakeChats(t.Context(), "prj_test")
+		}, "", 1, "Skip P1.3."},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			service, worker := newTestService(t)
+			if err := test.start(service); err != nil {
+				t.Fatal(err)
+			}
+			worker.finish(workerhttp.TerminalResult{
+				Outcome: workerhttp.OutcomeCompleted, Disposition: workerhttp.DispositionSucceeded, Summary: "Noted.",
+				AssistantTurn: &featureartifact.AssistantTurn{Actions: []featureartifact.AssistantAction{
+					{Type: featureartifact.AssistantSetSay, Reason: "Say", Level: "build_everything", Words: test.words, Take: true},
+				}},
+			})
+			conversation, err := service.Get(t.Context(), "prj_test")
+			if err != nil || len(conversation.Actions) != test.wantCount {
+				t.Fatalf("actions = %+v err=%v", conversation.Actions, err)
+			}
+			if test.wantCount == 1 && conversation.Actions[0].Level != test.wantLevel {
+				t.Fatalf("level = %q, want %q", conversation.Actions[0].Level, test.wantLevel)
 			}
 		})
 	}

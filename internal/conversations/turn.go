@@ -341,11 +341,27 @@ func (service *Service) refresh(ctx context.Context, stored record) (record, err
 				case sentAtOnce(proposed.Type), stored.Goal.drivesItem(proposed):
 					proposed.Take = true
 				}
-				if !featureartifact.AppliedByTheApp(proposed.Type) && (stored.LastTurn == nil || stored.LastTurn.Role != "user") {
+				userTurn := stored.LastTurn != nil && stored.LastTurn.Role == "user"
+				if !featureartifact.AppliedByTheApp(proposed.Type) && !userTurn {
 					// Only the user's message asks for an action on their
 					// work order: a turn woken by events asks for nothing,
 					// so it cannot take one of theirs over (ADR-041).
 					proposed.Asked = false
+				}
+				if proposed.Type == featureartifact.AssistantSetSay && !userTurn {
+					// Her level follows what the user tells her: a turn
+					// woken by events may note words, never raise or lower
+					// how much she does.
+					proposed.Level = ""
+					if strings.TrimSpace(proposed.Words) == "" {
+						continue
+					}
+				}
+				if stored.Scope == TopLevel && (proposed.Type == featureartifact.AssistantSetSay ||
+					proposed.Type == featureartifact.AssistantDropGoalItem) {
+					// A say and a goal belong to a project; outside one
+					// there is nothing to apply them to.
+					continue
 				}
 				action.AssistantAction = proposed
 				for _, model := range []string{proposed.LeadModel, proposed.ReviewerModel, proposed.LeadPlanModel, proposed.ReviewerPlanModel} {
