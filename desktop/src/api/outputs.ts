@@ -76,7 +76,7 @@ export const listHelperFiles = (owner: string, helper: string): Promise<{ files:
 async function readBlob(path: string): Promise<Blob> {
   let response: Response;
   try {
-    response = await fetch(`${COORDINATOR_BASE}${path}`, { headers: coordinatorAuth() });
+    response = await fetch(`${COORDINATOR_BASE}${path}`, { headers: await coordinatorAuth() });
   } catch (e) {
     throw new NetworkError(`cannot reach coordinator: ${String(e)}`);
   }

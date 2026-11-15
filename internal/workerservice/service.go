@@ -206,6 +206,7 @@ func (service *Service) resumeInterruptedAttempt(
 	if err != nil {
 		return fmt.Errorf("resolve interrupted provider environment: %w", err)
 	}
+	launchEnvironment = withRunToken(launchEnvironment, request.RunToken)
 	if !launchEnvironmentMatches(launchEnvironment, request.Assignment) {
 		return fmt.Errorf("%w: recovery resolver returned a different assignment", ErrConfigurationMismatch)
 	}
@@ -332,6 +333,7 @@ func (service *Service) PutAttempt(
 		}
 		return failed, true, nil
 	}
+	launchEnvironment = withRunToken(launchEnvironment, request.RunToken)
 	if !launchEnvironmentMatches(launchEnvironment, request.Assignment) {
 		resolveErr = fmt.Errorf("%w: resolver returned a different assignment", ErrConfigurationMismatch)
 		failed, terminalErr := service.failLaunch(

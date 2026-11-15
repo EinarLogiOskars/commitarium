@@ -143,6 +143,7 @@ async fn running_work_orders(app: &AppHandle) -> Result<Vec<RunningWorkOrder>, S
         .map_err(|error| format!("could not prepare the update safety check: {error}"))?;
     let response = client
         .get(coordinator_url("/api/v1/attention"))
+        .bearer_auth(commitarium_host::bootstrap::coordinator_token())
         .send()
         .await
         .map_err(|error| {

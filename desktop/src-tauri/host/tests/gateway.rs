@@ -93,6 +93,7 @@ async fn start() -> Fixture {
             host_port: port,
             host_token: "host-token".into(),
             coordinator_port: port,
+            coordinator_token: Box::new(|| "coordinator-token".into()),
             forgejo_port: port,
             is_preview: Box::new(move |asked| asked == port),
         },
@@ -192,6 +193,10 @@ async fn a_paired_device_reaches_all_three_and_holds_no_token() {
         .unwrap();
     assert!(coordinator.starts_with("/health "), "{coordinator}");
     assert!(!coordinator.contains("host-token"), "{coordinator}");
+    assert!(
+        coordinator.contains("authorization=Bearer coordinator-token"),
+        "{coordinator}"
+    );
 
     let unknown = client.get(fixture.url("/hostile")).send().await.unwrap();
     assert_eq!(unknown.status(), 404);
@@ -298,6 +303,7 @@ async fn devices_and_the_host_identity_outlast_a_restart() {
         host_port: 1,
         host_token: "t".into(),
         coordinator_port: 1,
+        coordinator_token: Box::new(String::new),
         forgejo_port: 1,
         is_preview: Box::new(|_| false),
     };

@@ -53,7 +53,10 @@ func run(arguments []string, output io.Writer) error {
 	if err != nil {
 		return err
 	}
-	client := &http.Client{Timeout: requestTimeout}
+	client := &http.Client{
+		Timeout:   requestTimeout,
+		Transport: credentialed{next: http.DefaultTransport, credential: strings.TrimSpace(os.Getenv("COMMITARIUM_RUN_CREDENTIAL"))},
+	}
 	if arguments[0] == "acceptance" {
 		return runAcceptance(client, base, projectID, featureID, arguments[1:], output)
 	}
@@ -278,6 +281,21 @@ func environment(getenv func(string) string) (string, string, string, error) {
 		return "", "", "", errors.New("the worker did not provide valid project and feature identity")
 	}
 	return base, projectID, featureID, nil
+}
+
+// credentialed sends the run's credential, which opens this work order's
+// plan and tests on the coordinator and nothing else.
+type credentialed struct {
+	next       http.RoundTripper
+	credential string
+}
+
+func (transport credentialed) RoundTrip(request *http.Request) (*http.Response, error) {
+	if transport.credential != "" {
+		request = request.Clone(request.Context())
+		request.Header.Set("Authorization", "Bearer "+transport.credential)
+	}
+	return transport.next.RoundTrip(request)
 }
 
 func usage() error {

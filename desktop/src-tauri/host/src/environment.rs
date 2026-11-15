@@ -234,6 +234,7 @@ pub async fn provision_environment_request(
             .post(coordinator_url(&format!(
                 "/api/v1/environment-requests/{request_id}/provision"
             )))
+            .bearer_auth(crate::bootstrap::coordinator_token())
             .body(Vec::new())
             .send()
             .await
@@ -266,6 +267,7 @@ pub async fn provision_environment_request(
                 .post(coordinator_url(&format!(
                     "/api/v1/environment-requests/{request_id}/fail"
                 )))
+                .bearer_auth(crate::bootstrap::coordinator_token())
                 .json(&FailureBody { reason: &detail })
                 .send()
                 .await;
@@ -278,6 +280,7 @@ pub async fn provision_environment_request(
             .post(coordinator_url(&format!(
                 "/api/v1/environment-requests/{request_id}/complete"
             )))
+            .bearer_auth(crate::bootstrap::coordinator_token())
             .json(&EnvironmentCompletion {
                 resolved_packages: &resolved,
             })
@@ -643,6 +646,7 @@ pub(crate) async fn approved_packages() -> Result<Vec<String>, String> {
     let approved: Approved = response_json(
         reqwest::Client::new()
             .get(coordinator_url("/api/v1/environment/approved-packages"))
+            .bearer_auth(crate::bootstrap::coordinator_token())
             .send()
             .await
             .map_err(|e| format!("read the approved system packages: {e}"))?,
@@ -748,6 +752,7 @@ pub async fn run_validation_job(job_id: String) -> Result<ValidationRunResult, S
             .post(coordinator_url(&format!(
                 "/api/v1/validation-jobs/{job_id}/claim"
             )))
+            .bearer_auth(crate::bootstrap::coordinator_token())
             .body(Vec::new())
             .send()
             .await
@@ -780,6 +785,7 @@ pub async fn run_validation_job(job_id: String) -> Result<ValidationRunResult, S
             .post(coordinator_url(&format!(
                 "/api/v1/validation-jobs/{job_id}/complete"
             )))
+            .bearer_auth(crate::bootstrap::coordinator_token())
             .json(&ValidationCompletion {
                 results: &results,
                 error: &error,

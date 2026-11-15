@@ -42,7 +42,7 @@ export function streamEvents(path: string, opts: StreamOptions): StreamHandle {
       try {
         const headers: Record<string, string> = {
           Accept: "text/event-stream",
-          ...coordinatorAuth(),
+          ...(await coordinatorAuth()),
         };
         if (lastId) headers["Last-Event-ID"] = lastId;
         const response = await fetch(`${COORDINATOR_BASE}${path}`, {

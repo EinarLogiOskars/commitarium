@@ -35,10 +35,34 @@ struct SecretLocation {
     relative_path: &'static str,
 }
 
-const TRANSPORT_SECRETS: &[SecretLocation] = &[SecretLocation {
-    source_variable: "COMMITARIUM_SIMULATED_WORKER_TOKEN_SOURCE",
-    relative_path: ".commitarium/internal/simulated-worker-token",
-}];
+/// The coordinator's owner token (COORDINATOR_ACCESS_PLAN.md). Only the
+/// coordinator mounts it; the host, the main window and the gateway send it.
+const COORDINATOR_TOKEN: SecretLocation = SecretLocation {
+    source_variable: "COMMITARIUM_COORDINATOR_TOKEN_SOURCE",
+    relative_path: ".commitarium/internal/coordinator-token",
+};
+
+const TRANSPORT_SECRETS: &[SecretLocation] = &[
+    SecretLocation {
+        source_variable: "COMMITARIUM_SIMULATED_WORKER_TOKEN_SOURCE",
+        relative_path: ".commitarium/internal/simulated-worker-token",
+    },
+    COORDINATOR_TOKEN,
+];
+
+/// The coordinator's owner token, sent on every call the host makes to the
+/// coordinator. Empty until bootstrap has made it, when the coordinator is
+/// not running either.
+pub fn coordinator_token() -> String {
+    crate::docker::compose_file()
+        .ok()
+        .and_then(|file| {
+            let root = compose_root(&file).ok()?;
+            fs::read_to_string(secret_path(root, &COORDINATOR_TOKEN)).ok()
+        })
+        .map(|token| token.trim().to_string())
+        .unwrap_or_default()
+}
 
 /// Bearer tokens for agent workers live in one directory that the coordinator
 /// mounts, so a new agent's token is readable without a restart (ADR-016).

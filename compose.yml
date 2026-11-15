@@ -33,8 +33,12 @@ services:
       # Agent workers are addressed by convention (ADR-016): service
       # agent-<id>-worker, bearer token agent-<id>-worker-token in this directory.
       COMMITARIUM_AGENT_WORKER_TOKEN_DIR: /run/commitarium-agent-workers
+      # Every caller but GET /health sends this token or an agent's run
+      # token (COORDINATOR_ACCESS_PLAN.md). No worker mounts it.
+      COMMITARIUM_COORDINATOR_TOKEN_FILE: /run/commitarium-config/coordinator-token
     volumes:
       - coordinator-data:/var/lib/commitarium
+      - ${COMMITARIUM_COORDINATOR_TOKEN_SOURCE:-./.commitarium/internal/coordinator-token}:/run/commitarium-config/coordinator-token:ro
       - ${COMMITARIUM_FORGEJO_TOKEN_SOURCE:-./.commitarium/forgejo-token}:/run/commitarium-config/forgejo-token:ro
       - ${COMMITARIUM_AGENT_WORKER_TOKEN_DIR_SOURCE:-./.commitarium/internal/agent-workers}:/run/commitarium-agent-workers:ro
       - ${COMMITARIUM_WORKSPACE_SOURCE:-./.commitarium/workspaces}:/workspaces

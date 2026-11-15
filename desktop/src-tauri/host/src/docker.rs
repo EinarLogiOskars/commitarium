@@ -696,6 +696,7 @@ async fn wait_until_ready(patience: Duration) -> bool {
 async fn stack_ready(client: &reqwest::Client) -> bool {
     let healthy = client
         .get(crate::preview::coordinator_url("/health"))
+        .bearer_auth(crate::bootstrap::coordinator_token())
         .send()
         .await
         .is_ok_and(|response| response.status().is_success());

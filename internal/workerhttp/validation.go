@@ -162,6 +162,9 @@ func (assignment Assignment) Validate() error {
 // "xhigh"; the provider rejects one it does not support.
 var effortPattern = regexp.MustCompile(`^[a-z]{1,16}$`)
 
+// runTokenPattern accepts no token or the coordinator's hex HMAC.
+var runTokenPattern = regexp.MustCompile(`^(|[0-9a-f]{64})$`)
+
 func validateExplicitModelID(model string) error {
 	model = strings.TrimSpace(model)
 	if !safeIDPattern.MatchString(model) {
@@ -190,6 +193,9 @@ func (request PutAttemptRequest) Validate(identity MutationIdentity) error {
 	}
 	if err := validateRequiredText("instructions", request.Instructions, MaxInstructionsBytes); err != nil {
 		return err
+	}
+	if !runTokenPattern.MatchString(request.RunToken) {
+		return invalid("run token must be a hex string")
 	}
 	if len(request.Images) > MaxImages {
 		return invalid("a turn looks at most at %d images", MaxImages)

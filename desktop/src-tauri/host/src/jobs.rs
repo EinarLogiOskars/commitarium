@@ -108,6 +108,7 @@ async fn pending<T: for<'de> Deserialize<'de>>(
 ) -> Result<T, String> {
     let response = client
         .get(coordinator_url(path))
+        .bearer_auth(crate::bootstrap::coordinator_token())
         .send()
         .await
         .map_err(|e| format!("{name}: {e}"))?;

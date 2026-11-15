@@ -192,6 +192,7 @@ async fn fetch_once() -> Result<Vec<Agent>, String> {
         .build()
         .map_err(|_| "could not create the coordinator client".to_string())?
         .get(environment::coordinator_url("/api/v1/agents"))
+        .bearer_auth(crate::bootstrap::coordinator_token())
         .send()
         .await
         .map_err(|_| "the coordinator is unavailable".to_string())?;

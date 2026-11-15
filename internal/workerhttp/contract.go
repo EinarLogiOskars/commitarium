@@ -153,6 +153,10 @@ type PutAttemptRequest struct {
 	// Images are images the turn looks at, as paths relative to its working
 	// directory: the screenshots attached to the user's message.
 	Images []string `json:"images,omitempty"`
+	// RunToken lets the turn's agent move its own work order's plan steps
+	// and acceptance tests through the coordinator, and nothing else
+	// (COORDINATOR_ACCESS_PLAN.md). The coordinator's client fills it in.
+	RunToken string `json:"run_token,omitempty"`
 }
 
 type WorkspaceAccess string

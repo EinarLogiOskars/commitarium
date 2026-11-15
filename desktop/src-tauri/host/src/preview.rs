@@ -513,6 +513,7 @@ pub async fn start_preview(
             .get(coordinator_url(&format!(
                 "/api/v1/projects/{project_id}/toolchain"
             )))
+            .bearer_auth(crate::bootstrap::coordinator_token())
             .send()
             .await
             .map_err(|e| format!("request project stack from coordinator: {e}"))?,
@@ -535,6 +536,7 @@ pub async fn start_preview(
                     .get(coordinator_url(&format!(
                         "/api/v1/projects/{project_id}/handoff"
                     )))
+                    .bearer_auth(crate::bootstrap::coordinator_token())
                     .send()
                     .await
                     .map_err(|e| format!("request project handoff from coordinator: {e}"))?,
@@ -564,6 +566,7 @@ pub async fn start_preview(
                     .get(coordinator_url(&format!(
                         "/api/v1/projects/{project_id}/features/{feature_id}/workspace"
                     )))
+                    .bearer_auth(crate::bootstrap::coordinator_token())
                     .send()
                     .await
                     .map_err(|e| format!("request session workspace from coordinator: {e}"))?,
@@ -1180,6 +1183,7 @@ async fn remember_open_target(
         .put(coordinator_url(&format!(
             "/api/v1/projects/{project_id}/toolchain"
         )))
+        .bearer_auth(crate::bootstrap::coordinator_token())
         .json(&serde_json::json!({
             "source": source,
             "tools": manifest.tools,
@@ -1754,6 +1758,7 @@ pub(crate) async fn head_commit(project_id: &str) -> Result<String, String> {
             .get(coordinator_url(&format!(
                 "/api/v1/projects/{project_id}/handoff"
             )))
+            .bearer_auth(crate::bootstrap::coordinator_token())
             .send()
             .await
             .map_err(|e| format!("request project handoff from coordinator: {e}"))?,

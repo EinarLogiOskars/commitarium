@@ -64,6 +64,7 @@ const (
 	defaultReviewerWorkspaceRoot  = "/reviewer-workspaces"
 	defaultToolchainRoot          = "/var/lib/commitarium-toolchains"
 	defaultAgentWorkerTokenDir    = "/run/commitarium-agent-workers"
+	defaultCoordinatorTokenFile   = "/run/commitarium-config/coordinator-token"
 	defaultCredentialsRoot        = "/var/lib/commitarium-credentials"
 	marketplaceTimeout            = 15 * time.Second
 )
@@ -74,6 +75,7 @@ type config struct {
 	simulatedStepDelay     time.Duration
 	agentWorkerURLTemplate string
 	agentWorkerTokenDir    string
+	coordinatorTokenFile   string
 	workerRequestTimeout   time.Duration
 	attemptStartTimeout    time.Duration
 	forgejoURL             string
@@ -146,6 +148,7 @@ func loadConfig(getenv func(string) string) (config, error) {
 		gitExecutable:          "git",
 		agentWorkerURLTemplate: agentworker.DefaultURLTemplate,
 		agentWorkerTokenDir:    defaultAgentWorkerTokenDir,
+		coordinatorTokenFile:   defaultCoordinatorTokenFile,
 		credentialsRoot:        defaultCredentialsRoot,
 	}
 	if value := strings.TrimSpace(getenv("COMMITARIUM_MARKETPLACE_URL")); value != "" {
@@ -185,6 +188,9 @@ func loadConfig(getenv func(string) string) (config, error) {
 	if value := strings.TrimSpace(getenv("COMMITARIUM_TOOLCHAIN_ROOT")); value != "" {
 		loaded.toolchainRoot = value
 	}
+	if value := strings.TrimSpace(getenv("COMMITARIUM_COORDINATOR_TOKEN_FILE")); value != "" {
+		loaded.coordinatorTokenFile = value
+	}
 	if value := strings.TrimSpace(getenv("COMMITARIUM_GIT_EXECUTABLE")); value != "" {
 		loaded.gitExecutable = value
 	}
@@ -213,6 +219,17 @@ func loadConfig(getenv func(string) string) (config, error) {
 }
 
 func run(ctx context.Context, coordinatorConfig config) error {
+	// Every caller needs a token (COORDINATOR_ACCESS_PLAN.md), so the
+	// coordinator does not start without one.
+	ownerToken, err := os.ReadFile(coordinatorConfig.coordinatorTokenFile)
+	if err != nil {
+		return fmt.Errorf("read the coordinator token: %w", err)
+	}
+	callers, err := httpapi.NewCallers(string(ownerToken))
+	if err != nil {
+		return fmt.Errorf("read the coordinator token: %w", err)
+	}
+
 	db, err := coordinatordatabase.OpenSQLite(ctx, coordinatorConfig.databasePath)
 	if err != nil {
 		return fmt.Errorf("open coordinator database: %w", err)
@@ -385,6 +402,7 @@ func run(ctx context.Context, coordinatorConfig config) error {
 			TokenDir:            coordinatorConfig.agentWorkerTokenDir,
 			RequestTimeout:      coordinatorConfig.workerRequestTimeout,
 			AttemptStartTimeout: coordinatorConfig.attemptStartTimeout,
+			RunToken:            callers.RunToken,
 		})
 		if err != nil {
 			return fmt.Errorf("create agent worker registry: %w", err)
@@ -800,7 +818,7 @@ func run(ctx context.Context, coordinatorConfig config) error {
 		httpapi.FirstLooker(handler))
 
 	log.Print("Listening...")
-	if err := http.ListenAndServe(":8080", routes); err != nil {
+	if err := http.ListenAndServe(":8080", callers.Guard(routes)); err != nil {
 		return fmt.Errorf("serve coordinator API: %w", err)
 	}
 

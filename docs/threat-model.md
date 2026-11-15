@@ -121,6 +121,19 @@ their narrow Tauri commands (ADR-029). Workers do not receive it and cannot
 reach the host's loopback port. The token dies with the launch, and the host
 exits when the app's pipe to it closes.
 
+The coordinator's API, on its own loopback port, wants a token too
+(COORDINATOR_ACCESS_PLAN.md). Its owner token is a random file that only the
+coordinator mounts; the host, the main window, app windows and the gateway
+send it, and no worker holds it. Agents' containers sit on the stack's Docker
+network and so reach the coordinator by name, past loopback; what they hold is
+a run token, an HMAC of their project and work order under the owner token,
+which opens only reading that work order's artifacts and moving its plan
+steps and acceptance tests (`commitarium-artifact`). Every other route, with
+no token or another work order's, is refused. The same check stops a web page
+on the user's machine: it cannot set the header, and a name rebound to
+loopback gets no token. `GET /health` alone is open. `scripts/check-isolation.sh`
+checks the refusal from the stack's network.
+
 Since RH2 step 4 that API is the way to the host's real work, not just to
 status. Its routes start and stop the stack, run previews, validation and
 image builds, delete preview data, drive agent logins, and carry login codes,
@@ -321,7 +334,7 @@ pairing instead of joining it.
 | Stolen device | It has full access until revoked, from the server or another device. This is the largest risk here. The key sits in the OS keychain, so it is as safe as the device's login. |
 | Lost every device | `commitarium-host pair` on the server recovers access. |
 | Stolen or compromised server | Everything on it is exposed: code, agent logins, Forgejo. A VPS means trusting its provider. Device keys do not help here. |
-| Compromised worker or preview | It can reach the gateway's port through Docker's network, and is refused like any stranger. Pairing is the one route it could try while open, with the same limits. |
+| Compromised worker or preview | It can reach the gateway's port through Docker's network, and is refused like any stranger. Pairing is the one route it could try while open, with the same limits. A worker also reaches the coordinator directly by name; it holds only its run token, which opens its own work order's plan and tests and nothing else. |
 | Deployed app (PUBLISHING_PLAN.md) | It runs on its own Docker network. Commitarium's ports listen on loopback, which another network cannot reach; its containers sit on a separate network; other apps' ports are loopback too. The cloud's metadata service, which can hold the server's setup secrets, is dropped for every container by a rule the installer keeps in Docker's `DOCKER-USER` chain. It reaches the gateway like any stranger. `scripts/check-isolation.sh` checks all of this on a running server. |
 | Visitor to a published app | Caddy routes only published names, to their deployment only. A private app asks for its password over HTTPS; how strong it is, is the owner's choice. Caddy's admin API is a socket inside its container. |
 | Someone on the server | The connection file and data directory are readable only by the service user and root. The `docker` group is root-equivalent, so nobody else belongs in it. |

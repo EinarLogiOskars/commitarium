@@ -2,7 +2,9 @@
 # Checks, on a server, that a deployed app reaches none of Commitarium's own
 # services, nor the cloud's metadata service (PUBLISHING_PLAN.md, D4). It
 # probes from a throwaway container on each deployment's network, which is
-# where the app itself sits. Run it as root:
+# where the app itself sits. It also checks that Commitarium's own network,
+# where agents work, gets nothing from the coordinator without its token
+# (COORDINATOR_ACCESS_PLAN.md). Run it as root:
 #
 #   sudo sh scripts/check-isolation.sh
 set -eu
@@ -19,6 +21,18 @@ addresses() { docker inspect "$1" -f '{{range .NetworkSettings.Networks}}{{.IPAd
 
 host_port=$(sed -n 's/.*"port": *\([0-9]*\).*/\1/p' "$DATA_DIR/service.json" | head -1)
 public=$(ip route get 1.1.1.1 2>/dev/null | sed -n 's/.* src \([0-9.]*\).*/\1/p')
+
+# An agent's container sits on the stack's network and reaches the
+# coordinator by name; with no token it must be refused.
+say "From commitarium_default:"
+answer=$(docker run --rm --network commitarium_default "$PROBE_IMAGE" sh -c \
+  'wget -S -q -O /dev/null http://coordinator:8080/api/v1/projects 2>&1 | sed -n "s/.*HTTP\/[0-9.]* \([0-9][0-9][0-9]\).*/\1/p" | head -1')
+if [ "$answer" = "401" ]; then
+  say "  The coordinator refuses a call with no token."
+else
+  failed=1
+  say "  OPEN   coordinator:8080 answered ${answer:-nothing} without a token, not 401"
+fi
 
 networks=$(docker network ls --format '{{.Name}}' | grep -- '-live\.' || true)
 if [ -z "$networks" ]; then
