@@ -107,13 +107,12 @@ secrets made on their next start; no migration.
 
 ## Release
 
-This is a security fix on today's main, so it can go out as 0.14.2 before
-0.15, or ride in 0.15. It does not touch the files the One Mayka PRs change
-beyond `internal/httpapi`'s wiring, so the rebase either way is small.
+Decided 2026-11-15: it rides in 0.15, not a 0.14.2 of its own, since there
+are no users yet. It touches `internal/httpapi`'s wiring beside the One Mayka
+PRs, so it is built after them, on top.
 
 ## To decide
 
-- 0.14.2 on its own, or inside 0.15.
 - Whether the run token should also be limited by role (only the lead moves
   plan steps, only the reviewer moves acceptance tests). Left out for now,
   since the CLI does not limit it today either.
