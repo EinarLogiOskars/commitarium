@@ -128,7 +128,7 @@ send it, and no worker holds it. Agents' containers sit on the stack's Docker
 network and so reach the coordinator by name, past loopback; what they hold is
 a run token, an HMAC of their project and work order under the owner token,
 which opens only reading that work order's artifacts and moving its plan
-steps and acceptance tests (`commitarium-artifact`). It is per work order,
+steps (`commitarium-artifact`). It is per work order,
 not per role, and the agent's container keeps the tokens of every work
 order it ran. Every other route, with
 no token or another work order's, is refused. The same check stops a web page
@@ -336,7 +336,7 @@ pairing instead of joining it.
 | Stolen device | It has full access until revoked, from the server or another device. This is the largest risk here. The key sits in the OS keychain, so it is as safe as the device's login. |
 | Lost every device | `commitarium-host pair` on the server recovers access. |
 | Stolen or compromised server | Everything on it is exposed: code, agent logins, Forgejo. A VPS means trusting its provider. Device keys do not help here. |
-| Compromised worker or preview | It can reach the gateway's port through Docker's network, and is refused like any stranger. Pairing is the one route it could try while open, with the same limits. A worker also reaches the coordinator directly by name; it holds only run tokens, never the owner token. Each opens one work order's artifact reads and its plan-step and acceptance-test transitions. The agent's container keeps the tokens of every work order it ran (its worker's journal, its own processes' environment), so a compromised agent can move those work orders' plan and tests, which review and the merge gate still check. |
+| Compromised worker or preview | It can reach the gateway's port through Docker's network, and is refused like any stranger. Pairing is the one route it could try while open, with the same limits. A worker also reaches the coordinator directly by name; it holds only run tokens, never the owner token. Each opens one work order's artifact reads and its plan-step transitions. The agent's container keeps the tokens of every work order it ran (its worker's journal, its own processes' environment), so a compromised agent can move those work orders' plans, which review and the merge gate still check. |
 | Deployed app (PUBLISHING_PLAN.md) | It runs on its own Docker network. Commitarium's ports listen on loopback, which another network cannot reach; its containers sit on a separate network; other apps' ports are loopback too. The cloud's metadata service, which can hold the server's setup secrets, is dropped for every container by a rule the installer keeps in Docker's `DOCKER-USER` chain. It reaches the gateway like any stranger. `scripts/check-isolation.sh` checks all of this on a running server. |
 | Visitor to a published app | Caddy routes only published names, to their deployment only. A private app asks for its password over HTTPS; how strong it is, is the owner's choice. Caddy's admin API is a socket inside its container. |
 | Someone on the server | The connection file and data directory are readable only by the service user and root. The `docker` group is root-equivalent, so nobody else belongs in it. |
