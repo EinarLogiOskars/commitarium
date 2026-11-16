@@ -873,3 +873,88 @@ func TestMigrateCreatesExecutionTables(t *testing.T) {
 		}
 	}
 }
+
+func TestAcceptanceTestsMigrationDropsWhatStoredThem(t *testing.T) {
+	db, err := OpenSQLite(t.Context(), filepath.Join(t.TempDir(), "coordinator.db"))
+	if err != nil {
+		t.Fatalf("open SQLite database: %v", err)
+	}
+	defer db.Close()
+	migrations, err := fs.Sub(migrationFiles, "migrations")
+	if err != nil {
+		t.Fatalf("open embedded migrations: %v", err)
+	}
+	provider, err := goose.NewProvider(goose.DialectSQLite3, db, migrations)
+	if err != nil {
+		t.Fatalf("create migration provider: %v", err)
+	}
+	if _, err := provider.UpTo(t.Context(), 64); err != nil {
+		t.Fatalf("migrate the schema before the drop: %v", err)
+	}
+	run, _ := createExecutionRecords(t, db, NewExecutionStore(db))
+	const commit = "0123456789abcdef0123456789abcdef01234567"
+	now := time.Date(2026, time.October, 7, 12, 0, 0, 0, time.UTC).Format(time.RFC3339Nano)
+	for _, statement := range []string{
+		`UPDATE projects SET independent_acceptance_tests = 1`,
+		`UPDATE features SET independent_acceptance_tests = 1`,
+		`UPDATE runs SET independent_acceptance_tests = 1`,
+		`INSERT INTO feature_artifacts (feature_id, kind, revision, document, actor_kind, actor_id, updated_at)
+		 VALUES ('fea_execution_test', 'acceptance_tests', 1, '{}', 'agent', 'reviewer', '` + now + `'),
+		        ('fea_execution_test', 'implementation_plan', 1, '{}', 'agent', 'lead', '` + now + `')`,
+		`INSERT INTO workflow_events (id, aggregate_id, event_type, actor_kind, actor_id, occurred_at, sequence,
+		     payload_version, idempotency_key, payload)
+		 VALUES ('evt_tests', 'fea_execution_test', 'feature.artifact_updated', 'agent', 'reviewer', '` + now + `', 1,
+		         1, 'tests', '{"kind":"acceptance_tests","revision":1}'),
+		        ('evt_plan', 'fea_execution_test', 'feature.artifact_updated', 'agent', 'lead', '` + now + `', 2,
+		         1, 'plan', '{"kind":"implementation_plan","revision":1}')`,
+		`INSERT INTO validation_jobs (id, project_id, feature_id, run_id, workspace_id, commit_id, commands_json,
+		     status, created_at, updated_at, kind, labels_json, merge_commit_id)
+		 VALUES ('val_kept', 'prj_execution_test', 'fea_execution_test', '` + run.ID + `', 'wsp', '` + commit + `',
+		         '["go test ./..."]', 'pending', '` + now + `', '` + now + `', 'validation', '[]', ''),
+		        ('acc_gone', 'prj_execution_test', 'fea_execution_test', '` + run.ID + `', 'wsp', '` + commit + `',
+		         '["go test ./..."]', 'pending', '` + now + `', '` + now + `', 'acceptance', '["one"]', '` + commit + `')`,
+	} {
+		if _, err := db.ExecContext(t.Context(), statement); err != nil {
+			t.Fatalf("seed the old records: %v\n%s", err, statement)
+		}
+	}
+	if err := Migrate(t.Context(), db); err != nil {
+		t.Fatalf("apply the drop: %v", err)
+	}
+
+	for table, columns := range map[string][]string{
+		"projects":        {"independent_acceptance_tests"},
+		"features":        {"independent_acceptance_tests"},
+		"runs":            {"independent_acceptance_tests"},
+		"validation_jobs": {"kind", "labels_json", "merge_commit_id"},
+	} {
+		for _, column := range columns {
+			var count int
+			if err := db.QueryRowContext(t.Context(),
+				`SELECT COUNT(*) FROM pragma_table_info(?) WHERE name = ?`, table, column,
+			).Scan(&count); err != nil || count != 0 {
+				t.Fatalf("%s.%s is still there: count=%d err=%v", table, column, count, err)
+			}
+		}
+	}
+	var kinds, events string
+	if err := db.QueryRowContext(t.Context(), `SELECT group_concat(kind) FROM feature_artifacts`).Scan(&kinds); err != nil || kinds != "implementation_plan" {
+		t.Fatalf("artifacts left = %q err=%v", kinds, err)
+	}
+	if err := db.QueryRowContext(t.Context(), `SELECT group_concat(id) FROM workflow_events`).Scan(&events); err != nil || events != "evt_plan" {
+		t.Fatalf("events left = %q err=%v", events, err)
+	}
+	if _, err := db.ExecContext(t.Context(),
+		`INSERT INTO feature_artifacts (feature_id, kind, revision, document, actor_kind, actor_id, updated_at)
+		 VALUES ('fea_execution_test', 'acceptance_tests', 2, '{}', 'agent', 'reviewer', ?)`, now,
+	); err == nil {
+		t.Fatal("the schema still takes acceptance-test artifacts")
+	}
+	jobs, err := NewValidationStore(db).ListJobsByRun(t.Context(), run.ID)
+	if err != nil || len(jobs) != 1 || jobs[0].ID != "val_kept" {
+		t.Fatalf("validation jobs = %+v err=%v", jobs, err)
+	}
+	if _, err := NewExecutionStore(db).GetRun(t.Context(), run.ID); err != nil {
+		t.Fatalf("read the run after the drop: %v", err)
+	}
+}
