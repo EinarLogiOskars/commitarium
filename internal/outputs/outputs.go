@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -23,6 +24,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -300,6 +302,47 @@ func (store *Store) DeleteProject(_ context.Context, projectID string) error {
 	return nil
 }
 
+// openWithin opens a regular file under root, refusing links out of it. It
+// opens without blocking, so a pipe swapped in cannot hang the caller.
+func openWithin(root *os.Root, name string) (*os.File, os.FileInfo, error) {
+	file, err := root.OpenFile(name, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, nil, err
+	}
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() {
+		file.Close()
+		return nil, nil, errors.New("not a regular file")
+	}
+	return file, info, nil
+}
+
+// OpenLive opens a file a helper has in Dir under from now, as Live listed
+// it, the same way Collect reads it: never through a link out of from.
+func OpenLive(from string, pending Pending) (*os.File, os.FileInfo, error) {
+	root, err := os.OpenRoot(from)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer root.Close()
+	return openWithin(root, filepath.Join(Dir, pending.relative))
+}
+
+// readWithin reads a regular file under root, refusing links out of it and
+// files grown past MaxBytes since they were listed.
+func readWithin(root *os.Root, name string) ([]byte, error) {
+	file, _, err := openWithin(root, name)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	contents, err := io.ReadAll(io.LimitReader(file, MaxBytes+1))
+	if err != nil || len(contents) == 0 || len(contents) > MaxBytes {
+		return nil, errors.New("empty or too large")
+	}
+	return contents, nil
+}
+
 // Pending is a file a helper has in Dir now, before it is collected.
 type Pending struct {
 	// Name is the name the store would take it under from this helper;
@@ -308,6 +351,8 @@ type Pending struct {
 	Size   int64     `json:"size"`
 	MadeAt time.Time `json:"made_at"`
 	Path   string    `json:"-"`
+	// relative is its path under Dir, which Collect reads it by.
+	relative string
 }
 
 // Live lists the files a helper has in Dir under from right now, as Collect
@@ -339,7 +384,8 @@ func Live(from string) []Pending {
 		if slices.ContainsFunc(found, func(other Pending) bool { return other.Name == name }) {
 			return nil
 		}
-		found = append(found, Pending{Name: name, Size: info.Size(), MadeAt: info.ModTime().UTC(), Path: path})
+		found = append(found, Pending{Name: name, Size: info.Size(), MadeAt: info.ModTime().UTC(), Path: path,
+			relative: relative})
 		if len(found) == MaxCollected {
 			return filepath.SkipAll
 		}
@@ -373,10 +419,18 @@ func (store *Store) Collect(_ context.Context, owner, from, helper, title string
 	if err != nil {
 		return nil, err
 	}
+	// The helper's checkout is the agent's to change while this runs, so
+	// files are read through a root that no link can lead out of: a file
+	// swapped for a link to a secret is refused, not copied.
+	root, err := os.OpenRoot(from)
+	if err != nil {
+		return nil, nil
+	}
+	defer root.Close()
 	now := time.Now().UTC()
 	var names []string
 	for _, pending := range found {
-		contents, err := os.ReadFile(pending.Path)
+		contents, err := readWithin(root, filepath.Join(Dir, pending.relative))
 		if err != nil {
 			continue
 		}

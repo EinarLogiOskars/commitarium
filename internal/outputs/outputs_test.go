@@ -199,3 +199,36 @@ func TestWithoutSourcesHidesThePageAPDFWasMadeFrom(t *testing.T) {
 		t.Fatalf("WithoutSources = %v, want %v", got, want)
 	}
 }
+
+// A helper's checkout is the agent's to change between listing and reading,
+// so a file or folder swapped for a link out of it is never read.
+func TestCollectReadsNoLinkOutOfTheCheckout(t *testing.T) {
+	secret := filepath.Join(t.TempDir(), "coordinator-token")
+	if err := os.WriteFile(secret, []byte("owner token"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	from := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(from, Dir), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	root, err := os.OpenRoot(from)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	if err := os.Symlink(secret, filepath.Join(from, Dir, "report.txt")); err != nil {
+		t.Fatal(err)
+	}
+	if contents, err := readWithin(root, filepath.Join(Dir, "report.txt")); err == nil {
+		t.Fatalf("read a link to %q", contents)
+	}
+	if err := os.RemoveAll(filepath.Join(from, Dir)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Dir(secret), filepath.Join(from, Dir)); err != nil {
+		t.Fatal(err)
+	}
+	if contents, err := readWithin(root, filepath.Join(Dir, "coordinator-token")); err == nil {
+		t.Fatalf("read through a linked folder: %q", contents)
+	}
+}
