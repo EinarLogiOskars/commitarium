@@ -420,11 +420,6 @@ func (starter *RemoteLeadStarter) verifyImplementationBaseUpdate(
 			result.Publication.PullRequestNumber, implementationLeadOnlyReadyReason,
 		)
 	}
-	if err := starter.resetAcceptanceTests(
-		ctx, run, commitID, request.identity.AttemptID+":reset-acceptance-tests",
-	); err != nil {
-		return err
-	}
 	if paused, err := starter.stopAtPauseBoundary(
 		ctx, run.ID, "The update onto main is published and ready for another independent review.",
 	); err != nil || paused {

@@ -31,13 +31,6 @@ type transitionRequest struct {
 	CommitID    string                     `json:"commit_id"`
 }
 
-type acceptanceTransitionRequest struct {
-	PlanVersion            int                                  `json:"plan_version"`
-	Status                 featureartifact.AcceptanceTestStatus `json:"status"`
-	Note                   string                               `json:"note"`
-	ImplementationCommitID string                               `json:"implementation_commit_id"`
-}
-
 func main() {
 	if err := run(os.Args[1:], os.Stdout); err != nil {
 		fmt.Fprintln(os.Stderr, "commitarium-artifact:", err)
@@ -46,7 +39,7 @@ func main() {
 }
 
 func run(arguments []string, output io.Writer) error {
-	if len(arguments) < 2 || (arguments[0] != "plan" && arguments[0] != "acceptance") {
+	if len(arguments) < 2 || arguments[0] != "plan" {
 		return usage()
 	}
 	base, projectID, featureID, err := environment(os.Getenv)
@@ -56,9 +49,6 @@ func run(arguments []string, output io.Writer) error {
 	client := &http.Client{
 		Timeout:   requestTimeout,
 		Transport: credentialed{next: http.DefaultTransport, credential: strings.TrimSpace(os.Getenv("COMMITARIUM_RUN_CREDENTIAL"))},
-	}
-	if arguments[0] == "acceptance" {
-		return runAcceptance(client, base, projectID, featureID, arguments[1:], output)
 	}
 	switch arguments[1] {
 	case "show":
@@ -84,109 +74,6 @@ func run(arguments []string, output io.Writer) error {
 	default:
 		return usage()
 	}
-}
-
-func runAcceptance(
-	client *http.Client,
-	base, projectID, featureID string,
-	arguments []string,
-	output io.Writer,
-) error {
-	if len(arguments) == 1 && arguments[0] == "show" {
-		artifact, err := getArtifact(client, base, projectID, featureID, featureartifact.KindAcceptanceTests)
-		if err != nil {
-			return err
-		}
-		_, err = fmt.Fprintln(output, string(artifact.Document))
-		return err
-	}
-	if len(arguments) < 2 {
-		return usage()
-	}
-	status := featureartifact.AcceptanceTestStatus("")
-	note := ""
-	switch arguments[0] {
-	case "start":
-		status = featureartifact.AcceptanceTestRunning
-	case "pass":
-		status = featureartifact.AcceptanceTestPassed
-	case "fail":
-		if len(arguments) != 3 {
-			return usage()
-		}
-		status, note = featureartifact.AcceptanceTestFailed, arguments[2]
-	case "not-applicable":
-		if len(arguments) != 3 {
-			return usage()
-		}
-		status, note = featureartifact.AcceptanceTestNotApplicable, arguments[2]
-	default:
-		return usage()
-	}
-	if (status == featureartifact.AcceptanceTestRunning || status == featureartifact.AcceptanceTestPassed) && len(arguments) != 2 {
-		return usage()
-	}
-	return transitionAcceptance(client, base, projectID, featureID, arguments[1], status, note, output)
-}
-
-func transitionAcceptance(
-	client *http.Client,
-	base, projectID, featureID, testID string,
-	status featureartifact.AcceptanceTestStatus,
-	note string,
-	output io.Writer,
-) error {
-	artifact, err := getArtifact(client, base, projectID, featureID, featureartifact.KindAcceptanceTests)
-	if err != nil {
-		return err
-	}
-	tests := featureartifact.AcceptanceTests{}
-	if err := json.Unmarshal(artifact.Document, &tests); err != nil {
-		return fmt.Errorf("decode acceptance tests: %w", err)
-	}
-	body, err := json.Marshal(acceptanceTransitionRequest{
-		PlanVersion: tests.PlanVersion, Status: status, Note: strings.TrimSpace(note),
-		ImplementationCommitID: tests.ImplementationCommitID,
-	})
-	if err != nil {
-		return err
-	}
-	endpoint := fmt.Sprintf(
-		"%s/api/v1/projects/%s/features/%s/acceptance-tests/%s/transitions",
-		base, url.PathEscape(projectID), url.PathEscape(featureID), url.PathEscape(testID),
-	)
-	ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
-	defer cancel()
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
-	if err != nil {
-		return err
-	}
-	request.Header.Set("Content-Type", "application/json")
-	// The test's current status is part of the key, so running a failed test
-	// again is a new transition rather than a replay of its first run.
-	var current featureartifact.AcceptanceTestStatus
-	for _, test := range tests.Tests {
-		if test.ID == testID {
-			current = test.Status
-		}
-	}
-	digest := sha256.Sum256([]byte(featureID + "\x00" + fmt.Sprint(tests.PlanVersion) + "\x00" + testID + "\x00" + string(status) + "\x00" + strings.TrimSpace(note) + "\x00" + tests.ImplementationCommitID + "\x00" + string(current)))
-	request.Header.Set("Idempotency-Key", "artifact-"+hex.EncodeToString(digest[:]))
-	response, err := client.Do(request)
-	if err != nil {
-		return fmt.Errorf("update acceptance test: %w", err)
-	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		message, _ := io.ReadAll(io.LimitReader(response.Body, 8*1024))
-		return fmt.Errorf("update acceptance test: HTTP %d: %s", response.StatusCode, strings.TrimSpace(string(message)))
-	}
-	updated := artifactResponse{}
-	if err := json.NewDecoder(io.LimitReader(response.Body, 256*1024)).Decode(&updated); err != nil {
-		return fmt.Errorf("decode updated acceptance tests: %w", err)
-	}
-	_, err = fmt.Fprintf(output, "acceptance tests revision %d: %s %s\n", updated.Revision, testID, status)
-	return err
 }
 
 func transition(
@@ -284,7 +171,7 @@ func environment(getenv func(string) string) (string, string, string, error) {
 }
 
 // credentialed sends the run's credential, which opens this work order's
-// plan and tests on the coordinator and nothing else.
+// plan on the coordinator and nothing else.
 type credentialed struct {
 	next       http.RoundTripper
 	credential string
@@ -299,5 +186,5 @@ func (transport credentialed) RoundTrip(request *http.Request) (*http.Response, 
 }
 
 func usage() error {
-	return errors.New("usage: commitarium-artifact plan show | plan start <step-id> | plan complete <step-id> <commit-id> | acceptance show | acceptance start <test-id> | acceptance pass <test-id> | acceptance fail <test-id> <note> | acceptance not-applicable <test-id> <note>")
+	return errors.New("usage: commitarium-artifact plan show | plan start <step-id> | plan complete <step-id> <commit-id>")
 }

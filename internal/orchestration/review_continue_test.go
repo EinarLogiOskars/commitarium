@@ -4,83 +4,25 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/EinarLogiOskars/commitarium/internal/featureartifact"
 	"github.com/EinarLogiOskars/commitarium/internal/project"
 	"github.com/EinarLogiOskars/commitarium/internal/workerhttp"
-	"github.com/EinarLogiOskars/commitarium/internal/workflow"
 )
 
 const reviewContinueGuidance = "The export test checked the old file name; fix the test and run it again."
 
 // startRefusedReview runs a reviewed work order to its second review, an
-// approval that is refused because the reviewer's own acceptance test is
-// recorded as failed. The reviewer's next try of that round is scripted to
-// approve again, and records the test as passed during its turn. spent
-// spends the refusal's self-corrections first, so it blocks.
-func startRefusedReview(t *testing.T, runID string, spent bool) (*baseUpdateFixture, string) {
+// approval whose check fails, so the work order blocks there. The reviewer's
+// next try of that round is scripted to approve again.
+func startRefusedReview(t *testing.T, runID string) (*baseUpdateFixture, string) {
 	t.Helper()
 	reviewerID := remoteReviewerSessionID(runID)
 	retryID := reviewRetryAttemptID(reviewerID, 1, 2, 2)
 	fixture := startBaseUpdateRun(t, runID, true, project.MergePolicyRequireUserApproval, 0,
 		func(fixture *baseUpdateFixture) {
-			// The first check of review 2 fails, so the work order blocks there
-			// before acceptance tests are switched on below.
 			fixture.workspace.failReviewVerifyCall = 2
-			addReviewRetryAttempt(fixture, retryID, 22, "I fixed the export test; it passes and the commit is ready to merge.")
+			addReviewRetryAttempt(fixture, retryID, 22, "I checked the export again; the commit is ready to merge.")
 		})
 	fixture.waitBlocked(t, "")
-
-	if _, err := fixture.db.ExecContext(
-		t.Context(), `UPDATE runs SET independent_acceptance_tests = 1 WHERE id = ?`, fixture.runID,
-	); err != nil {
-		t.Fatalf("enable acceptance tests: %v", err)
-	}
-	tests := featureartifact.AcceptanceTests{
-		PlanVersion: 1, TestCommitID: strings.Repeat("9", 40), ImplementationCommitID: reviewedApprovedSHA,
-		Tests: []featureartifact.AcceptanceTest{
-			{ID: "at-1", Position: 1, Title: "Exports the visible columns", Status: featureartifact.AcceptanceTestFailed, Note: "No file named export.csv."},
-		},
-	}
-	actor := workflow.Actor{Kind: workflow.ActorKindAgent, ID: reviewerID}
-	if _, err := fixture.workflow.UpsertAcceptanceTests(t.Context(), fixture.featureID, tests, actor, "seed-failed-acceptance"); err != nil {
-		t.Fatalf("seed acceptance tests: %v", err)
-	}
-	fixture.starter.artifacts = fixture.workflow
-	fixture.worker.mu.Lock()
-	fixture.worker.onPut = func(reference workerhttp.AttemptReference) {
-		if reference.AttemptID != retryID {
-			return
-		}
-		for _, status := range []featureartifact.AcceptanceTestStatus{
-			featureartifact.AcceptanceTestRunning, featureartifact.AcceptanceTestPassed,
-		} {
-			if _, err := fixture.workflow.TransitionAcceptanceTest(
-				t.Context(), fixture.featureID, 1, "at-1", status, "", reviewedApprovedSHA, actor,
-				"rerun-at-1-"+string(status),
-			); err != nil {
-				t.Errorf("record %s acceptance result: %v", status, err)
-			}
-		}
-	}
-	fixture.worker.mu.Unlock()
-	if !spent {
-		return fixture, retryID
-	}
-	fixture.spendSelfCorrections(t, errAcceptanceResultsIncomplete)
-
-	// Re-check checks the same review again, which the failed test refuses.
-	if _, _, err := fixture.starter.RecoverBlockerWithDirective(
-		t.Context(), fixture.runID, "recheck-refused-review", RecoveryDirective{Action: RecoveryActionRecheck},
-	); err != nil {
-		t.Fatalf("recheck review: %v", err)
-	}
-	blocked := fixture.waitBlocked(t, "")
-	if !strings.Contains(blocked.Reason, "is recorded as failed") {
-		t.Fatalf("the approval was not refused for its failed acceptance test: %q", blocked.Reason)
-	}
-	if fixture.workspace.reviewVerifyCalls != 2 || fixture.reviewRetryRequest(retryID) != nil {
-		t.Fatalf("re-check did not just check the same review: workspace=%+v", fixture.workspace)
-	}
 	return fixture, retryID
 }
 
@@ -132,11 +74,6 @@ func (fixture *baseUpdateFixture) expectReviewRetryAccepted(t *testing.T, retryI
 		request.Assignment.Role != workerhttp.RoleReviewer {
 		t.Fatalf("the reviewer's new try did not continue its review conversation: %+v", request)
 	}
-	for _, want := range []string{"is recorded as failed", "acceptance pass <test-id>"} {
-		if !strings.Contains(request.Instructions, want) {
-			t.Fatalf("the reviewer's new try was not told what failed (%q):\n%s", want, request.Instructions)
-		}
-	}
 	verified := fixture.workspace.reviewVerifyAttempts
 	if len(verified) != 3 || verified[2] != retryID || fixture.workspace.prepared.ApprovedCommitID != reviewedApprovedSHA {
 		t.Fatalf("the new approval was not the one verified: verified=%v workspace=%+v", verified, fixture.workspace)
@@ -148,7 +85,7 @@ func (fixture *baseUpdateFixture) expectReviewRetryAccepted(t *testing.T, retryI
 }
 
 func TestContinueWithGuidanceReachesAReviewerWhoseApprovalWasRefused(t *testing.T) {
-	fixture, retryID := startRefusedReview(t, "run_review_guided_continue", true)
+	fixture, retryID := startRefusedReview(t, "run_review_guided_continue")
 	if _, admitted, err := fixture.starter.RecoverBlockerWithDirective(
 		t.Context(), fixture.runID, "continue-refused-review",
 		RecoveryDirective{Action: RecoveryActionContinue, Message: reviewContinueGuidance, FromAssistant: true},
@@ -160,37 +97,6 @@ func TestContinueWithGuidanceReachesAReviewerWhoseApprovalWasRefused(t *testing.
 		t.Fatalf("the reviewer's new try did not carry the user's guidance:\n%s", request.Instructions)
 	}
 	assertGuidanceShown(t, fixture.executions, remoteReviewerSessionID(fixture.runID), "assistant", reviewContinueGuidance)
-}
-
-func TestContinueAloneTellsAReviewerWhyItsApprovalWasRefused(t *testing.T) {
-	// Checking the same approval again could never pass, so Continue without
-	// guidance gives the reviewer the reason instead.
-	fixture, retryID := startRefusedReview(t, "run_review_plain_continue", true)
-	if _, admitted, err := fixture.starter.RecoverBlockerWithDirective(
-		t.Context(), fixture.runID, "continue-refused-review",
-		RecoveryDirective{Action: RecoveryActionContinue},
-	); err != nil || !admitted {
-		t.Fatalf("continue: admitted=%t err=%v", admitted, err)
-	}
-	request := fixture.expectReviewRetryAccepted(t, retryID)
-	if strings.Contains(request.Instructions, "The user asked you") {
-		t.Fatalf("the reviewer was given guidance the user did not write:\n%s", request.Instructions)
-	}
-}
-
-// Before anyone continues it, Commitarium hands the refused approval back to
-// the reviewer with the same reason (self_correction.go).
-func TestARefusedApprovalIsHandedBackToTheReviewer(t *testing.T) {
-	fixture, retryID := startRefusedReview(t, "run_review_self_correct", false)
-	if _, _, err := fixture.starter.RecoverBlockerWithDirective(
-		t.Context(), fixture.runID, "recheck-refused-review", RecoveryDirective{Action: RecoveryActionRecheck},
-	); err != nil {
-		t.Fatalf("recheck review: %v", err)
-	}
-	request := fixture.expectReviewRetryAccepted(t, retryID)
-	if !strings.Contains(request.Instructions, "Commitarium's correction:") {
-		t.Fatalf("the reviewer's new try was not Commitarium's correction:\n%s", request.Instructions)
-	}
 }
 
 func TestContinueAloneChecksAReviewRefusedForAnotherReasonAgain(t *testing.T) {

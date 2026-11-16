@@ -484,7 +484,6 @@ func (service *Service) finishAttempt(
 	}
 	terminalResult.GoalDraft = result.GoalDraft
 	terminalResult.ImplementationPlan = result.ImplementationPlan
-	terminalResult.AcceptanceTests = result.AcceptanceTests
 	terminalResult.HandoffBrief = result.HandoffBrief
 	terminalResult.SessionTitle = result.SessionTitle
 	terminalResult.VisionPlan = result.VisionPlan

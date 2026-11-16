@@ -112,7 +112,6 @@ func (s *MemoryStore) UpdateReadySettings(_ context.Context, chosen Feature) err
 	}
 	stored.AgentProviders, stored.AgentModels = chosen.AgentProviders, chosen.AgentModels
 	stored.MergePolicy, stored.AutonomyPolicy = chosen.MergePolicy, chosen.AutonomyPolicy
-	stored.IndependentAcceptanceTests = chosen.IndependentAcceptanceTests
 	stored.Steps = chosen.Steps
 	s.features[chosen.ID] = stored
 	return nil

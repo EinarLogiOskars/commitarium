@@ -3152,109 +3152,15 @@ func TestImplementationReviewInstructionsUseForgejoApprovalEvent(t *testing.T) {
 	}
 }
 
-func TestIndependentAcceptanceInstructionsKeepAuthoringBlindAndReviewLocal(t *testing.T) {
-	authoring := acceptanceTestsInstructions(
-		workspace.Workspace{RepositoryOwner: "owner", RepositoryName: "repo", BaseBranch: "main", BaseCommitID: strings.Repeat("a", 40)},
-	)
-	for _, required := range []string{"Do not fetch", "do not push", "private checkout", "exact local test commit ID"} {
-		if !strings.Contains(authoring, required) {
-			t.Fatalf("acceptance authoring instructions omit %q: %q", required, authoring)
-		}
-	}
-	review := implementationReviewInstructions(
-		workspace.Workspace{}, "summary",
-		strings.Repeat("b", 40), "attempt", "", false, strings.Repeat("c", 40),
-	)
-	for _, required := range []string{"Reset this disposable private checkout", "merge that exact commit locally", "acceptance start <test-id>", "acceptance not-applicable <test-id> <note>", "Never push your private test commit"} {
-		if !strings.Contains(review, required) {
-			t.Fatalf("acceptance review instructions omit %q: %q", required, review)
-		}
-	}
-}
-
-func TestAcceptanceResultsMustFinishBeforeReviewCanAdvance(t *testing.T) {
-	commitID := strings.Repeat("b", 40)
-	tests := featureartifact.AcceptanceTests{
-		PlanVersion: 1, TestCommitID: strings.Repeat("a", 40), ImplementationCommitID: commitID,
-		Tests: []featureartifact.AcceptanceTest{{
-			ID: "exports-csv", Position: 1, Title: "Exports visible rows", Status: featureartifact.AcceptanceTestPending,
-		}},
-	}
-	if err := validateAcceptanceReviewResults(tests, 1, commitID, workerhttp.DispositionSucceeded); err == nil {
-		t.Fatal("pending acceptance test allowed an approved review")
-	}
-	tests.Tests[0].Status = featureartifact.AcceptanceTestFailed
-	tests.Tests[0].Note = "hidden rows were exported"
-	if err := validateAcceptanceReviewResults(tests, 1, commitID, workerhttp.DispositionSucceeded); err == nil {
-		t.Fatal("failed acceptance test allowed an approved review")
-	}
-	if err := validateAcceptanceReviewResults(tests, 1, commitID, workerhttp.DispositionChangesRequested); err != nil {
-		t.Fatalf("failed acceptance test did not support requested changes: %v", err)
-	}
-	tests.Tests[0].Status = featureartifact.AcceptanceTestNotApplicable
-	if err := validateAcceptanceReviewResults(tests, 1, commitID, workerhttp.DispositionSucceeded); err != nil {
-		t.Fatalf("justified not-applicable test blocked approval: %v", err)
-	}
-}
-
-func TestDurableAcceptanceTestsReconcileIncompleteProviderResult(t *testing.T) {
-	testCommitID := strings.Repeat("a", 40)
-	tests := featureartifact.AcceptanceTests{
-		PlanVersion:  1,
-		TestCommitID: testCommitID,
-		Tests: []featureartifact.AcceptanceTest{{
-			ID: "exports-csv", Position: 1, Title: "Exports visible rows",
-			Status: featureartifact.AcceptanceTestPending,
-		}},
-	}
-	document, err := json.Marshal(tests)
-	if err != nil {
-		t.Fatalf("encode acceptance tests: %v", err)
-	}
-	starter := &RemoteLeadStarter{artifacts: recoveryArtifactStub{artifact: workflow.FeatureArtifact{
-		FeatureID: "fea_recovery", Kind: featureartifact.KindAcceptanceTests,
-		Revision: 1, Document: string(document),
-		Actor:     workflow.Actor{Kind: workflow.ActorKindAgent, ID: "reviewer"},
-		UpdatedAt: time.Now().UTC(),
-	}}}
-	reviewer := execution.Session{ID: "run_recovery:reviewer", ProviderSessionID: "claude_session"}
-	checkpoint := execution.WorkerAttemptCheckpoint{
-		SessionID: reviewer.ID, AttemptID: reviewer.ID + ":acceptance:1:turn:1", LastEventSequence: 25,
-	}
-	attempt := workerhttp.Attempt{
-		AttemptReference:  workerhttp.AttemptReference{SessionID: reviewer.ID, AttemptID: checkpoint.AttemptID},
-		ProviderSessionID: reviewer.ProviderSessionID, State: workerhttp.AttemptStateTerminal,
-		LatestEventSequence: checkpoint.LastEventSequence,
-		Result: &workerhttp.TerminalResult{
-			Outcome: workerhttp.OutcomeFailed,
-			Summary: "provider process ended without a structured result",
-			Error:   &workerhttp.ProtocolError{Code: workerhttp.ErrorIncompleteResult, Message: "missing structured_output", Retryable: true},
-		},
-	}
-	got, found, err := starter.durableAcceptanceTests(
-		t.Context(), execution.Run{FeatureID: "fea_recovery", PlanVersion: 1}, reviewer, checkpoint, attempt,
-	)
-	if err != nil || !found || got.TestCommitID != testCommitID {
-		t.Fatalf("reconciled acceptance tests=%+v found=%t error=%v", got, found, err)
-	}
-
-	starter.artifacts = recoveryArtifactStub{err: workflow.ErrArtifactNotFound}
-	if _, found, err := starter.durableAcceptanceTests(
-		t.Context(), execution.Run{FeatureID: "fea_recovery", PlanVersion: 1}, reviewer, checkpoint, attempt,
-	); err != nil || found {
-		t.Fatalf("private commit without manifest found=%t error=%v", found, err)
-	}
-}
-
 func TestRecoverySuccessorPreservesWorkflowLaneAndClassifiesResumeFailure(t *testing.T) {
-	sessionID := "run_recovery:reviewer"
-	first := acceptanceTestsAttemptForVersion(sessionID, 2)
+	sessionID := "run_recovery:lead"
+	first := workflowAttemptForVersion(sessionID, "implementation", 2, 1)
 	second, err := recoverySuccessorAttemptID(sessionID, first)
-	if err != nil || second != workflowAttemptForVersion(sessionID, "acceptance", 2, 2) {
-		t.Fatalf("acceptance successor=%q error=%v", second, err)
+	if err != nil || second != workflowAttemptForVersion(sessionID, "implementation", 2, 2) {
+		t.Fatalf("implementation successor=%q error=%v", second, err)
 	}
 	third, err := recoverySuccessorAttemptID(sessionID, second)
-	if err != nil || third != workflowAttemptForVersion(sessionID, "acceptance", 2, 3) {
+	if err != nil || third != workflowAttemptForVersion(sessionID, "implementation", 2, 3) {
 		t.Fatalf("fresh fallback successor=%q error=%v", third, err)
 	}
 	failed := workerhttp.Attempt{State: workerhttp.AttemptStateTerminal, Result: &workerhttp.TerminalResult{

@@ -69,7 +69,6 @@ func (s *FeatureStore) Create(
 				reviewer_model,
 				merge_policy,
 				autonomy_policy,
-				independent_acceptance_tests,
 				skip_plan,
 				skip_reviewer,
 				skip_code_review,
@@ -80,7 +79,7 @@ func (s *FeatureStore) Create(
 				created_at,
 				updated_at
 			)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(id) DO NOTHING
 		`,
 		createdFeature.ID,
@@ -100,7 +99,6 @@ func (s *FeatureStore) Create(
 		createdFeature.AgentModels.Reviewer,
 		createdFeature.MergePolicy,
 		createdFeature.AutonomyPolicy,
-		createdFeature.IndependentAcceptanceTests,
 		createdFeature.Steps.SkipPlan,
 		createdFeature.Steps.SkipReviewer,
 		createdFeature.Steps.SkipCodeReview,
@@ -168,7 +166,6 @@ func (s *FeatureStore) GetByID(
 				reviewer_model,
 				merge_policy,
 				autonomy_policy,
-				independent_acceptance_tests,
 				skip_plan,
 				skip_reviewer,
 				skip_code_review,
@@ -223,7 +220,6 @@ func (s *FeatureStore) ListByProjectID(
 				reviewer_model,
 				merge_policy,
 				autonomy_policy,
-				independent_acceptance_tests,
 				skip_plan,
 				skip_reviewer,
 				skip_code_review,
@@ -288,7 +284,6 @@ func scanFeature(row featureScanner) (feature.Feature, error) {
 		&storedFeature.AgentModels.Reviewer,
 		&storedFeature.MergePolicy,
 		&storedFeature.AutonomyPolicy,
-		&storedFeature.IndependentAcceptanceTests,
 		&storedFeature.Steps.SkipPlan,
 		&storedFeature.Steps.SkipReviewer,
 		&storedFeature.Steps.SkipCodeReview,
@@ -386,12 +381,12 @@ func (s *FeatureStore) UpdateReadySettings(ctx context.Context, chosen feature.F
 		`UPDATE features
 		    SET lead_provider = ?, reviewer_provider = ?, lead_agent = ?, reviewer_agent = ?,
 		        lead_model = ?, reviewer_model = ?, merge_policy = ?, autonomy_policy = ?,
-		        independent_acceptance_tests = ?, skip_plan = ?, skip_reviewer = ?, skip_code_review = ?
+		        skip_plan = ?, skip_reviewer = ?, skip_code_review = ?
 		  WHERE id = ? AND state = ?`,
 		storedProvider(chosen.AgentProviders.Lead), storedProvider(chosen.AgentProviders.Reviewer),
 		chosen.AgentProviders.LeadAgent, chosen.AgentProviders.ReviewerAgent,
 		chosen.AgentModels.Lead, chosen.AgentModels.Reviewer,
-		chosen.MergePolicy, chosen.AutonomyPolicy, chosen.IndependentAcceptanceTests,
+		chosen.MergePolicy, chosen.AutonomyPolicy,
 		chosen.Steps.SkipPlan, chosen.Steps.SkipReviewer, chosen.Steps.SkipCodeReview,
 		chosen.ID, feature.StateReady,
 	)

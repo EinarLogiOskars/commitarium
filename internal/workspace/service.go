@@ -1135,7 +1135,7 @@ func (service *Service) PrepareReplanningBaseline(
 		if !ok {
 			return Workspace{}, "", ErrCheckoutUnavailable
 		}
-		// A prior private review may have a local test commit or merge. Replanning
+		// A prior review may have left local changes in its checkout. Replanning
 		// deliberately discards that disposable state and recreates the reviewer
 		// checkout from the exact preserved feature-branch commit.
 		if err := disposable.Remove(ctx, stored.ID); err != nil {

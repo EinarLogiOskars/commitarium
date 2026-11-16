@@ -602,7 +602,6 @@ func (session *session) completedItem(item threadItem) ([]worker.Event, error) {
 		if session.outputContract == worker.OutputContractGoalClarification ||
 			session.outputContract == worker.OutputContractPlanningLead ||
 			session.outputContract == worker.OutputContractImplementationLead ||
-			session.outputContract == worker.OutputContractAcceptanceTests ||
 			session.outputContract == worker.OutputContractImplementationReview ||
 			session.outputContract == worker.OutputContractImplementationReadiness ||
 			session.outputContract == worker.OutputContractIntervention ||
@@ -794,7 +793,6 @@ func (session *session) completedTurn(
 		result.EnvironmentRequest = resolved.EnvironmentRequest
 		result.GoalDraft = resolved.GoalDraft
 		result.ImplementationPlan = resolved.ImplementationPlan
-		result.AcceptanceTests = resolved.AcceptanceTests
 		result.HandoffBrief = resolved.HandoffBrief
 		result.SessionTitle = resolved.SessionTitle
 		result.VisionPlan = resolved.VisionPlan

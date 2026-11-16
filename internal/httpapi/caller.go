@@ -81,7 +81,6 @@ func bearer(r *http.Request) (string, bool) {
 //
 //	GET  /api/v1/projects/{p}/features/{f}/artifacts/{kind}
 //	POST /api/v1/projects/{p}/features/{f}/implementation-plan/steps/{s}/transitions
-//	POST /api/v1/projects/{p}/features/{f}/acceptance-tests/{t}/transitions
 func runRoute(r *http.Request) (string, string, bool) {
 	if r.URL.RawPath != "" {
 		// The mux matches the escaped path, where an encoded slash stays
@@ -102,7 +101,6 @@ func runRoute(r *http.Request) (string, string, bool) {
 	case r.Method == http.MethodGet && len(rest) == 2 && rest[0] == "artifacts":
 	case r.Method == http.MethodPost && len(rest) == 4 && rest[0] == "implementation-plan" &&
 		rest[1] == "steps" && rest[3] == "transitions":
-	case r.Method == http.MethodPost && len(rest) == 3 && rest[0] == "acceptance-tests" && rest[2] == "transitions":
 	default:
 		return "", "", false
 	}

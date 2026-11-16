@@ -7,21 +7,20 @@ import (
 )
 
 type Feature struct {
-	ID                         string
-	ProjectID                  string
-	Title                      string
-	Description                string
-	State                      State
-	AcceptedGoal               string
-	GoalAcceptedAt             *time.Time
-	DialogueLimits             project.DialogueLimits
-	AgentProviders             project.AgentProviders
-	AgentModels                project.AgentModels
-	MergePolicy                project.MergePolicy
-	AutonomyPolicy             project.AutonomyPolicy
-	IndependentAcceptanceTests bool
-	Steps                      project.WorkSteps
-	Kind                       Kind
+	ID             string
+	ProjectID      string
+	Title          string
+	Description    string
+	State          State
+	AcceptedGoal   string
+	GoalAcceptedAt *time.Time
+	DialogueLimits project.DialogueLimits
+	AgentProviders project.AgentProviders
+	AgentModels    project.AgentModels
+	MergePolicy    project.MergePolicy
+	AutonomyPolicy project.AutonomyPolicy
+	Steps          project.WorkSteps
+	Kind           Kind
 	// Background marks a work order Commitarium started by itself, such as
 	// the preview setup; it is not listed with the user's work.
 	Background bool
@@ -61,13 +60,12 @@ func (kind Kind) IsValid() bool {
 // SettingsOverrides contains the optional setting categories supplied when a
 // work order is created. A nil category inherits the project's current value.
 type SettingsOverrides struct {
-	DialogueLimits             *project.DialogueLimits
-	AgentProviders             *project.AgentProviders
-	AgentModels                *project.AgentModels
-	MergePolicy                *project.MergePolicy
-	AutonomyPolicy             *project.AutonomyPolicy
-	IndependentAcceptanceTests *bool
-	Steps                      *project.WorkSteps
+	DialogueLimits *project.DialogueLimits
+	AgentProviders *project.AgentProviders
+	AgentModels    *project.AgentModels
+	MergePolicy    *project.MergePolicy
+	AutonomyPolicy *project.AutonomyPolicy
+	Steps          *project.WorkSteps
 	// PhaseChoices are the optional planning models and efforts (ADR-031).
 	PhaseChoices *project.PhaseChoices
 	// Kind is the kind of work to create; empty is a work order. A session

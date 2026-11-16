@@ -54,7 +54,6 @@ type Run struct {
 	AgentModels                    project.AgentModels
 	MergePolicy                    project.MergePolicy
 	AutonomyPolicy                 project.AutonomyPolicy
-	IndependentAcceptanceTests     bool
 	// Steps are the optional work-order steps this run skips (ADR-018).
 	Steps       project.WorkSteps
 	PlanVersion int

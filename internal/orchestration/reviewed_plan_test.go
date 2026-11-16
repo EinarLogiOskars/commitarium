@@ -18,7 +18,7 @@ import (
 // TestRemoteLeadReviewedPlanSkipsCodeReview runs a "Reviewed plan" work order
 // (ADR-031) from Start to merge: the lead and the reviewer agree a plan as in
 // a full run, the lead implements, and the verified publication goes straight
-// to the merge gate without acceptance tests, code review, or readiness.
+// to the merge gate without code review or readiness.
 func TestRemoteLeadReviewedPlanSkipsCodeReview(t *testing.T) {
 	db, executions, storedProject, storedFeature := newRemoteLeadExecution(t)
 	storedProject, err := database.NewProjectStore(db).UpdateAutonomyPolicy(
@@ -105,7 +105,6 @@ func TestRemoteLeadReviewedPlanSkipsCodeReview(t *testing.T) {
 	for _, request := range requests {
 		switch request.OutputContract {
 		case workerhttp.OutputContractImplementationReview,
-			workerhttp.OutputContractAcceptanceTests,
 			workerhttp.OutputContractImplementationReadiness:
 			t.Fatalf("a reviewed-plan run sent a %s turn", request.OutputContract)
 		case workerhttp.OutputContractPlanApproval:

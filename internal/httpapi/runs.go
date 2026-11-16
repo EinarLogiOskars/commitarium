@@ -24,30 +24,29 @@ import (
 )
 
 type runResponse struct {
-	ID                         string                       `json:"id"`
-	FeatureID                  string                       `json:"feature_id"`
-	Status                     execution.RunStatus          `json:"status"`
-	Reason                     string                       `json:"reason,omitempty"`
-	WaitKind                   execution.RunWaitKind        `json:"wait_kind,omitempty"`
-	Paused                     bool                         `json:"paused"`
-	DialogueLimits             dialogueLimitsResponse       `json:"dialogue_limits"`
-	AgentProviders             agentProvidersResponse       `json:"agent_providers"`
-	AgentModels                agentModelsResponse          `json:"agent_models"`
-	MergePolicy                project.MergePolicy          `json:"merge_policy"`
-	AutonomyPolicy             project.AutonomyPolicy       `json:"autonomy_policy"`
-	IndependentAcceptanceTests bool                         `json:"independent_acceptance_tests"`
-	PlanVersion                int                          `json:"plan_version"`
-	StartedAt                  time.Time                    `json:"started_at"`
-	UpdatedAt                  time.Time                    `json:"updated_at"`
-	EndedAt                    *time.Time                   `json:"ended_at,omitempty"`
-	Sessions                   []sessionResponse            `json:"sessions"`
-	InterventionTargets        []interventionTargetResponse `json:"intervention_targets"`
-	Intervention               *interventionResponse        `json:"intervention,omitempty"`
-	Recovery                   *recoveryResponse            `json:"recovery,omitempty"`
-	LoginRequired              *loginRequiredResponse       `json:"login_required,omitempty"`
-	UsageLimit                 *usageLimitResponse          `json:"usage_limit,omitempty"`
-	Retrying                   *retryingResponse            `json:"retrying,omitempty"`
-	Steps                      workStepsResponse            `json:"steps"`
+	ID                  string                       `json:"id"`
+	FeatureID           string                       `json:"feature_id"`
+	Status              execution.RunStatus          `json:"status"`
+	Reason              string                       `json:"reason,omitempty"`
+	WaitKind            execution.RunWaitKind        `json:"wait_kind,omitempty"`
+	Paused              bool                         `json:"paused"`
+	DialogueLimits      dialogueLimitsResponse       `json:"dialogue_limits"`
+	AgentProviders      agentProvidersResponse       `json:"agent_providers"`
+	AgentModels         agentModelsResponse          `json:"agent_models"`
+	MergePolicy         project.MergePolicy          `json:"merge_policy"`
+	AutonomyPolicy      project.AutonomyPolicy       `json:"autonomy_policy"`
+	PlanVersion         int                          `json:"plan_version"`
+	StartedAt           time.Time                    `json:"started_at"`
+	UpdatedAt           time.Time                    `json:"updated_at"`
+	EndedAt             *time.Time                   `json:"ended_at,omitempty"`
+	Sessions            []sessionResponse            `json:"sessions"`
+	InterventionTargets []interventionTargetResponse `json:"intervention_targets"`
+	Intervention        *interventionResponse        `json:"intervention,omitempty"`
+	Recovery            *recoveryResponse            `json:"recovery,omitempty"`
+	LoginRequired       *loginRequiredResponse       `json:"login_required,omitempty"`
+	UsageLimit          *usageLimitResponse          `json:"usage_limit,omitempty"`
+	Retrying            *retryingResponse            `json:"retrying,omitempty"`
+	Steps               workStepsResponse            `json:"steps"`
 	// Blocker says what blocks a run waiting on one, and Recoveries what has
 	// been tried on it (ADR-032).
 	Blocker    *blockerResponse  `json:"blocker,omitempty"`
@@ -232,12 +231,11 @@ type interventionResponse struct {
 // startRunRequest holds the settings a work order starts with. Every field
 // is optional and falls back to the work order's current settings.
 type startRunRequest struct {
-	AgentProviders             *agentProvidersRequest  `json:"agent_providers"`
-	AgentModels                *agentModelsRequest     `json:"agent_models"`
-	AutonomyPolicy             *project.AutonomyPolicy `json:"autonomy_policy"`
-	MergePolicy                *project.MergePolicy    `json:"merge_policy"`
-	IndependentAcceptanceTests *bool                   `json:"independent_acceptance_tests"`
-	Steps                      *workStepsRequest       `json:"steps"`
+	AgentProviders *agentProvidersRequest  `json:"agent_providers"`
+	AgentModels    *agentModelsRequest     `json:"agent_models"`
+	AutonomyPolicy *project.AutonomyPolicy `json:"autonomy_policy"`
+	MergePolicy    *project.MergePolicy    `json:"merge_policy"`
+	Steps          *workStepsRequest       `json:"steps"`
 	// PhaseChoices are the optional planning models and efforts (ADR-031).
 	PhaseChoices *project.PhaseChoices `json:"phase_choices"`
 }
@@ -379,7 +377,6 @@ func (api *API) chooseStartSettings(
 	}
 	overrides.MergePolicy = request.MergePolicy
 	overrides.AutonomyPolicy = request.AutonomyPolicy
-	overrides.IndependentAcceptanceTests = request.IndependentAcceptanceTests
 	if request.Steps != nil {
 		steps := storedFeature.Steps
 		if request.Steps.DocumentedPlan != nil {
@@ -580,10 +577,9 @@ func (api *API) newRunResponse(
 			Lead: run.AgentModels.Lead, Reviewer: run.AgentModels.Reviewer,
 		},
 		MergePolicy: run.MergePolicy, AutonomyPolicy: run.AutonomyPolicy,
-		IndependentAcceptanceTests: run.IndependentAcceptanceTests,
-		Steps:                      newWorkStepsResponse(run.Steps),
-		PlanVersion:                run.PlanVersion,
-		StartedAt:                  run.StartedAt, UpdatedAt: run.UpdatedAt,
+		Steps:       newWorkStepsResponse(run.Steps),
+		PlanVersion: run.PlanVersion,
+		StartedAt:   run.StartedAt, UpdatedAt: run.UpdatedAt,
 		EndedAt: run.EndedAt, Sessions: make([]sessionResponse, 0, len(sessions)),
 		InterventionTargets: make([]interventionTargetResponse, 0),
 	}

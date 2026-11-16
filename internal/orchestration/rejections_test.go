@@ -3,12 +3,9 @@ package orchestration
 import (
 	"errors"
 	"fmt"
-	"strings"
 	"testing"
 
 	"github.com/EinarLogiOskars/commitarium/internal/execution"
-	"github.com/EinarLogiOskars/commitarium/internal/featureartifact"
-	"github.com/EinarLogiOskars/commitarium/internal/workerhttp"
 	"github.com/EinarLogiOskars/commitarium/internal/workspace"
 )
 
@@ -49,30 +46,5 @@ func TestRejectPublicationMarksAgentFixableFailures(t *testing.T) {
 		if errors.As(rejectPublication(cause), &rejection) {
 			t.Errorf("%v was marked agent-fixable", cause)
 		}
-	}
-}
-
-// A review refused for its acceptance results keeps one fingerprint whichever
-// test it names, and says how to put it right.
-func TestAcceptanceRefusalsSayWhatToFix(t *testing.T) {
-	tests := func(commit string, status featureartifact.AcceptanceTestStatus, id string) featureartifact.AcceptanceTests {
-		return featureartifact.AcceptanceTests{
-			PlanVersion: 1, TestCommitID: "1111111111111111111111111111111111111111", ImplementationCommitID: commit,
-			Tests: []featureartifact.AcceptanceTest{{ID: id, Position: 1, Title: "t", Status: status}},
-		}
-	}
-	const reviewed, other = "2222222222222222222222222222222222222222", "3333333333333333333333333333333333333333"
-	first := validateAcceptanceReviewResults(tests(reviewed, featureartifact.AcceptanceTestPending, "one"), 1, reviewed, workerhttp.DispositionSucceeded)
-	second := validateAcceptanceReviewResults(tests(reviewed, featureartifact.AcceptanceTestRunning, "two"), 1, reviewed, workerhttp.DispositionSucceeded)
-	if first == nil || second == nil || blockerFingerprintDetail(first) != blockerFingerprintDetail(second) {
-		t.Fatalf("incomplete results: %v, %v", first, second)
-	}
-	if kind, _ := classifyCause(first); kind != execution.BlockerAgent {
-		t.Fatalf("incomplete results kind = %s", kind)
-	}
-	moved := validateAcceptanceReviewResults(tests(other, featureartifact.AcceptanceTestPassed, "one"), 1, reviewed, workerhttp.DispositionSucceeded)
-	if moved == nil || !errors.Is(moved, errAcceptanceResultsCommit) ||
-		!strings.Contains(moved.Error(), "review commit "+other) {
-		t.Fatalf("results of another commit: %v", moved)
 	}
 }

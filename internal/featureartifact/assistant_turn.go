@@ -225,9 +225,6 @@ type AssistantAction struct {
 	// Steps is "full", "reviewed_plan", "planned", or "quick" (ADR-018,
 	// ADR-031).
 	Steps string `json:"steps"`
-	// IndependentTests is ignored: independent acceptance tests are no
-	// longer written (ADR-031). Kept so older stored actions still decode.
-	IndependentTests bool `json:"independent_tests,omitempty"`
 	// Agents and models, for create, start, and change: the assistant's
 	// choice (ADR-027). Empty keeps the work order's own choice or the run's
 	// current one; a project has no defaults.

@@ -178,8 +178,7 @@ func (starter *RemoteLeadStarter) clearRetryWait(ctx context.Context, runID stri
 }
 
 // turnEnded forgets the retries of a session's turn that ended for a reason
-// of its own: completed, or blocked. Another session's retry (the parallel
-// reviewer's) stays.
+// of its own: completed, or blocked. Another session's retry stays.
 func (starter *RemoteLeadStarter) turnEnded(ctx context.Context, runID, sessionID string) {
 	waits, ok := starter.executions.(remoteLeadRetryWaits)
 	if !ok || ctx.Err() != nil {

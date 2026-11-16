@@ -33,7 +33,6 @@ func guarded(t *testing.T) (Callers, http.Handler, *int) {
 		"GET /api/v1/projects/{projectID}/features/{id}/artifacts/{kind}",
 		"PUT /api/v1/projects/{projectID}/features/{id}/artifacts/{kind}",
 		"POST /api/v1/projects/{projectID}/features/{id}/implementation-plan/steps/{stepID}/transitions",
-		"POST /api/v1/projects/{projectID}/features/{id}/acceptance-tests/{testID}/transitions",
 	} {
 		mux.HandleFunc(pattern, func(w http.ResponseWriter, _ *http.Request) {
 			reached++
@@ -85,7 +84,7 @@ func TestTheOwnerTokenOpensEverything(t *testing.T) {
 	}
 }
 
-func TestARunTokenOpensOnlyItsOwnWorkOrdersPlanAndTests(t *testing.T) {
+func TestARunTokenOpensOnlyItsOwnWorkOrdersPlan(t *testing.T) {
 	callers, handler, _ := guarded(t)
 	token := callers.RunToken("prj_a", "ftr_b")
 	if token == callers.RunToken("prj_a", "ftr_c") || token == testOwnerToken {
@@ -94,7 +93,6 @@ func TestARunTokenOpensOnlyItsOwnWorkOrdersPlanAndTests(t *testing.T) {
 	for _, route := range []struct{ method, path string }{
 		{http.MethodGet, "/api/v1/projects/prj_a/features/ftr_b/artifacts/implementation_plan"},
 		{http.MethodPost, "/api/v1/projects/prj_a/features/ftr_b/implementation-plan/steps/s1/transitions"},
-		{http.MethodPost, "/api/v1/projects/prj_a/features/ftr_b/acceptance-tests/t1/transitions"},
 	} {
 		if code := call(handler, route.method, route.path, token); code != http.StatusNoContent {
 			t.Errorf("%s %s with its run token: %d", route.method, route.path, code)
@@ -109,9 +107,11 @@ func TestARunTokenOpensOnlyItsOwnWorkOrdersPlanAndTests(t *testing.T) {
 		{http.MethodPost, "/api/v1/assistant/conversations/prj_a/actions/act_1/approve"},
 		{http.MethodGet, "/api/v1/projects/prj_a/features/ftr_b/artifacts/.."},
 		{http.MethodHead, "/api/v1/projects/prj_a/features/ftr_b/artifacts/implementation_plan"},
+		// The acceptance-test route is gone, and its old path opens nothing.
+		{http.MethodPost, "/api/v1/projects/prj_a/features/ftr_b/acceptance-tests/t1/transitions"},
 		// An encoded slash stays in one segment for the mux, so these reach
 		// other routes than they seem to.
-		{http.MethodPost, "/api/v1/projects/prj_a/features/ftr_b%2Facceptance-tests%2Ft1/transitions"},
+		{http.MethodPost, "/api/v1/projects/prj_a/features/ftr_b%2Fimplementation-plan%2Fsteps%2Fs1/transitions"},
 		{http.MethodGet, "/api/v1/projects/prj_a/features/ftr_b%2Fartifacts%2Fx"},
 		{http.MethodGet, "/api/v1/projects/prj_a%2Ffeatures%2Fftr_b%2Fartifacts%2Fx"},
 	} {

@@ -87,8 +87,6 @@ func attemptPhase(sessionID, attemptID string) string {
 		return "plan_approval"
 	case "implementation":
 		return "implement"
-	case "acceptance":
-		return "acceptance_tests"
 	case "review":
 		return "review"
 	case "correction":
@@ -104,8 +102,8 @@ func attemptPhase(sessionID, attemptID string) string {
 
 // phaseOrder keeps the breakdown in workflow order rather than first-use order.
 var phaseOrder = map[string]int{
-	"clarify": 0, "plan": 1, "plan_approval": 2, "implement": 3, "acceptance_tests": 4,
-	"review": 5, "correction": 6, "readiness": 7, "intervention": 8, "other": 9,
+	"clarify": 0, "plan": 1, "plan_approval": 2, "implement": 3,
+	"review": 4, "correction": 5, "readiness": 6, "intervention": 7, "other": 8,
 }
 
 func (api *API) getFeatureUsageHandler(w http.ResponseWriter, r *http.Request) {

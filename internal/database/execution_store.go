@@ -55,9 +55,9 @@ func (s *ExecutionStore) CreateRun(ctx context.Context, run execution.Run) error
 		`INSERT INTO runs (
 			id, feature_id, status, reason, wait_kind, paused, paused_from_wait_kind,
 			planning_round_limit, implementation_review_round_limit,
-			lead_provider, reviewer_provider, lead_agent, reviewer_agent, lead_model, reviewer_model, merge_policy, autonomy_policy, independent_acceptance_tests, skip_plan, skip_reviewer, skip_code_review, plan_version,
+			lead_provider, reviewer_provider, lead_agent, reviewer_agent, lead_model, reviewer_model, merge_policy, autonomy_policy, skip_plan, skip_reviewer, skip_code_review, plan_version,
 			started_at, updated_at, ended_at
-		 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(id) DO NOTHING`,
 		run.ID,
 		run.FeatureID,
@@ -76,7 +76,6 @@ func (s *ExecutionStore) CreateRun(ctx context.Context, run execution.Run) error
 		run.AgentModels.Reviewer,
 		run.MergePolicy,
 		run.AutonomyPolicy,
-		run.IndependentAcceptanceTests,
 		run.Steps.SkipPlan,
 		run.Steps.SkipReviewer,
 		run.Steps.SkipCodeReview,
@@ -99,7 +98,7 @@ func (s *ExecutionStore) GetRun(
 		ctx,
 		`SELECT id, feature_id, status, reason, wait_kind, paused, paused_from_wait_kind,
 		        planning_round_limit, implementation_review_round_limit,
-		        lead_provider, reviewer_provider, lead_agent, reviewer_agent, lead_model, reviewer_model, merge_policy, autonomy_policy, independent_acceptance_tests, skip_plan, skip_reviewer, skip_code_review, plan_version,
+		        lead_provider, reviewer_provider, lead_agent, reviewer_agent, lead_model, reviewer_model, merge_policy, autonomy_policy, skip_plan, skip_reviewer, skip_code_review, plan_version,
 		        started_at, updated_at, ended_at
 		 FROM runs WHERE id = ?`,
 		id,
@@ -121,7 +120,7 @@ func (s *ExecutionStore) ListRunsByFeatureID(
 		ctx,
 		`SELECT id, feature_id, status, reason, wait_kind, paused, paused_from_wait_kind,
 		        planning_round_limit, implementation_review_round_limit,
-		        lead_provider, reviewer_provider, lead_agent, reviewer_agent, lead_model, reviewer_model, merge_policy, autonomy_policy, independent_acceptance_tests, skip_plan, skip_reviewer, skip_code_review, plan_version,
+		        lead_provider, reviewer_provider, lead_agent, reviewer_agent, lead_model, reviewer_model, merge_policy, autonomy_policy, skip_plan, skip_reviewer, skip_code_review, plan_version,
 		        started_at, updated_at, ended_at
 		 FROM runs
 		 WHERE feature_id = ?
@@ -169,7 +168,7 @@ func (s *ExecutionStore) TransitionRun(
 		ctx,
 		`SELECT id, feature_id, status, reason, wait_kind, paused, paused_from_wait_kind,
 		        planning_round_limit, implementation_review_round_limit,
-		        lead_provider, reviewer_provider, lead_agent, reviewer_agent, lead_model, reviewer_model, merge_policy, autonomy_policy, independent_acceptance_tests, skip_plan, skip_reviewer, skip_code_review, plan_version,
+		        lead_provider, reviewer_provider, lead_agent, reviewer_agent, lead_model, reviewer_model, merge_policy, autonomy_policy, skip_plan, skip_reviewer, skip_code_review, plan_version,
 		        started_at, updated_at, ended_at
 		 FROM runs WHERE id = ?`,
 		transition.RunID,
@@ -344,7 +343,7 @@ func (s *ExecutionStore) ListRecoverableRuns(
 		ctx,
 		`SELECT r.id, r.feature_id, r.status, r.reason, r.wait_kind, r.paused, r.paused_from_wait_kind,
 		        r.planning_round_limit, r.implementation_review_round_limit,
-		        r.lead_provider, r.reviewer_provider, r.lead_agent, r.reviewer_agent, r.lead_model, r.reviewer_model, r.merge_policy, r.autonomy_policy, r.independent_acceptance_tests, r.skip_plan, r.skip_reviewer, r.skip_code_review, r.plan_version,
+		        r.lead_provider, r.reviewer_provider, r.lead_agent, r.reviewer_agent, r.lead_model, r.reviewer_model, r.merge_policy, r.autonomy_policy, r.skip_plan, r.skip_reviewer, r.skip_code_review, r.plan_version,
 		        r.started_at, r.updated_at, r.ended_at
 		 FROM runs r
 		 WHERE NOT EXISTS (
@@ -910,7 +909,6 @@ func scanExecutionRun(scanner executionScanner) (execution.Run, error) {
 		&run.AgentModels.Reviewer,
 		&run.MergePolicy,
 		&run.AutonomyPolicy,
-		&run.IndependentAcceptanceTests,
 		&run.Steps.SkipPlan,
 		&run.Steps.SkipReviewer,
 		&run.Steps.SkipCodeReview,

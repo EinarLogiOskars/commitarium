@@ -224,8 +224,8 @@ const usageTime = "Jan 2 15:04 UTC"
 
 func (describer StateDescriber) writeProject(ctx context.Context, builder *strings.Builder, current project.Project) {
 	builder.WriteString(fmt.Sprintf("\n## This project: %s (%s)\n", current.Name, current.ID))
-	builder.WriteString(fmt.Sprintf("Defaults: merge %s; autonomy %s; independent tests %t.\n",
-		current.MergePolicy, current.AutonomyPolicy, current.IndependentAcceptanceTests))
+	builder.WriteString(fmt.Sprintf("Defaults: merge %s; autonomy %s.\n",
+		current.MergePolicy, current.AutonomyPolicy))
 	// Her say (ADR-041): the level the user sees, and her own words.
 	builder.WriteString("How much you do here (your say): " + sayLevel(current.BuildsEverything()) + ".")
 	if describer.Say != nil {

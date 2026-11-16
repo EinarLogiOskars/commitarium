@@ -154,7 +154,7 @@ type PutAttemptRequest struct {
 	// directory: the screenshots attached to the user's message.
 	Images []string `json:"images,omitempty"`
 	// RunToken lets the turn's agent move its own work order's plan steps
-	// and acceptance tests through the coordinator, and nothing else
+	// through the coordinator, and nothing else
 	// (COORDINATOR_ACCESS_PLAN.md). The coordinator's client fills it in.
 	RunToken string `json:"run_token,omitempty"`
 }
@@ -172,7 +172,6 @@ const (
 	OutputContractPlanningLead            OutputContract = "planning_lead"
 	OutputContractGoalClarification       OutputContract = "goal_clarification"
 	OutputContractImplementationLead      OutputContract = "implementation_lead"
-	OutputContractAcceptanceTests         OutputContract = "acceptance_tests"
 	OutputContractImplementationReview    OutputContract = "implementation_reviewer"
 	OutputContractImplementationReadiness OutputContract = "implementation_lead_readiness"
 	OutputContractPlanApproval            OutputContract = "plan_approval"
@@ -231,7 +230,6 @@ type TerminalResult struct {
 	ToolchainProposal  *ToolchainProposal                  `json:"toolchain_proposal,omitempty"`
 	GoalDraft          *featureartifact.GoalDraft          `json:"goal_draft,omitempty"`
 	ImplementationPlan *featureartifact.ImplementationPlan `json:"implementation_plan,omitempty"`
-	AcceptanceTests    *featureartifact.AcceptanceTests    `json:"acceptance_tests,omitempty"`
 	EnvironmentRequest *EnvironmentRequest                 `json:"environment_request,omitempty"`
 	HandoffBrief       *featureartifact.HandoffBrief       `json:"handoff_brief,omitempty"`
 	SessionTitle       string                              `json:"session_title,omitempty"`

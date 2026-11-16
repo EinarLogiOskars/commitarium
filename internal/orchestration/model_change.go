@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/EinarLogiOskars/commitarium/internal/execution"
-	"github.com/EinarLogiOskars/commitarium/internal/feature"
 	"github.com/EinarLogiOskars/commitarium/internal/project"
 	"github.com/EinarLogiOskars/commitarium/internal/worker"
 	"github.com/EinarLogiOskars/commitarium/internal/workerhttp"
@@ -23,10 +22,6 @@ type remoteLeadModelChanges interface {
 	ChangeRunModels(ctx context.Context, runID string, models project.AgentModels, stopAttempts []string) (execution.Run, []execution.ModelChange, error)
 	HasModelSwitch(ctx context.Context, runID, attemptID string) (bool, error)
 	TakeModelSwitch(ctx context.Context, runID, attemptID string) (bool, error)
-}
-
-type remoteLeadParallelChains interface {
-	BeginChainedTurnAlongside(context.Context, string, execution.WorkerAttemptCheckpoint, string, feature.State, string) (bool, error)
 }
 
 // ChangeModels switches a run's models. With now, an agent working on a
