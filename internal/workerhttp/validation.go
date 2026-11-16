@@ -214,7 +214,6 @@ func (request PutAttemptRequest) Validate(identity MutationIdentity) error {
 		request.OutputContract != OutputContractPlanningLead &&
 		request.OutputContract != OutputContractGoalClarification &&
 		request.OutputContract != OutputContractImplementationLead &&
-		request.OutputContract != OutputContractAcceptanceTests &&
 		request.OutputContract != OutputContractImplementationReview &&
 		request.OutputContract != OutputContractImplementationReadiness &&
 		request.OutputContract != OutputContractIntervention &&
@@ -244,7 +243,6 @@ func (request PutAttemptRequest) Validate(identity MutationIdentity) error {
 		return invalid("toolchain setup output contract requires a consultation role")
 	}
 	if (request.OutputContract == OutputContractImplementationReview ||
-		request.OutputContract == OutputContractAcceptanceTests ||
 		request.OutputContract == OutputContractPlanApproval) &&
 		request.Assignment.Role != RoleReviewer {
 		return invalid("reviewer output contract requires the reviewer role")
@@ -443,14 +441,11 @@ func (result TerminalResult) Validate() error {
 		if result.ToolchainProposal != nil && (result.Publication != nil || result.Review != nil || result.InterventionEffect != "") {
 			return invalid("toolchain proposal cannot contain another specialized result")
 		}
-		if result.GoalDraft != nil && (result.Disposition != DispositionSucceeded || result.Publication != nil || result.Review != nil || result.InterventionEffect != "" || result.ToolchainProposal != nil || result.ImplementationPlan != nil || result.AcceptanceTests != nil || result.EnvironmentRequest != nil) {
+		if result.GoalDraft != nil && (result.Disposition != DispositionSucceeded || result.Publication != nil || result.Review != nil || result.InterventionEffect != "" || result.ToolchainProposal != nil || result.ImplementationPlan != nil || result.EnvironmentRequest != nil) {
 			return invalid("goal draft requires success and cannot contain another specialized result")
 		}
-		if result.ImplementationPlan != nil && (result.Disposition != DispositionSucceeded || result.Publication != nil || result.Review != nil || result.InterventionEffect != "" || result.ToolchainProposal != nil || result.AcceptanceTests != nil || result.EnvironmentRequest != nil) {
+		if result.ImplementationPlan != nil && (result.Disposition != DispositionSucceeded || result.Publication != nil || result.Review != nil || result.InterventionEffect != "" || result.ToolchainProposal != nil || result.EnvironmentRequest != nil) {
 			return invalid("implementation plan requires success and cannot contain another specialized result")
-		}
-		if result.AcceptanceTests != nil && (result.Disposition != DispositionSucceeded || result.Publication != nil || result.Review != nil || result.InterventionEffect != "" || result.ToolchainProposal != nil || result.GoalDraft != nil || result.ImplementationPlan != nil || result.EnvironmentRequest != nil) {
-			return invalid("acceptance tests require success and cannot contain another specialized result")
 		}
 		if result.HandoffBrief != nil && result.Disposition != DispositionSucceeded {
 			return invalid("handoff brief requires a successful disposition")
@@ -486,7 +481,7 @@ func (result TerminalResult) Validate() error {
 		if result.ToolchainProposal != nil {
 			return invalid("stopped outcome cannot include a toolchain proposal")
 		}
-		if result.GoalDraft != nil || result.ImplementationPlan != nil || result.AcceptanceTests != nil || result.EnvironmentRequest != nil {
+		if result.GoalDraft != nil || result.ImplementationPlan != nil || result.EnvironmentRequest != nil {
 			return invalid("stopped outcome cannot include a feature artifact")
 		}
 	case OutcomeFailed:
@@ -511,7 +506,7 @@ func (result TerminalResult) Validate() error {
 		if result.ToolchainProposal != nil {
 			return invalid("failed outcome cannot include a toolchain proposal")
 		}
-		if result.GoalDraft != nil || result.ImplementationPlan != nil || result.AcceptanceTests != nil || result.EnvironmentRequest != nil {
+		if result.GoalDraft != nil || result.ImplementationPlan != nil || result.EnvironmentRequest != nil {
 			return invalid("failed outcome cannot include a feature artifact")
 		}
 	}
@@ -543,11 +538,6 @@ func (result TerminalResult) Validate() error {
 	if result.ImplementationPlan != nil {
 		if _, err := result.ImplementationPlan.NormalizeInitial(1); err != nil {
 			return invalid("implementation plan: %v", err)
-		}
-	}
-	if result.AcceptanceTests != nil {
-		if _, err := result.AcceptanceTests.NormalizeInitial(1); err != nil {
-			return invalid("acceptance tests: %v", err)
 		}
 	}
 	return nil

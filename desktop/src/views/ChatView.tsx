@@ -1676,7 +1676,6 @@ function ActionCard({
               );
             })
           : models.map((line) => <li key={line as string}>{line}</li>)}
-        {action.independent_tests && <li>Independent acceptance tests</li>}
         {action.type === "create_work_order" && (
           <li>
             {action.vision_item_id

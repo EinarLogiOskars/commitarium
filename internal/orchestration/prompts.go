@@ -83,24 +83,6 @@ func reviewerPlanningInstructions(
 		"\n\n" + lead + "'s proposal:\n" + proposal
 }
 
-func acceptanceTestsInstructions(prepared workspace.Workspace) string {
-	return "Continue the same provider conversation as the independent reviewer. Work only from the accepted goal, " +
-		"the agreed plan (read it with 'commitarium-artifact plan show'), and the clean planning baseline already " +
-		"present in your private checkout. Do not fetch, inspect, " +
-		"or query the lead's implementation or pull-request head. Write the smallest useful executable acceptance tests " +
-		"you would have written before implementation: one per essential behavior the goal requires, not one per " +
-		"detail, so a small change needs only a few and a documentation-only change usually one. Do not alter production code. Run the tests against the " +
-		"baseline when practical; they are expected to expose missing behavior. Commit only the acceptance-test changes " +
-		"locally and do not push any branch or commit. Return action 'authored', a concise summary, the exact local test " +
-		"commit ID, and ordered stable test IDs and user-facing titles. For each test also give the shell command, run " +
-		"from the repository root, that runs only that test and exits non-zero when it fails: Commitarium runs these " +
-		"commands itself against the implementation, apart from your review. If independent executable acceptance tests are " +
-		"not meaningful or cannot safely be authored, return action 'blocked' with no commit or tests.\n\n" +
-		"Current workflow phase: independent acceptance test authoring" +
-		"\nRepository: " + prepared.RepositoryOwner + "/" + prepared.RepositoryName +
-		"\nBase branch: " + prepared.BaseBranch + "\nPrivate checkout baseline commit: " + prepared.BaseCommitID
-}
-
 func implementationInstructions(
 	prepared workspace.Workspace,
 	attemptID string,
@@ -366,20 +348,10 @@ func implementationReviewInstructions(
 	attemptID string,
 	previousReviewedCommitID string,
 	previousApproved bool,
-	acceptanceTestCommitIDs ...string,
 ) string {
 	marker := implementationReviewMarker(attemptID)
-	acceptanceTestCommitID := ""
-	if len(acceptanceTestCommitIDs) > 0 {
-		acceptanceTestCommitID = acceptanceTestCommitIDs[0]
-	}
 	rereview := previousReviewedCommitID != ""
-	acceptanceInstructions := ""
 	workspaceRules := "Reset this disposable reviewer checkout to the planning baseline, fetch the exact implementation commit below, and check out that exact commit detached. Then do not modify tracked files, commit, push, change the pull-request body, or merge. "
-	if acceptanceTestCommitID != "" {
-		workspaceRules = "Reset this disposable private checkout to the exact private acceptance-test commit below, discarding only any prior local review merge. Fetch the exact implementation commit below without inspecting other lead history, then merge that exact commit locally into your private test commit. Resolve only mechanical merge conflicts; if a conflict changes test meaning, mark the affected test not applicable with a reason instead of silently rewriting it. Never push your private test commit, the local merge, or any test changes. Do not change the pull-request body or merge the pull request. "
-		acceptanceInstructions = "Run every pending private acceptance test against that local combination, using the test IDs listed by `commitarium-artifact acceptance show`. Run them together in one command where possible. Record the results right after that run, before any other check such as lint, typecheck, or build, so the user sees them as soon as they are known: in a single shell call, chain, for each test, `commitarium-artifact acceptance start <test-id>` followed by `acceptance pass <test-id>`, `acceptance fail <test-id> <note>`, or `acceptance not-applicable <test-id> <note>`; each tool call re-reads this whole conversation, so keep them few. A failed acceptance test is review evidence, not automatically proof that production code is wrong: inspect whether the implementation, the test, or the shared understanding is incorrect. If the test itself was wrong, correct it, run it again, and record the new result with `acceptance pass <test-id>` or `acceptance fail <test-id> <note>`, which replaces the failure; never approve while a test is recorded as failed. Private acceptance test commit: " + acceptanceTestCommitID + "\n"
-	}
 	scope := "The lead has now published an implementation for review. This is one verification pass, not " +
 		"another planning round: the plan is agreed. Inspect before judging: confirm the current branch, " +
 		"Git HEAD, status, and the exact pull-request head. Then verify the exact commit below: run the " +
@@ -419,7 +391,7 @@ func implementationReviewInstructions(
 			"tests, since main's changes may interact with the feature. Number any finding after your last one. "
 	}
 	return "Continue the same provider conversation as the independent reviewer. " + scope +
-		workspaceRules + acceptanceInstructions +
+		workspaceRules +
 		"If you find material problems, submit one formal Forgejo review with event REQUEST_CHANGES. If the " +
 		"implementation is correct and sufficiently tested, tell the lead that you think the exact revision is " +
 		"ready to merge and submit one review with event APPROVED. Use the worker-provided " +

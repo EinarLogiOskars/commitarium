@@ -25,7 +25,6 @@ type StructuredOutput struct {
 	ToolchainProposal  *ToolchainProposal
 	GoalDraft          *featureartifact.GoalDraft
 	ImplementationPlan *featureartifact.ImplementationPlan
-	AcceptanceTests    *featureartifact.AcceptanceTests
 	EnvironmentRequest *EnvironmentRequest
 	HandoffBrief       *featureartifact.HandoffBrief
 	SessionTitle       string
@@ -98,27 +97,6 @@ func OutputJSONSchema(contract OutputContract) any {
 				)},
 			},
 			[]string{"action", "summary", "commit_id", "pull_request_number", "system_packages", "environment_reason", "finding_answers"},
-		)
-	case OutputContractAcceptanceTests:
-		testSchema := objectSchema(
-			map[string]any{
-				"id":    idSchema,
-				"title": map[string]any{"type": "string"},
-				"command": map[string]any{
-					"type":        "string",
-					"description": "The shell command, run from the repository root, that runs only this test and exits non-zero when it fails.",
-				},
-			},
-			[]string{"id", "title", "command"},
-		)
-		return objectSchema(
-			map[string]any{
-				"action":         map[string]any{"type": "string", "enum": []string{"authored", "blocked"}},
-				"summary":        map[string]any{"type": "string"},
-				"test_commit_id": map[string]any{"type": "string"},
-				"tests":          map[string]any{"type": "array", "items": testSchema},
-			},
-			[]string{"action", "summary", "test_commit_id", "tests"},
 		)
 	case OutputContractImplementationReview:
 		return objectSchema(
@@ -433,43 +411,6 @@ func ResolveStructuredOutput(
 			Event:       Event{Type: EventMessage, Text: response.Summary},
 			Disposition: DispositionSucceeded,
 			Publication: publication,
-		}, nil
-
-	case OutputContractAcceptanceTests:
-		var response struct {
-			Action       string                           `json:"action"`
-			Summary      string                           `json:"summary"`
-			TestCommitID string                           `json:"test_commit_id"`
-			Tests        []featureartifact.AcceptanceTest `json:"tests"`
-		}
-		if err := decodeStructuredOutput(raw, &response); err != nil {
-			return StructuredOutput{}, err
-		}
-		response.Summary = strings.TrimSpace(response.Summary)
-		response.TestCommitID = withoutPlaceholder(response.TestCommitID)
-		if response.Summary == "" {
-			return StructuredOutput{}, invalidStructuredOutput("acceptance test response is incomplete")
-		}
-		if response.Action == "blocked" {
-			if response.TestCommitID != "" || len(response.Tests) != 0 {
-				return StructuredOutput{}, invalidStructuredOutput("blocked acceptance test response cannot claim tests")
-			}
-			return StructuredOutput{
-				Event: Event{Type: EventInputRequired, Text: response.Summary}, Disposition: DispositionInputRequired,
-			}, nil
-		}
-		if response.Action != "authored" {
-			return StructuredOutput{}, invalidStructuredOutput("acceptance test response has an unknown action")
-		}
-		tests := featureartifact.AcceptanceTests{TestCommitID: response.TestCommitID, Tests: response.Tests}
-		normalized, err := tests.NormalizeInitial(1)
-		if err != nil {
-			return StructuredOutput{}, invalidStructuredOutput("acceptance tests: %v", err)
-		}
-		normalized.PlanVersion = 0
-		return StructuredOutput{
-			Event:       Event{Type: EventMessage, Text: response.Summary},
-			Disposition: DispositionSucceeded, AcceptanceTests: &normalized,
 		}, nil
 
 	case OutputContractImplementationReview:

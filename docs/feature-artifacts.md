@@ -20,10 +20,6 @@ Four feature-scoped JSON artifacts are currently defined:
 - `implementation_plan` contains the agreed plan version, title, subtitle, and
   ordered commit-sized steps. Each step carries its intended commit subject,
   verification, current status, and completed commit identity.
-- `acceptance_tests` contains reviewer-authored presentation metadata for the
-  private acceptance-test commit: the plan version, pinned implementation
-  commit, and ordered test IDs, titles, statuses, and notes. It never contains
-  test source, commands, patches, or repository paths.
 
 Artifacts are stored in coordinator SQLite, not in the managed Git tree. They
 therefore cannot be committed, pushed, merged, or copied into a user's local
@@ -92,63 +88,6 @@ initial implementation publication, the coordinator checks that every planned
 step is complete and that the final step records the published HEAD. Independent
 review still evaluates the complete pull request.
 
-## Independent acceptance tests
-
-New runs no longer write them (ADR-031): in 20 runs they caught no defect
-the lead's suite and code review missed. What follows describes runs started
-with them before, which finish as they started.
-
-Independent acceptance tests are off by default. Projects expose the default
-as `independent_acceptance_tests`; work-order creation may omit that field to
-inherit the project value or supply `true`/`false` as an override. Features and
-runs expose the effective snapshotted boolean.
-
-When enabled, the coordinator atomically starts two turns after plan
-publication. The lead implements in the ordinary managed checkout while the
-reviewer authors executable acceptance tests in a separate private clone of
-the same planning baseline. The reviewer must commit locally and must not push.
-The lead and reviewer therefore cannot observe each other's local commit through
-Git. The coordinator waits for both the verified lead publication and the
-reviewer's structured test checkpoint before starting formal review.
-
-The initial artifact has this shape:
-
-```json
-{
-  "plan_version": 1,
-  "test_commit_id": "0123456789abcdef0123456789abcdef01234567",
-  "implementation_commit_id": "",
-  "tests": [
-    {"id":"exports-csv","position":1,"title":"Exports visible rows","status":"pending","note":""}
-  ]
-}
-```
-
-Statuses are `pending`, `running`, `passed`, `failed`, and `not_applicable`.
-`pending` means not yet executed; a UI may style it as an unmet/red item but
-must not label it as a failed execution. `failed` and `not_applicable` require a
-human-readable `note`.
-
-At review handoff, the coordinator pins `implementation_commit_id`. The
-reviewer fetches and locally combines that exact commit with the private test
-commit, runs the tests, and records live transitions with:
-
-```text
-commitarium-artifact acceptance start <test-id>
-commitarium-artifact acceptance pass <test-id>
-commitarium-artifact acceptance fail <test-id> <note>
-commitarium-artifact acceptance not-applicable <test-id> <note>
-```
-
-Every transition creates another artifact revision and the ordinary
-`feature.artifact_updated` SSE notification. Each review round pins the
-checklist to the commit under review and resets every test to `pending`, so
-the checklist always shows results for the latest reviewed commit. Earlier
-rounds' results remain in the formal reviews. Private tests are review evidence;
-they are not automatically added to the pull request. The normal review and
-correction conversation decides whether a test is wrong, exposes a shared
-misunderstanding, or should be promoted into the repository.
-
 ## Commit-sized backend slices
 
 1. **Persist feature artifacts** — add the artifact schemas, append-only SQLite
@@ -183,9 +122,3 @@ the `handoff_brief` document. The implementation sidebar renders
 `implementation_plan.document.steps`, using `title` and `subtitle` for the
 collapsed row and `details_markdown`, `verification`, `commit_subject`, and
 `commit_id` in the expanded view.
-
-When independent acceptance tests are enabled, the review UI renders
-`acceptance_tests.document.tests` in `position` order. It should subscribe via
-the same artifact SSE path, display `pending` as awaiting implementation rather
-than an executed failure, show live running/pass/fail changes, and surface the
-required note for `failed` or `not_applicable` entries.

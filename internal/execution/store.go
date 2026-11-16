@@ -199,21 +199,6 @@ type AutonomousTurnAdmission struct {
 	RunReason                 string
 	OccurredAt                time.Time
 	RunAlreadyActive          bool
-	// AlongsideParallelWork admits the turn while the run's other agent works
-	// in parallel: the lead implementing while the reviewer authors private
-	// acceptance tests.
-	AlongsideParallelWork bool
-}
-
-// ParallelImplementationAdmission is the one intentional concurrent boundary
-// in the workflow: the lead implements while the reviewer authors private
-// acceptance tests from the same accepted baseline.
-type ParallelImplementationAdmission struct {
-	RunID      string
-	Lead       AutonomousTurnAdmission
-	Reviewer   AutonomousTurnAdmission
-	RunReason  string
-	OccurredAt time.Time
 }
 
 // NewSessionTurnAdmission creates a new durable logical conversation and its

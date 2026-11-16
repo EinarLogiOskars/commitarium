@@ -32,7 +32,6 @@ export interface StartSettingsValue {
   agent_models: AgentModels;
   autonomy_policy: AutonomyPolicy;
   merge_policy: MergePolicy;
-  independent_acceptance_tests: boolean;
   steps: StartSteps;
   /** Efforts and planning models by phase (ADR-031). */
   phase_choices: PhaseChoices;
@@ -88,8 +87,6 @@ export function startSettingsFrom(feature: Feature): StartSettingsValue {
     },
     autonomy_policy: feature.autonomy_policy ?? "review_each_phase",
     merge_policy: feature.merge_policy ?? "require_user_approval",
-    // No longer written (ADR-031); sent as false for older coordinators.
-    independent_acceptance_tests: false,
     steps: feature.steps ?? { documented_plan: true, reviewer: true },
     phase_choices: feature.phase_choices ?? {},
   };

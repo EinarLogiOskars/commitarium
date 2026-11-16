@@ -87,7 +87,6 @@ export interface AssistantAction {
   description: string;
   vision_item_id: string;
   steps: "" | "full" | "planned" | "quick";
-  independent_tests: boolean;
   lead_agent: string;
   lead_model: string;
   reviewer_agent: string;

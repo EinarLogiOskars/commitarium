@@ -33,10 +33,6 @@ type ProjectService interface {
 	GetRepositoryOverview(ctx context.Context, projectID string) (project.RepositoryOverview, error)
 }
 
-type ProjectIndependentAcceptanceTestsService interface {
-	UpdateIndependentAcceptanceTests(ctx context.Context, projectID string, enabled bool) (project.Project, error)
-}
-
 // ProjectAppService marks projects as apps (APPS_PLAN.md) and renames them.
 type ProjectAppService interface {
 	UpdateApp(ctx context.Context, projectID string, app bool) (project.Project, error)
@@ -117,10 +113,6 @@ type FeatureArtifactService interface {
 
 type HandoffBriefService interface {
 	PutHandoffBrief(context.Context, string, int, featureartifact.HandoffBrief, workflow.Actor, string) (workflow.FeatureArtifact, error)
-}
-
-type AcceptanceTestArtifactService interface {
-	TransitionAcceptanceTest(context.Context, string, int, string, featureartifact.AcceptanceTestStatus, string, string, workflow.Actor, string) (workflow.FeatureArtifact, error)
 }
 
 type ExecutionService interface {
@@ -626,7 +618,6 @@ func newAPI(
 		mux.HandleFunc("POST /api/v1/validation-jobs/{id}/claim", api.claimValidationJobHandler)
 		mux.HandleFunc("POST /api/v1/validation-jobs/{id}/complete", api.completeValidationJobHandler)
 		mux.HandleFunc("POST /api/v1/validation-jobs/{id}/retry", api.retryValidationJobHandler)
-		mux.HandleFunc("GET /api/v1/acceptance-jobs/pending", api.listPendingAcceptanceJobsHandler)
 	}
 	mux.HandleFunc(
 		"POST /api/v1/projects",
@@ -675,10 +666,6 @@ func newAPI(
 	mux.HandleFunc(
 		"PUT /api/v1/projects/{id}/autonomy-policy",
 		api.updateProjectAutonomyPolicyHandler,
-	)
-	mux.HandleFunc(
-		"PUT /api/v1/projects/{id}/independent-acceptance-tests",
-		api.updateProjectIndependentAcceptanceTestsHandler,
 	)
 	mux.HandleFunc("PUT /api/v1/projects/{id}/app", api.updateProjectAppHandler)
 	mux.HandleFunc("PUT /api/v1/projects/{id}/assistant-mode", api.updateProjectAssistantModeHandler)
@@ -757,10 +744,6 @@ func newAPI(
 		mux.HandleFunc(
 			"POST /api/v1/projects/{projectID}/features/{id}/implementation-plan/steps/{stepID}/transitions",
 			api.transitionImplementationPlanStepHandler,
-		)
-		mux.HandleFunc(
-			"POST /api/v1/projects/{projectID}/features/{id}/acceptance-tests/{testID}/transitions",
-			api.transitionAcceptanceTestHandler,
 		)
 	}
 	mux.HandleFunc(

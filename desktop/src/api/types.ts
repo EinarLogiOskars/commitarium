@@ -129,7 +129,6 @@ export interface Project {
   agent_models?: AgentModels;
   merge_policy?: MergePolicy;
   autonomy_policy?: AutonomyPolicy;
-  independent_acceptance_tests?: boolean; // project default for future work orders
   /** The user uses it as an app (APPS_PLAN.md). */
   app?: boolean;
   /** Absent on older coordinators: read it through assistantMode(). */
@@ -292,7 +291,6 @@ export interface Feature {
   state: FeatureState;
   accepted_goal?: string;
   goal_accepted_at?: string;
-  independent_acceptance_tests?: boolean;
   // The settings it starts with. Agents and models are empty until it is
   // created or started with a choice (ADR-027); the run snapshots them.
   agent_providers?: AgentProviders;
@@ -340,8 +338,6 @@ export interface CreateFeatureInput {
   autonomy_policy?: AutonomyPolicy;
   merge_policy?: MergePolicy;
   dialogue_limits?: DialogueLimits;
-  // Per-order override; omitted inherits the project default.
-  independent_acceptance_tests?: boolean;
 }
 
 export type RunStatus = "running" | "waiting_for_user" | "succeeded" | "stopped" | "failed";
@@ -563,8 +559,8 @@ export interface RoleUsage extends TokenUsage {
 }
 
 export interface PhaseUsage extends TokenUsage {
-  /** clarify, plan, plan_approval, implement, acceptance_tests, review,
-   * correction, readiness, intervention, or other. */
+  /** clarify, plan, plan_approval, implement, review, correction,
+   * readiness, intervention, or other. */
   phase: string;
   role: string;
   /** The models and efforts that spent it; absent on older coordinators. */
@@ -615,8 +611,7 @@ export interface ProjectUsage {
   assistant: UsageEntry;
 }
 
-export type FeatureArtifactKind =
-  "goal_draft" | "implementation_plan" | "acceptance_tests" | "handoff_brief";
+export type FeatureArtifactKind = "goal_draft" | "implementation_plan" | "handoff_brief";
 
 /** A clarified work order: what and why, where, and what to plan around. */
 export interface HandoffBriefDocument {
@@ -647,36 +642,6 @@ export interface WorkOrderAssistantSession {
   messages: WorkOrderAssistantMessage[];
   created_at: string;
   updated_at: string;
-}
-
-// The reviewer's private, blind acceptance-test checklist (titles + commit ids
-// only — never executable source). pending = not yet run (unmet, not a failed
-// execution); failed/not_applicable carry a human-readable note.
-export type AcceptanceTestStatus = "pending" | "running" | "passed" | "failed" | "not_applicable";
-
-export interface AcceptanceTest {
-  id: string;
-  position: number;
-  title: string;
-  status: AcceptanceTestStatus;
-  note: string;
-  // The command that runs only this test.
-  command?: string;
-  // Commitarium's own run of the test, by its exit code.
-  coordinator_status?: "passed" | "failed";
-}
-
-export interface AcceptanceTestsDocument {
-  plan_version: number;
-  test_commit_id: string;
-  implementation_commit_id: string; // pinned at review handoff; "" while authoring
-  tests: AcceptanceTest[];
-  // The commit Commitarium last ran the tests against itself.
-  coordinator_commit_id?: string;
-  // Why Commitarium's own run could not run the tests (dependencies would
-  // not install, or the environment lacks one); its tests then have no
-  // coordinator_status.
-  coordinator_error?: string;
 }
 
 export interface GoalDraftDocument {

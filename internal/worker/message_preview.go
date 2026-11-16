@@ -66,7 +66,6 @@ func PreviewProseField(contract OutputContract) string {
 	case OutputContractPlanningLead:
 		return "content"
 	case OutputContractImplementationLead,
-		OutputContractAcceptanceTests,
 		OutputContractImplementationReview,
 		OutputContractImplementationReadiness:
 		return "summary"

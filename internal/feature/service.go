@@ -91,7 +91,6 @@ func (s *Service) Create(
 	// has none until it is created or started with a choice.
 	settings, err := resolveSettings(Feature{
 		MergePolicy: storedProject.MergePolicy, AutonomyPolicy: storedProject.AutonomyPolicy,
-		IndependentAcceptanceTests: storedProject.IndependentAcceptanceTests,
 	}, overrides)
 	if err != nil {
 		return Feature{}, err
@@ -104,24 +103,23 @@ func (s *Service) Create(
 
 	now := s.now()
 	createdFeature := Feature{
-		ID:                         s.generateID(),
-		ProjectID:                  projectID,
-		Title:                      sanitizedTitle,
-		Description:                strings.TrimSpace(description),
-		State:                      StateDraft,
-		DialogueLimits:             dialogueLimits,
-		AgentProviders:             settings.AgentProviders,
-		AgentModels:                settings.AgentModels,
-		MergePolicy:                settings.MergePolicy,
-		AutonomyPolicy:             settings.AutonomyPolicy,
-		IndependentAcceptanceTests: settings.IndependentAcceptanceTests,
-		Steps:                      settings.Steps,
-		Kind:                       kind,
-		Background:                 overrides.Background,
-		CreatedBy:                  createdBy,
-		PreviewCheck:               overrides.PreviewCheck,
-		CreatedAt:                  now,
-		UpdatedAt:                  now,
+		ID:             s.generateID(),
+		ProjectID:      projectID,
+		Title:          sanitizedTitle,
+		Description:    strings.TrimSpace(description),
+		State:          StateDraft,
+		DialogueLimits: dialogueLimits,
+		AgentProviders: settings.AgentProviders,
+		AgentModels:    settings.AgentModels,
+		MergePolicy:    settings.MergePolicy,
+		AutonomyPolicy: settings.AutonomyPolicy,
+		Steps:          settings.Steps,
+		Kind:           kind,
+		Background:     overrides.Background,
+		CreatedBy:      createdBy,
+		PreviewCheck:   overrides.PreviewCheck,
+		CreatedAt:      now,
+		UpdatedAt:      now,
 	}
 
 	if overrides.PhaseChoices != nil {
@@ -238,18 +236,12 @@ func resolveSettings(base Feature, overrides SettingsOverrides) (Feature, error)
 	if base.AutonomyPolicy, err = project.NormalizeAutonomyPolicy(base.AutonomyPolicy); err != nil {
 		return Feature{}, err
 	}
-	if overrides.IndependentAcceptanceTests != nil {
-		base.IndependentAcceptanceTests = *overrides.IndependentAcceptanceTests
-	}
 	if overrides.Steps != nil {
 		base.Steps = *overrides.Steps
 	}
 	if err := base.Steps.Validate(); err != nil {
 		return Feature{}, err
 	}
-	// Independent acceptance tests are no longer written (ADR-031); the
-	// setting from older clients and projects is accepted and ignored.
-	base.IndependentAcceptanceTests = false
 	return base, nil
 }
 

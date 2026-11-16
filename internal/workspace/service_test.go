@@ -432,12 +432,10 @@ func TestServicePreparesSelectedProjectCheckoutForClarification(t *testing.T) {
 func TestServicePreparesSeparateReviewerCheckout(t *testing.T) {
 	now := time.Date(2026, time.October, 7, 12, 0, 0, 0, time.UTC)
 	for _, test := range []struct {
-		name    string
-		enabled bool
-		want    int
+		name string
+		want int
 	}{
-		{name: "disabled", enabled: false, want: 1},
-		{name: "enabled", enabled: true, want: 1},
+		{name: "reviewer", want: 1},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			primary, reviewer := &recordingCheckout{}, &recordingCheckout{}
@@ -445,7 +443,6 @@ func TestServicePreparesSeparateReviewerCheckout(t *testing.T) {
 				&memoryStore{},
 				fixedFeatureFinder{stored: feature.Feature{
 					ID: "fea_test", ProjectID: "prj_test", State: feature.StateDraft,
-					IndependentAcceptanceTests: test.enabled,
 				}},
 				fixedProjectFinder{stored: project.Project{
 					ID: "prj_test", ForgejoRepository: testRepository(now),

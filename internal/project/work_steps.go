@@ -16,12 +16,12 @@ type WorkSteps struct {
 	// SkipPlan lets the lead plan internally instead of writing a documented,
 	// commit-ordered plan.
 	SkipPlan bool
-	// SkipReviewer drops plan review, independent acceptance tests, code
-	// review, and the readiness acknowledgement.
+	// SkipReviewer drops plan review, code review, and the readiness
+	// acknowledgement.
 	SkipReviewer bool
 	// SkipCodeReview keeps plan review but drops what follows the
-	// implementation: independent acceptance tests, code review, and the
-	// readiness acknowledgement (ADR-031). It needs no reviewer to skip.
+	// implementation: code review and the readiness acknowledgement
+	// (ADR-031). It needs no reviewer to skip.
 	SkipCodeReview bool
 }
 

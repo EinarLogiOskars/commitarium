@@ -65,7 +65,6 @@ export const action = (fields: Record<string, unknown>) => ({
   description: "",
   vision_item_id: "",
   steps: "",
-  independent_tests: false,
   lead_agent: "",
   lead_model: "",
   reviewer_agent: "",

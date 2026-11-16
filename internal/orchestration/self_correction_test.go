@@ -325,17 +325,3 @@ func TestARefusedUpdateOntoMainIsHandedBack(t *testing.T) {
 		t.Fatalf("self-corrections = %+v", corrections)
 	}
 }
-
-// A refusal that words its check itself (the acceptance results) is named by
-// the check, not by its first clause, which names the test.
-func TestARefusalWithoutContextKeepsItsFingerprint(t *testing.T) {
-	first := acceptanceResultsIncomplete(`acceptance test "at-1" has no final result`)
-	second := acceptanceResultsIncomplete(`the reviewer approved while its acceptance test "at-2" is recorded as failed`)
-	fingerprint := func(cause error) string {
-		kind, check := classifyCause(cause)
-		return execution.BlockerFingerprint(kind, check, blockerFingerprintDetail(cause))
-	}
-	if fingerprint(first) != fingerprint(second) {
-		t.Fatal("acceptance refusals naming different tests have different fingerprints")
-	}
-}

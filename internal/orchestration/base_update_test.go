@@ -2,7 +2,6 @@ package orchestration
 
 import (
 	"database/sql"
-	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -10,7 +9,6 @@ import (
 	"github.com/EinarLogiOskars/commitarium/internal/database"
 	"github.com/EinarLogiOskars/commitarium/internal/execution"
 	"github.com/EinarLogiOskars/commitarium/internal/feature"
-	"github.com/EinarLogiOskars/commitarium/internal/featureartifact"
 	"github.com/EinarLogiOskars/commitarium/internal/project"
 	"github.com/EinarLogiOskars/commitarium/internal/validation"
 	"github.com/EinarLogiOskars/commitarium/internal/worker"
@@ -637,79 +635,6 @@ func TestBaseUpdateResumesAfterARestartWithoutTheOldCommit(t *testing.T) {
 			t.Fatalf("recovery of the reviewed update merged the wrong commit: %+v", fixture.workspace)
 		}
 	})
-}
-
-func TestUpdateOntoMainResetsAcceptanceTestsForTheNewCommit(t *testing.T) {
-	updated := baseUpdateCommits[0]
-	fixture := startBaseUpdateRun(t, "run_base_update_acceptance", true, project.MergePolicyRequireUserApproval, 1,
-		func(fixture *baseUpdateFixture) {
-			addCompletedLaterImplementationReviewAttempt(
-				fixture.worker, fixture.runID, fixture.project.ID, fixture.featureID, 3,
-				workerhttp.DispositionSucceeded, updated, 13, "The merge kept every approved change.",
-			)
-			addCompletedImplementationReadinessAttempt(
-				fixture.worker, fixture.runID, fixture.project.ID, fixture.featureID, 3,
-				workerhttp.DispositionSucceeded, "I agree; the updated commit is ready to merge.",
-			)
-		})
-	fixture.waitAtMergeGate(t)
-	// The approved work order had private acceptance tests, all passing on
-	// the approved commit.
-	if _, err := fixture.db.ExecContext(
-		t.Context(), `UPDATE runs SET independent_acceptance_tests = 1 WHERE id = ?`, fixture.runID,
-	); err != nil {
-		t.Fatalf("enable acceptance tests: %v", err)
-	}
-	tests := featureartifact.AcceptanceTests{
-		PlanVersion: 1, TestCommitID: strings.Repeat("9", 40), ImplementationCommitID: reviewedApprovedSHA,
-		Tests: []featureartifact.AcceptanceTest{
-			{ID: "at-1", Position: 1, Title: "Exports the visible columns", Status: featureartifact.AcceptanceTestPassed},
-			{ID: "at-2", Position: 2, Title: "Exports to Excel", Status: featureartifact.AcceptanceTestNotApplicable, Note: "Out of scope."},
-		},
-	}
-	actor := workflow.Actor{Kind: workflow.ActorKindAgent, ID: remoteReviewerSessionID(fixture.runID)}
-	if _, err := fixture.workflow.UpsertAcceptanceTests(t.Context(), fixture.featureID, tests, actor, "seed-acceptance"); err != nil {
-		t.Fatalf("seed acceptance tests: %v", err)
-	}
-	fixture.starter.artifacts = fixture.workflow
-	fixture.workspace.mainHead = baseUpdateMainHead
-	fixture.workspace.mergeErrs = []error{baseUpdateNoMerge}
-	// Its refusal blocks, as once Commitarium's corrections are spent.
-	fixture.spendSelfCorrections(t, errAcceptanceResultsIncomplete)
-	if _, _, err := fixture.starter.Merge(t.Context(), fixture.runID, "merge-with-acceptance"); err != nil {
-		t.Fatalf("merge behind main: %v", err)
-	}
-	// The reviewer has not recorded results for the updated commit yet, so
-	// its review cannot be accepted.
-	if blocked := fixture.waitBlocked(t, ""); !strings.Contains(blocked.Reason, "has no final result") {
-		t.Fatalf("the review of the update was not held for acceptance results: %q", blocked.Reason)
-	}
-	artifact, err := fixture.workflow.GetFeatureArtifact(t.Context(), fixture.featureID, featureartifact.KindAcceptanceTests)
-	if err != nil {
-		t.Fatalf("load acceptance tests: %v", err)
-	}
-	var reset featureartifact.AcceptanceTests
-	if err := json.Unmarshal([]byte(artifact.Document), &reset); err != nil {
-		t.Fatalf("decode acceptance tests: %v", err)
-	}
-	if reset.ImplementationCommitID != updated || reset.Tests[0].Status != featureartifact.AcceptanceTestPending ||
-		reset.Tests[1].Status != featureartifact.AcceptanceTestNotApplicable {
-		t.Fatalf("acceptance tests were not reset for the updated commit: %+v", reset)
-	}
-
-	reset.Tests[0].Status = featureartifact.AcceptanceTestPassed
-	if _, err := fixture.workflow.UpsertAcceptanceTests(t.Context(), fixture.featureID, reset, actor, "record-acceptance"); err != nil {
-		t.Fatalf("record acceptance results: %v", err)
-	}
-	if _, _, err := fixture.starter.RecoverBlockerWithDirective(
-		t.Context(), fixture.runID, "recheck-acceptance", RecoveryDirective{Action: RecoveryActionRecheck},
-	); err != nil {
-		t.Fatalf("recheck review: %v", err)
-	}
-	fixture.waitAtMergeGate(t)
-	if fixture.workspace.prepared.ApprovedCommitID != updated {
-		t.Fatalf("the updated commit did not reach the merge gate: %+v", fixture.workspace.prepared)
-	}
 }
 
 func TestUpdateOntoMainIsValidatedBeforeItMerges(t *testing.T) {

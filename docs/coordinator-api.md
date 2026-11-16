@@ -4,7 +4,7 @@ The coordinator listens on `http://127.0.0.1:8080` when started through Docker
 Compose. Every route but `GET /health` needs `Authorization: Bearer <token>`,
 with the owner token from `.commitarium/internal/coordinator-token`
 (COORDINATOR_ACCESS_PLAN.md); agents' run tokens open only their own work
-order's artifact reads and plan-step and acceptance-test transitions.
+order's artifact reads and plan-step transitions.
 Exposing this API beyond the host loopback interface is unsupported.
 
 ## Routes
@@ -30,7 +30,6 @@ Exposing this API beyond the host loopback interface is unsupported.
 | `PUT` | `/api/v1/projects/{projectID}/agent-settings` | Atomically select default providers and exact models for future work orders |
 | `PUT` | `/api/v1/projects/{projectID}/merge-policy` | Select the default merge behavior for future work orders |
 | `PUT` | `/api/v1/projects/{projectID}/autonomy-policy` | Select the default phase checkpoint behavior for future work orders |
-| `PUT` | `/api/v1/projects/{projectID}/independent-acceptance-tests` | Enable or disable independent acceptance tests for future work orders |
 | `POST` | `/api/v1/projects/{projectID}/forgejo-repository` | Create or repair the project's private internal repository |
 | `PUT` | `/api/v1/projects/{projectID}/forgejo-repository` | Verify and bind the project's internal repository |
 | `GET` | `/api/v1/toolchain-presets` | List curated stacks with explicit runtime versions |
@@ -51,7 +50,7 @@ Exposing this API beyond the host loopback interface is unsupported.
 | `POST` | `/api/v1/projects/{projectID}/features/{featureID}/transitions` | Apply an explicit feature transition |
 | `GET` | `/api/v1/projects/{projectID}/features/{featureID}/events` | Retrieve durable workflow history |
 | `GET` | `/api/v1/projects/{projectID}/features/{featureID}/events/stream` | Replay and stream workflow history with SSE |
-| `GET` | `/api/v1/projects/{projectID}/features/{featureID}/artifacts/{kind}` | Read the current durable goal draft, implementation plan, or acceptance-test checklist |
+| `GET` | `/api/v1/projects/{projectID}/features/{featureID}/artifacts/{kind}` | Read the current durable handoff brief, goal draft, or implementation plan |
 | `PUT` | `/api/v1/projects/{projectID}/features/{featureID}/artifacts/handoff_brief` | Replace the editable handoff brief using optimistic concurrency |
 | `GET` | `/api/v1/agents` | List agents (provider accounts) |
 | `POST` | `/api/v1/agents` | Add an agent |
@@ -63,7 +62,6 @@ Exposing this API beyond the host loopback interface is unsupported.
 | `POST` | `/api/v1/projects/{projectID}/features/{featureID}/accept` | Accept the handoff brief: `draft` → `ready` |
 | `POST` | `/api/v1/projects/{projectID}/features/{featureID}/reopen` | Reopen a ready work order for more clarification: `ready` → `draft` |
 | `POST` | `/api/v1/projects/{projectID}/features/{featureID}/implementation-plan/steps/{stepID}/transitions` | Record implementation-plan step progress |
-| `POST` | `/api/v1/projects/{projectID}/features/{featureID}/acceptance-tests/{testID}/transitions` | Record an independent acceptance-test result |
 | `POST` | `/api/v1/projects/{projectID}/features/{featureID}/runs` | Start the configured workflow asynchronously |
 | `GET` | `/api/v1/projects/{projectID}/features/{featureID}/runs` | List the feature's run history and sessions |
 | `GET` | `/api/v1/projects/{projectID}/features/{featureID}/usage` | Total provider token usage for the feature by session role |
@@ -223,21 +221,6 @@ Every new work order captures either its supplied override or this project
 default, and its run snapshots that captured effective value. Changing the
 project does not alter an existing work order or its active or historical run.
 Project, feature, and run responses expose their effective `autonomy_policy`.
-
-Independent acceptance tests default to disabled. Replace the project default
-for future work orders with:
-
-```http
-PUT /api/v1/projects/prj_example/independent-acceptance-tests
-Content-Type: application/json
-
-{"enabled":true}
-```
-
-Independent acceptance tests are no longer written (ADR-031). Work-order
-creation, Start, and project settings still accept
-`independent_acceptance_tests` and ignore it: new work orders and runs report
-`false`. Runs started with them before finish as they started.
 
 With `review_each_phase`, the run waits after goal acceptance, after the lead's
 first planning proposal, after the reviewer's first planning response, and
@@ -1024,9 +1007,8 @@ feature's runs, by role, by workflow phase and role, and overall:
 ```
 
 `phases` is ordered by workflow phase, then role. Phases are `clarify`,
-`plan`, `plan_approval`, `implement`, `acceptance_tests`, `review`,
-`correction`, `readiness`, `intervention` (answers to user messages), and
-`other`.
+`plan`, `plan_approval`, `implement`, `review`, `correction`, `readiness`,
+`intervention` (answers to user messages), and `other`.
 
 Each phase also lists `models`: `[{"model", "effort", ...tokens, "cost_usd"}]`,
 the models and reasoning efforts that spent it (an empty `effort` is the
@@ -1160,8 +1142,6 @@ feature-scoped, revisioned JSON artifacts separately from session history:
   still readable on older work orders and no longer written.
 - `implementation_plan` is the agreed plan version and its ordered,
   commit-sized implementation steps.
-- `acceptance_tests` is the reviewer's ordered private acceptance-test status
-  checklist. It contains titles and commit identities, never executable source.
 
 Read the latest revision with:
 
@@ -1186,8 +1166,8 @@ GET /api/v1/projects/prj_example/features/fea_example/artifacts/handoff_brief
 }
 ```
 
-`kind` is `handoff_brief`, `goal_draft`, `implementation_plan`, or
-`acceptance_tests`. An unknown feature returns
+`kind` is `handoff_brief`, `goal_draft`, or `implementation_plan`. An unknown
+feature returns
 `404 feature_not_found`; a recognized artifact that has not been created yet
 returns `404 artifact_not_found`.
 
@@ -1659,7 +1639,6 @@ Content-Type: application/json
   "agent_models": {"lead": "gpt-5.6-sol", "reviewer": "claude-opus-5"},
   "autonomy_policy": "run_to_completion",
   "merge_policy": "require_user_approval",
-  "independent_acceptance_tests": false,
   "steps": {"documented_plan": true, "reviewer": false}
 }
 ```
@@ -1709,14 +1688,14 @@ false, "reviewer": true}` returns `400 invalid_steps`:
   commit-ordered plan, and code review and the lead's readiness acknowledgement precede the merge gate.
 - **Reviewed plan** (`reviewer` with `code_review: false`, ADR-031): the lead
   and reviewer agree the plan as in Full; once the lead's implementation is
-  verified the run goes straight to the merge gate, with no acceptance tests,
-  code review, or readiness turn, and the coordinator's merge approval says
+  verified the run goes straight to the merge gate, with no code review or
+  readiness turn, and the coordinator's merge approval says
   the work order had no code review. `code_review` defaults to `true` and is
   ignored without a reviewer.
 - **Planned** (`reviewer: false`): the lead submits its plan in its first
   planning turn, the coordinator publishes it without an approval turn, and
   after the published implementation is verified the run goes straight to the
-  merge gate. `independent_acceptance_tests` is forced to `false`.
+  merge gate.
 - **Quick change** (neither): at Start the coordinator publishes "No documented
   plan" as the run's plan, which opens the feature branch and draft pull
   request, and the lead's first turn implements the accepted goal without a
@@ -2529,27 +2508,6 @@ work order.
 `PATCH /api/v1/projects/{projectID}/features/{featureID}` with `{"title": ...}`
 renames a work order or session.
 
-## Commitarium's own acceptance-test run
-
-When a work order has independent acceptance tests, the reviewer gives each
-test a `command` that runs only that test. When an implementation commit goes
-to review, the coordinator queues its own run of those tests, apart from the
-reviewer's. This is a validation job with `"kind": "acceptance"`:
-
-- `labels` are the test IDs, in the order of `commands`.
-- `merge_commit_id` is the reviewer's private test commit.
-
-The desktop's isolated runner reads the test commit from the reviewer's
-checkout and merges it into the implementation commit, without network
-access. It then runs every command, whatever the others did. Each exit code
-becomes that test's `coordinator_status` (`passed` or `failed`), and
-`coordinator_commit_id` on the acceptance-test artifact records the commit.
-
-The run informs review; it neither gates nor merges. Acceptance jobs are left
-out of a run's validation jobs and the merge gate.
-`GET /api/v1/acceptance-jobs/pending` lists the ones waiting for the desktop,
-which runs them through the usual claim and complete endpoints.
-
 ## Background preview setup
 
 Reading a project's stack (`GET /api/v1/projects/{id}/toolchain`, and the
@@ -2811,7 +2769,7 @@ optional `chat_title`.
   "answer_helper"|"write_brief"|"accept_brief"|"design_stack"|"apply_stack"|"research"|
   "plan_project"|"update_plan"|"build_plan"|"set_say", "priority", "reason",
   "title", "description", "vision_item_id",
-  "steps", "independent_tests", "lead_agent", "lead_model", "reviewer_agent",
+  "steps", "lead_agent", "lead_model", "reviewer_agent",
   "reviewer_model", "work_order_id", "when", "how", "guidance", "after", "helper", "brief",
   "app_brief", "assumptions", "decisions", "open_questions", "plan_items", "stack_presets",
   "frameworks", "take", "asked", "level", "words", "status", "premium",

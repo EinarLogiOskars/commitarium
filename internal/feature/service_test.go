@@ -146,27 +146,6 @@ func TestServiceCreate(t *testing.T) {
 	}
 }
 
-// Independent acceptance tests are no longer written (ADR-031): a project's
-// preference and an override are accepted and ignored.
-func TestServiceCreateIgnoresIndependentAcceptanceTests(t *testing.T) {
-	store := &recordingStore{}
-	projects := &recordingProjectFinder{result: project.Project{
-		ID: "prj_test", DialogueLimits: project.DefaultDialogueLimits(),
-		AgentProviders: project.DefaultAgentProviders(), MergePolicy: project.DefaultMergePolicy(),
-		AutonomyPolicy: project.DefaultAutonomyPolicy(), IndependentAcceptanceTests: true,
-	}}
-	service := NewService(store, projects)
-	created, err := service.Create(t.Context(), "prj_test", "Feature", "", SettingsOverrides{})
-	if err != nil || created.IndependentAcceptanceTests {
-		t.Fatalf("inherited feature=%+v err=%v", created, err)
-	}
-	enabled := true
-	created, err = service.Create(t.Context(), "prj_test", "Override", "", SettingsOverrides{IndependentAcceptanceTests: &enabled})
-	if err != nil || created.IndependentAcceptanceTests {
-		t.Fatalf("overridden feature=%+v err=%v", created, err)
-	}
-}
-
 func TestServiceCreateRejectsBlankTitle(t *testing.T) {
 	store := &recordingStore{}
 	projects := &recordingProjectFinder{}
@@ -454,12 +433,12 @@ func TestServiceChoosesStartSettingsOnlyWhileReady(t *testing.T) {
 	}
 }
 
-func TestStartSettingsChooseStepsAndNoAcceptanceTests(t *testing.T) {
+func TestStartSettingsChooseSteps(t *testing.T) {
 	store := NewMemoryStore()
-	defaults := project.Project{ID: "prj_test", AgentProviders: project.DefaultAgentProviders(), IndependentAcceptanceTests: true}
+	defaults := project.Project{ID: "prj_test", AgentProviders: project.DefaultAgentProviders()}
 	service := NewService(store, &recordingProjectFinder{result: defaults})
 	created, err := service.Create(t.Context(), defaults.ID, "Readme", "", SettingsOverrides{})
-	if err != nil || created.IndependentAcceptanceTests {
+	if err != nil {
 		t.Fatalf("create feature: %+v err=%v", created, err)
 	}
 	ready := created
@@ -468,7 +447,7 @@ func TestStartSettingsChooseStepsAndNoAcceptanceTests(t *testing.T) {
 
 	quick := project.WorkSteps{SkipPlan: true, SkipReviewer: true}
 	chosen, err := service.ChooseStartSettings(t.Context(), defaults.ID, created.ID, SettingsOverrides{Steps: &quick})
-	if err != nil || chosen.Steps != quick || chosen.IndependentAcceptanceTests {
+	if err != nil || chosen.Steps != quick {
 		t.Fatalf("quick change settings = %+v err=%v", chosen, err)
 	}
 	invalid := project.WorkSteps{SkipPlan: true}
@@ -482,15 +461,13 @@ func TestServiceCreatesASessionWithoutPlanOrReviewer(t *testing.T) {
 	service := NewService(store, &recordingProjectFinder{result: project.Project{
 		ID: "prj_test", AgentProviders: project.DefaultAgentProviders(),
 		MergePolicy: project.DefaultMergePolicy(), AutonomyPolicy: project.DefaultAutonomyPolicy(),
-		IndependentAcceptanceTests: true,
 	}})
 	created, err := service.Create(t.Context(), "prj_test", "", "", SettingsOverrides{Kind: KindSession})
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}
 	if created.Kind != KindSession || created.Title != "Untitled session 1" ||
-		created.Steps != (project.WorkSteps{SkipPlan: true, SkipReviewer: true}) ||
-		created.IndependentAcceptanceTests {
+		created.Steps != (project.WorkSteps{SkipPlan: true, SkipReviewer: true}) {
 		t.Fatalf("unexpected session: %+v", created)
 	}
 	second, err := service.Create(t.Context(), "prj_test", " ", "", SettingsOverrides{Kind: KindSession})

@@ -82,11 +82,6 @@ func (starter *RemoteLeadStarter) planSelfCorrection(
 // back: the check's reason, without secrets, and bounded.
 func selfCorrectionPrompt(cause error) string {
 	reason := strings.TrimSuffix(strings.TrimSpace(sanitizeReason(cause.Error())), ".")
-	var incomplete acceptanceResultsIncomplete
-	if errors.As(cause, &incomplete) {
-		// As a guided Continue tells it (continueOrVerifyReviewTurn).
-		reason += ". " + strings.TrimSuffix(acceptanceResultsGuidance, ".")
-	}
 	if len(reason) > maxCorrectionReason {
 		cut := maxCorrectionReason
 		for cut > 0 && !utf8.RuneStart(reason[cut]) {

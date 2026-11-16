@@ -1,5 +1,5 @@
 //! Starts the jobs nobody clicks for: validation of work orders that merge on
-//! their own, Commitarium's acceptance-test runs, and preview checks. Each is
+//! their own, and preview checks. Each is
 //! started once per host run; a job's own claim keeps a manual run from racing
 //! it, and an unreachable coordinator just means nothing to start yet.
 
@@ -28,11 +28,6 @@ struct AttentionItem {
     #[serde(default)]
     auto_run: bool,
     validation_job_id: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct AcceptanceJobs {
-    jobs: Vec<Pending>,
 }
 
 #[derive(Deserialize)]
@@ -67,12 +62,6 @@ async fn start_pending(client: &reqwest::Client, shared: &Arc<Shared>, started: 
     let mut validation = Vec::new();
     if let Ok(attention) = pending::<Attention>(client, "/api/v1/attention", "attention").await {
         validation.extend(auto_validation(attention));
-    }
-    if let Ok(acceptance) =
-        pending::<AcceptanceJobs>(client, "/api/v1/acceptance-jobs/pending", "acceptance jobs")
-            .await
-    {
-        validation.extend(acceptance.jobs.into_iter().map(|job| job.id));
     }
     for job_id in validation {
         if started.validation.insert(job_id.clone()) {

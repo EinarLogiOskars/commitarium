@@ -13,26 +13,15 @@ type Kind string
 const (
 	KindGoalDraft          Kind = "goal_draft"
 	KindImplementationPlan Kind = "implementation_plan"
-	KindAcceptanceTests    Kind = "acceptance_tests"
 	KindHandoffBrief       Kind = "handoff_brief"
 )
 
 type StepStatus string
 
-type AcceptanceTestStatus string
-
 const (
 	StepPending    StepStatus = "pending"
 	StepInProgress StepStatus = "in_progress"
 	StepCompleted  StepStatus = "completed"
-)
-
-const (
-	AcceptanceTestPending       AcceptanceTestStatus = "pending"
-	AcceptanceTestRunning       AcceptanceTestStatus = "running"
-	AcceptanceTestPassed        AcceptanceTestStatus = "passed"
-	AcceptanceTestFailed        AcceptanceTestStatus = "failed"
-	AcceptanceTestNotApplicable AcceptanceTestStatus = "not_applicable"
 )
 
 const (
@@ -110,138 +99,12 @@ type ImplementationPlanStep struct {
 	CompletedAt     *time.Time `json:"completed_at,omitempty"`
 }
 
-// AcceptanceTests is deliberately presentation metadata, not executable test
-// source. The private reviewer checkout remains the source of truth for the
-// test commit and commands; this document powers the user-facing checklist.
-type AcceptanceTests struct {
-	PlanVersion            int              `json:"plan_version"`
-	TestCommitID           string           `json:"test_commit_id"`
-	ImplementationCommitID string           `json:"implementation_commit_id"`
-	Tests                  []AcceptanceTest `json:"tests"`
-	// CoordinatorCommitID is the implementation commit the coordinator last
-	// ran the tests against itself, apart from the reviewer.
-	CoordinatorCommitID string `json:"coordinator_commit_id,omitempty"`
-	// CoordinatorError says why the coordinator's run could not run the
-	// tests (their dependencies would not install, or the environment lacks
-	// one); its tests then have no coordinator status.
-	CoordinatorError string `json:"coordinator_error,omitempty"`
-}
-
-type AcceptanceTest struct {
-	ID       string               `json:"id"`
-	Position int                  `json:"position"`
-	Title    string               `json:"title"`
-	Status   AcceptanceTestStatus `json:"status"`
-	Note     string               `json:"note"`
-	// Command runs only this test from the repository root, so the
-	// coordinator can run it itself.
-	Command string `json:"command,omitempty"`
-	// CoordinatorStatus is the coordinator's own run of the test: passed or
-	// failed by its exit code, against CoordinatorCommitID.
-	CoordinatorStatus AcceptanceTestStatus `json:"coordinator_status,omitempty"`
-}
-
 func (kind Kind) IsValid() bool {
-	return kind == KindGoalDraft || kind == KindImplementationPlan || kind == KindAcceptanceTests ||
-		kind == KindHandoffBrief
+	return kind == KindGoalDraft || kind == KindImplementationPlan || kind == KindHandoffBrief
 }
 
 func (status StepStatus) IsValid() bool {
 	return status == StepPending || status == StepInProgress || status == StepCompleted
-}
-
-func (status AcceptanceTestStatus) IsValid() bool {
-	switch status {
-	case AcceptanceTestPending, AcceptanceTestRunning, AcceptanceTestPassed,
-		AcceptanceTestFailed, AcceptanceTestNotApplicable:
-		return true
-	default:
-		return false
-	}
-}
-
-// NormalizeInitial turns reviewer-authored metadata into a coordinator-owned
-// checklist. A reviewer cannot pre-declare a result before the implementation
-// revision is available.
-func (tests AcceptanceTests) NormalizeInitial(planVersion int) (AcceptanceTests, error) {
-	tests.PlanVersion = planVersion
-	tests.ImplementationCommitID = ""
-	tests.CoordinatorCommitID = ""
-	tests.CoordinatorError = ""
-	tests.Tests = append([]AcceptanceTest(nil), tests.Tests...)
-	ids := make([]string, len(tests.Tests))
-	for index := range tests.Tests {
-		ids[index] = tests.Tests[index].ID
-	}
-	ids = normalizeIDs(ids, "test")
-	for index := range tests.Tests {
-		tests.Tests[index].ID = ids[index]
-		tests.Tests[index].Position = index + 1
-		tests.Tests[index].Status = AcceptanceTestPending
-		tests.Tests[index].Note = ""
-		tests.Tests[index].Command = strings.TrimSpace(tests.Tests[index].Command)
-		tests.Tests[index].CoordinatorStatus = ""
-	}
-	if err := tests.Validate(); err != nil {
-		return AcceptanceTests{}, err
-	}
-	return tests, nil
-}
-
-func (tests AcceptanceTests) Validate() error {
-	if tests.PlanVersion < 1 {
-		return fmt.Errorf("%w: acceptance test plan version must be positive", ErrInvalidArtifact)
-	}
-	if !commitIDPattern.MatchString(tests.TestCommitID) {
-		return fmt.Errorf("%w: acceptance tests require a valid private test commit", ErrInvalidArtifact)
-	}
-	if tests.ImplementationCommitID != "" && !commitIDPattern.MatchString(tests.ImplementationCommitID) {
-		return fmt.Errorf("%w: acceptance tests have an invalid implementation commit", ErrInvalidArtifact)
-	}
-	if len(tests.Tests) == 0 || len(tests.Tests) > MaxPlanSteps {
-		return fmt.Errorf("%w: acceptance tests must contain between 1 and %d entries", ErrInvalidArtifact, MaxPlanSteps)
-	}
-	seen := make(map[string]struct{}, len(tests.Tests))
-	for index, test := range tests.Tests {
-		if !stepIDPattern.MatchString(test.ID) {
-			return fmt.Errorf("%w: acceptance test %d has an invalid ID", ErrInvalidArtifact, index+1)
-		}
-		if _, exists := seen[test.ID]; exists {
-			return fmt.Errorf("%w: duplicate acceptance test ID %q", ErrInvalidArtifact, test.ID)
-		}
-		seen[test.ID] = struct{}{}
-		if test.Position != index+1 {
-			return fmt.Errorf("%w: acceptance test %q position must match its array order", ErrInvalidArtifact, test.ID)
-		}
-		if err := validRequiredText("acceptance test "+test.ID+" title", test.Title, MaxStepTextBytes); err != nil {
-			return err
-		}
-		if !test.Status.IsValid() {
-			return fmt.Errorf("%w: acceptance test %q has invalid status %q", ErrInvalidArtifact, test.ID, test.Status)
-		}
-		if test.Command != strings.TrimSpace(test.Command) || len([]byte(test.Command)) > MaxStepTextBytes ||
-			strings.ContainsRune(test.Command, 0) {
-			return fmt.Errorf("%w: acceptance test %q command is invalid", ErrInvalidArtifact, test.ID)
-		}
-		switch test.CoordinatorStatus {
-		case "", AcceptanceTestPassed, AcceptanceTestFailed:
-		default:
-			return fmt.Errorf("%w: acceptance test %q has invalid coordinator status", ErrInvalidArtifact, test.ID)
-		}
-		if test.Note != strings.TrimSpace(test.Note) || len([]byte(test.Note)) > MaxStepTextBytes {
-			return fmt.Errorf("%w: acceptance test %q note is invalid", ErrInvalidArtifact, test.ID)
-		}
-		if (test.Status == AcceptanceTestFailed || test.Status == AcceptanceTestNotApplicable) && test.Note == "" {
-			return fmt.Errorf("%w: acceptance test %q requires a note for status %q", ErrInvalidArtifact, test.ID, test.Status)
-		}
-		if test.Status != AcceptanceTestFailed && test.Status != AcceptanceTestNotApplicable && test.Note != "" {
-			return fmt.Errorf("%w: acceptance test %q cannot have a note for status %q", ErrInvalidArtifact, test.ID, test.Status)
-		}
-		if tests.ImplementationCommitID == "" && test.Status != AcceptanceTestPending {
-			return fmt.Errorf("%w: acceptance test %q cannot run before an implementation commit is pinned", ErrInvalidArtifact, test.ID)
-		}
-	}
-	return nil
 }
 
 func (draft GoalDraft) Validate() error {

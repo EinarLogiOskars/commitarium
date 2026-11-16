@@ -51,62 +51,26 @@ func TestImplementationPlanRejectsOutOfOrderCompletion(t *testing.T) {
 	}
 }
 
-func TestAcceptanceTestsNormalizeAndValidate(t *testing.T) {
-	tests, err := (AcceptanceTests{
-		TestCommitID: "0123456789abcdef0123456789abcdef01234567",
-		Tests: []AcceptanceTest{
-			{ID: "creates-report", Title: "Creates the requested report", Status: AcceptanceTestFailed, Note: "provider value"},
-			{ID: "rejects-empty", Title: "Rejects an empty request"},
-		},
-	}).NormalizeInitial(2)
-	if err != nil {
-		t.Fatalf("normalize acceptance tests: %v", err)
-	}
-	if tests.PlanVersion != 2 || tests.ImplementationCommitID != "" ||
-		tests.Tests[0].Position != 1 || tests.Tests[1].Position != 2 ||
-		tests.Tests[0].Status != AcceptanceTestPending || tests.Tests[0].Note != "" {
-		t.Fatalf("normalized acceptance tests = %+v", tests)
-	}
-	tests.ImplementationCommitID = "abcdef0123456789abcdef0123456789abcdef01"
-	tests.Tests[0].Status = AcceptanceTestRunning
-	tests.Tests[1].Status = AcceptanceTestNotApplicable
-	tests.Tests[1].Note = "The accepted goal excludes empty requests."
-	if err := tests.Validate(); err != nil {
-		t.Fatalf("validate acceptance progress: %v", err)
-	}
-}
-
-func TestAcceptanceTestsRejectExecutedStatusWithoutImplementation(t *testing.T) {
-	tests, err := (AcceptanceTests{
-		TestCommitID: "0123456789abcdef0123456789abcdef01234567",
-		Tests:        []AcceptanceTest{{ID: "behavior", Title: "Exercises the behavior"}},
-	}).NormalizeInitial(1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	tests.Tests[0].Status = AcceptanceTestPassed
-	if err := tests.Validate(); err == nil {
-		t.Fatal("executed status without an implementation commit was accepted")
-	}
-}
-
 func TestNormalizeInitialRepairsAgentChosenIDs(t *testing.T) {
-	tests, err := (AcceptanceTests{
-		TestCommitID: strings.Repeat("a", 40),
-		Tests: []AcceptanceTest{
-			{ID: "Docker Compose: start", Title: "Starts"},
-			{ID: "docker-compose-start", Title: "Duplicate after cleanup"},
-			{ID: "!!!", Title: "Nothing usable"},
-			{ID: "readme.docker_section", Title: "Already valid"},
+	step := func(id string) ImplementationPlanStep {
+		return ImplementationPlanStep{
+			ID: id, Title: "Update", Subtitle: "Docs",
+			DetailsMarkdown: "Edit README.", Verification: []string{"Read it"}, CommitSubject: "docs: update readme",
+		}
+	}
+	repaired, err := (ImplementationPlan{
+		Title: "Plan", Subtitle: "Sub",
+		Steps: []ImplementationPlanStep{
+			step("Docker Compose: start"), step("docker-compose-start"), step("!!!"), step("readme.docker_section"),
 		},
 	}).NormalizeInitial(1)
 	if err != nil {
-		t.Fatalf("normalize acceptance tests: %v", err)
+		t.Fatalf("normalize plan: %v", err)
 	}
-	want := []string{"docker-compose-start", "docker-compose-start-2", "test-3", "readme.docker_section"}
-	for index, test := range tests.Tests {
-		if test.ID != want[index] {
-			t.Fatalf("test %d ID = %q, want %q", index+1, test.ID, want[index])
+	want := []string{"docker-compose-start", "docker-compose-start-2", "step-3", "readme.docker_section"}
+	for index, repairedStep := range repaired.Steps {
+		if repairedStep.ID != want[index] {
+			t.Fatalf("step %d ID = %q, want %q", index+1, repairedStep.ID, want[index])
 		}
 	}
 	plan, err := (ImplementationPlan{

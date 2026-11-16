@@ -3,12 +3,11 @@ package project
 import "time"
 
 type Project struct {
-	ID                         string
-	Name                       string
-	RecoveryPolicy             RecoveryPolicy
-	MergePolicy                MergePolicy
-	AutonomyPolicy             AutonomyPolicy
-	IndependentAcceptanceTests bool
+	ID             string
+	Name           string
+	RecoveryPolicy RecoveryPolicy
+	MergePolicy    MergePolicy
+	AutonomyPolicy AutonomyPolicy
 	// App marks a project the user uses as an app (APPS_PLAN.md).
 	App bool
 	// AssistantMode is how the assistant works here (ADR-027); read it through

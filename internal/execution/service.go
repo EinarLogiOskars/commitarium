@@ -80,26 +80,7 @@ func (s *Service) CreateRunWithModels(
 ) (Run, bool, error) {
 	return s.createRunWithModels(
 		ctx, id, featureID, planningRoundLimit, implementationReviewRoundLimit,
-		agentProviders, agentModels, mergePolicy, false, project.WorkSteps{}, autonomyPolicies...,
-	)
-}
-
-func (s *Service) CreateRunWithModelsAndAcceptance(
-	ctx context.Context,
-	id string,
-	featureID string,
-	planningRoundLimit int,
-	implementationReviewRoundLimit int,
-	agentProviders project.AgentProviders,
-	agentModels project.AgentModels,
-	mergePolicy project.MergePolicy,
-	independentAcceptanceTests bool,
-	autonomyPolicies ...project.AutonomyPolicy,
-) (Run, bool, error) {
-	return s.createRunWithModels(
-		ctx, id, featureID, planningRoundLimit, implementationReviewRoundLimit,
-		agentProviders, agentModels, mergePolicy, independentAcceptanceTests, project.WorkSteps{},
-		autonomyPolicies...,
+		agentProviders, agentModels, mergePolicy, project.WorkSteps{}, autonomyPolicies...,
 	)
 }
 
@@ -114,7 +95,6 @@ func (s *Service) CreateRunWithSteps(
 	agentProviders project.AgentProviders,
 	agentModels project.AgentModels,
 	mergePolicy project.MergePolicy,
-	independentAcceptanceTests bool,
 	steps project.WorkSteps,
 	autonomyPolicies ...project.AutonomyPolicy,
 ) (Run, bool, error) {
@@ -123,7 +103,7 @@ func (s *Service) CreateRunWithSteps(
 	}
 	return s.createRunWithModels(
 		ctx, id, featureID, planningRoundLimit, implementationReviewRoundLimit,
-		agentProviders, agentModels, mergePolicy, independentAcceptanceTests && !steps.SkipReviewer, steps,
+		agentProviders, agentModels, mergePolicy, steps,
 		autonomyPolicies...,
 	)
 }
@@ -137,7 +117,6 @@ func (s *Service) createRunWithModels(
 	agentProviders project.AgentProviders,
 	agentModels project.AgentModels,
 	mergePolicy project.MergePolicy,
-	independentAcceptanceTests bool,
 	steps project.WorkSteps,
 	autonomyPolicies ...project.AutonomyPolicy,
 ) (Run, bool, error) {
@@ -173,7 +152,6 @@ func (s *Service) createRunWithModels(
 		AgentModels:                    agentModels,
 		MergePolicy:                    mergePolicy,
 		AutonomyPolicy:                 autonomyPolicy,
-		IndependentAcceptanceTests:     independentAcceptanceTests,
 		Steps:                          steps,
 		PlanVersion:                    1,
 		StartedAt:                      now, UpdatedAt: now,
@@ -204,8 +182,7 @@ func (s *Service) createRunWithModels(
 			existingProviders != agentProviders ||
 			existing.AgentModels != agentModels ||
 			existingMergePolicy != mergePolicy ||
-			existingAutonomyPolicy != autonomyPolicy ||
-			existing.IndependentAcceptanceTests != independentAcceptanceTests {
+			existingAutonomyPolicy != autonomyPolicy {
 			return Run{}, false, ErrRecordConflict
 		}
 		return existing, false, nil
@@ -902,46 +879,6 @@ func (s *Service) BeginAutonomousTurn(
 	return admitted, nil
 }
 
-func (s *Service) BeginParallelImplementationTurns(
-	ctx context.Context,
-	runID string,
-	leadSessionID string,
-	leadPrevious WorkerAttemptCheckpoint,
-	leadAttemptID string,
-	reviewerSessionID string,
-	reviewerPrevious WorkerAttemptCheckpoint,
-	reviewerAttemptID string,
-	runReason string,
-) (bool, error) {
-	now := s.now().UTC()
-	store, ok := s.store.(interface {
-		BeginParallelImplementationTurns(context.Context, ParallelImplementationAdmission) (bool, error)
-	})
-	if !ok {
-		return false, errors.New("execution store does not support parallel implementation turns")
-	}
-	admitted, err := store.BeginParallelImplementationTurns(ctx, ParallelImplementationAdmission{
-		RunID: runID,
-		Lead: AutonomousTurnAdmission{
-			SessionID: leadSessionID, PreviousAttemptID: leadPrevious.AttemptID,
-			PreviousLastEventSequence: leadPrevious.LastEventSequence,
-			NextAttempt:               WorkerAttemptCheckpoint{SessionID: leadSessionID, AttemptID: leadAttemptID, CreatedAt: now, UpdatedAt: now},
-			ExpectedFeatureState:      feature.StateImplementing, RunReason: runReason, OccurredAt: now,
-		},
-		Reviewer: AutonomousTurnAdmission{
-			SessionID: reviewerSessionID, PreviousAttemptID: reviewerPrevious.AttemptID,
-			PreviousLastEventSequence: reviewerPrevious.LastEventSequence,
-			NextAttempt:               WorkerAttemptCheckpoint{SessionID: reviewerSessionID, AttemptID: reviewerAttemptID, CreatedAt: now, UpdatedAt: now},
-			ExpectedFeatureState:      feature.StateImplementing, RunReason: runReason, OccurredAt: now,
-		},
-		RunReason: runReason, OccurredAt: now,
-	})
-	if err != nil {
-		return false, fmt.Errorf("begin parallel implementation turns for run %q: %w", runID, err)
-	}
-	return admitted, nil
-}
-
 // BeginChainedTurn starts the next agent turn while the overall run remains
 // active. The store requires every other session to be waiting or terminal,
 // which prevents the handoff from creating two concurrently working agents.
@@ -983,20 +920,7 @@ func (s *Service) BeginChainedTurnInState(
 	expectedFeatureState feature.State,
 	runReason string,
 ) (bool, error) {
-	return s.beginChainedTurn(ctx, sessionID, previous, nextAttemptID, expectedFeatureState, runReason, false)
-}
-
-// BeginChainedTurnAlongside admits a chained turn while the run's other agent
-// works in parallel (implementation alongside private acceptance tests).
-func (s *Service) BeginChainedTurnAlongside(
-	ctx context.Context,
-	sessionID string,
-	previous WorkerAttemptCheckpoint,
-	nextAttemptID string,
-	expectedFeatureState feature.State,
-	runReason string,
-) (bool, error) {
-	return s.beginChainedTurn(ctx, sessionID, previous, nextAttemptID, expectedFeatureState, runReason, true)
+	return s.beginChainedTurn(ctx, sessionID, previous, nextAttemptID, expectedFeatureState, runReason)
 }
 
 func (s *Service) beginChainedTurn(
@@ -1006,7 +930,6 @@ func (s *Service) beginChainedTurn(
 	nextAttemptID string,
 	expectedFeatureState feature.State,
 	runReason string,
-	alongside bool,
 ) (bool, error) {
 	now := s.now().UTC()
 	admitted, err := s.store.BeginAutonomousTurn(ctx, AutonomousTurnAdmission{
@@ -1017,11 +940,10 @@ func (s *Service) beginChainedTurn(
 			SessionID: sessionID, AttemptID: nextAttemptID,
 			CreatedAt: now, UpdatedAt: now,
 		},
-		ExpectedFeatureState:  expectedFeatureState,
-		RunReason:             runReason,
-		OccurredAt:            now,
-		RunAlreadyActive:      true,
-		AlongsideParallelWork: alongside,
+		ExpectedFeatureState: expectedFeatureState,
+		RunReason:            runReason,
+		OccurredAt:           now,
+		RunAlreadyActive:     true,
 	})
 	if err != nil {
 		return false, fmt.Errorf("begin chained turn for session %q: %w", sessionID, err)

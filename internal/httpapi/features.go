@@ -16,34 +16,32 @@ import (
 )
 
 type createFeatureRequest struct {
-	Title                      string                  `json:"title"`
-	Description                string                  `json:"description"`
-	AgentProviders             *agentProvidersRequest  `json:"agent_providers"`
-	AgentModels                *agentModelsRequest     `json:"agent_models"`
-	AutonomyPolicy             *project.AutonomyPolicy `json:"autonomy_policy"`
-	MergePolicy                *project.MergePolicy    `json:"merge_policy"`
-	DialogueLimits             *dialogueLimitsRequest  `json:"dialogue_limits"`
-	IndependentAcceptanceTests *bool                   `json:"independent_acceptance_tests"`
+	Title          string                  `json:"title"`
+	Description    string                  `json:"description"`
+	AgentProviders *agentProvidersRequest  `json:"agent_providers"`
+	AgentModels    *agentModelsRequest     `json:"agent_models"`
+	AutonomyPolicy *project.AutonomyPolicy `json:"autonomy_policy"`
+	MergePolicy    *project.MergePolicy    `json:"merge_policy"`
+	DialogueLimits *dialogueLimitsRequest  `json:"dialogue_limits"`
 	// Kind is "work_order" (the default) or "session" (ADR-019).
 	Kind feature.Kind `json:"kind"`
 }
 
 type featureResponse struct {
-	ID                         string                 `json:"id"`
-	ProjectID                  string                 `json:"project_id"`
-	Title                      string                 `json:"title"`
-	Description                string                 `json:"description"`
-	State                      feature.State          `json:"state"`
-	AcceptedGoal               string                 `json:"accepted_goal,omitempty"`
-	GoalAcceptedAt             *time.Time             `json:"goal_accepted_at,omitempty"`
-	DialogueLimits             dialogueLimitsResponse `json:"dialogue_limits"`
-	AgentProviders             agentProvidersResponse `json:"agent_providers"`
-	AgentModels                agentModelsResponse    `json:"agent_models"`
-	MergePolicy                project.MergePolicy    `json:"merge_policy"`
-	AutonomyPolicy             project.AutonomyPolicy `json:"autonomy_policy"`
-	IndependentAcceptanceTests bool                   `json:"independent_acceptance_tests"`
-	Steps                      workStepsResponse      `json:"steps"`
-	Kind                       feature.Kind           `json:"kind"`
+	ID             string                 `json:"id"`
+	ProjectID      string                 `json:"project_id"`
+	Title          string                 `json:"title"`
+	Description    string                 `json:"description"`
+	State          feature.State          `json:"state"`
+	AcceptedGoal   string                 `json:"accepted_goal,omitempty"`
+	GoalAcceptedAt *time.Time             `json:"goal_accepted_at,omitempty"`
+	DialogueLimits dialogueLimitsResponse `json:"dialogue_limits"`
+	AgentProviders agentProvidersResponse `json:"agent_providers"`
+	AgentModels    agentModelsResponse    `json:"agent_models"`
+	MergePolicy    project.MergePolicy    `json:"merge_policy"`
+	AutonomyPolicy project.AutonomyPolicy `json:"autonomy_policy"`
+	Steps          workStepsResponse      `json:"steps"`
+	Kind           feature.Kind           `json:"kind"`
 	// Background marks a work order Commitarium runs by itself, such as the
 	// preview setup.
 	Background bool `json:"background,omitempty"`
@@ -115,7 +113,6 @@ func (api *API) createFeatureHandler(
 	}
 	overrides.MergePolicy = request.MergePolicy
 	overrides.AutonomyPolicy = request.AutonomyPolicy
-	overrides.IndependentAcceptanceTests = request.IndependentAcceptanceTests
 	overrides.Kind = request.Kind
 	if api.toolchains != nil {
 		manifest, err := api.projectToolchain(r.Context(), projectID)
@@ -341,18 +338,17 @@ func newFeatureResponse(storedFeature feature.Feature) featureResponse {
 			PlanningRounds:             storedFeature.DialogueLimits.PlanningRounds,
 			ImplementationReviewRounds: storedFeature.DialogueLimits.ImplementationReviewRounds,
 		},
-		AgentProviders:             newAgentProvidersResponse(agentProviders),
-		AgentModels:                agentModelsResponse{Lead: storedFeature.AgentModels.Lead, Reviewer: storedFeature.AgentModels.Reviewer},
-		MergePolicy:                mergePolicy,
-		AutonomyPolicy:             autonomyPolicy,
-		IndependentAcceptanceTests: storedFeature.IndependentAcceptanceTests,
-		Steps:                      newWorkStepsResponse(storedFeature.Steps),
-		Kind:                       featureKind(storedFeature.Kind),
-		Background:                 storedFeature.Background,
-		CreatedBy:                  featureCreator(storedFeature.CreatedBy),
-		PreviewCheck:               storedFeature.PreviewCheck,
-		CreatedAt:                  storedFeature.CreatedAt,
-		UpdatedAt:                  storedFeature.UpdatedAt,
+		AgentProviders: newAgentProvidersResponse(agentProviders),
+		AgentModels:    agentModelsResponse{Lead: storedFeature.AgentModels.Lead, Reviewer: storedFeature.AgentModels.Reviewer},
+		MergePolicy:    mergePolicy,
+		AutonomyPolicy: autonomyPolicy,
+		Steps:          newWorkStepsResponse(storedFeature.Steps),
+		Kind:           featureKind(storedFeature.Kind),
+		Background:     storedFeature.Background,
+		CreatedBy:      featureCreator(storedFeature.CreatedBy),
+		PreviewCheck:   storedFeature.PreviewCheck,
+		CreatedAt:      storedFeature.CreatedAt,
+		UpdatedAt:      storedFeature.UpdatedAt,
 	}
 }
 
