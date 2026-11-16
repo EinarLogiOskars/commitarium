@@ -5,7 +5,6 @@
   "recovery_policy": "approval_required",
   "merge_policy": "auto_after_gates",
   "autonomy_policy": "run_to_completion",
-  "independent_acceptance_tests": false,
   "app": true,
   "assistant_mode": "builds",
   "dialogue_limits": {
@@ -56,7 +55,6 @@
    },
    "merge_policy": "auto_after_gates",
    "autonomy_policy": "run_to_completion",
-   "independent_acceptance_tests": false,
    "steps": {
     "documented_plan": true,
     "reviewer": false,
@@ -91,7 +89,6 @@
    },
    "merge_policy": "auto_after_gates",
    "autonomy_policy": "run_to_completion",
-   "independent_acceptance_tests": false,
    "steps": {
     "documented_plan": true,
     "reviewer": false,
@@ -126,7 +123,6 @@
    },
    "merge_policy": "auto_after_gates",
    "autonomy_policy": "run_to_completion",
-   "independent_acceptance_tests": false,
    "steps": {
     "documented_plan": true,
     "reviewer": true,
@@ -161,7 +157,6 @@
    },
    "merge_policy": "auto_after_gates",
    "autonomy_policy": "run_to_completion",
-   "independent_acceptance_tests": false,
    "steps": {
     "documented_plan": true,
     "reviewer": true,
@@ -196,7 +191,6 @@
    },
    "merge_policy": "auto_after_gates",
    "autonomy_policy": "run_to_completion",
-   "independent_acceptance_tests": false,
    "steps": {
     "documented_plan": true,
     "reviewer": true,
@@ -231,7 +225,6 @@
    },
    "merge_policy": "auto_after_gates",
    "autonomy_policy": "run_to_completion",
-   "independent_acceptance_tests": false,
    "steps": {
     "documented_plan": true,
     "reviewer": true,
@@ -266,7 +259,6 @@
    },
    "merge_policy": "auto_after_gates",
    "autonomy_policy": "run_to_completion",
-   "independent_acceptance_tests": false,
    "steps": {
     "documented_plan": true,
     "reviewer": true,
@@ -301,7 +293,6 @@
    },
    "merge_policy": "auto_after_gates",
    "autonomy_policy": "run_to_completion",
-   "independent_acceptance_tests": false,
    "steps": {
     "documented_plan": false,
     "reviewer": false,
@@ -2853,7 +2844,6 @@
   },
   "merge_policy": "auto_after_gates",
   "autonomy_policy": "run_to_completion",
-  "independent_acceptance_tests": false,
   "steps": {
    "documented_plan": true,
    "reviewer": true,
@@ -2892,7 +2882,6 @@
    },
    "merge_policy": "auto_after_gates",
    "autonomy_policy": "run_to_completion",
-   "independent_acceptance_tests": false,
    "plan_version": 1,
    "started_at": "2026-11-03T19:08:12.45507368Z",
    "updated_at": "2026-11-03T19:18:40.888923179Z",
@@ -3552,7 +3541,6 @@
   },
   "merge_policy": "auto_after_gates",
   "autonomy_policy": "run_to_completion",
-  "independent_acceptance_tests": false,
   "plan_version": 1,
   "started_at": "2026-11-03T19:08:12.45507368Z",
   "updated_at": "2026-11-03T19:18:40.888923179Z",
@@ -3675,7 +3663,6 @@
   },
   "merge_policy": "auto_after_gates",
   "autonomy_policy": "run_to_completion",
-  "independent_acceptance_tests": false,
   "steps": {
    "documented_plan": true,
    "reviewer": true,
@@ -3715,7 +3702,6 @@
    },
    "merge_policy": "auto_after_gates",
    "autonomy_policy": "run_to_completion",
-   "independent_acceptance_tests": false,
    "plan_version": 1,
    "started_at": "2026-11-03T19:08:12.652136472Z",
    "updated_at": "2026-11-03T19:22:43.655972083Z",
@@ -4393,7 +4379,6 @@
   },
   "merge_policy": "auto_after_gates",
   "autonomy_policy": "run_to_completion",
-  "independent_acceptance_tests": false,
   "plan_version": 1,
   "started_at": "2026-11-03T19:08:12.652136472Z",
   "updated_at": "2026-11-03T19:22:43.655972083Z",
