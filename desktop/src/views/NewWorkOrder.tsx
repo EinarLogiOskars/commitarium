@@ -6,11 +6,10 @@ import type { Project } from "../api/types";
 
 /** Create-a-work-order form: what and why. Agents, models, and workflow
  * settings are chosen at Start. */
-/** A prefilled work order, optionally with lighter settings than the project's. */
+/** A prefilled work order. */
 export interface OrderDraft {
   title: string;
   description: string;
-  independentTests?: boolean;
 }
 
 export function NewWorkOrder({
@@ -41,9 +40,6 @@ export function NewWorkOrder({
         description: description.trim(),
         // Agents, models, and workflow settings are chosen at Start, from a
         // suggestion the user can change (ADR-027); a draft has none.
-        ...(initial?.independentTests !== undefined
-          ? { independent_acceptance_tests: initial.independentTests }
-          : {}),
       });
       onCreated(created.id);
     } catch (e) {

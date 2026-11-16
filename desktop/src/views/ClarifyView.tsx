@@ -401,7 +401,6 @@ function StartWithoutClarifying({
   const [settings, setSettings] = useState<StartSettingsValue>(() => ({
     ...startSettingsFrom(feature),
     steps: { clarification: false, documented_plan: false, reviewer: false },
-    independent_acceptance_tests: false,
   }));
 
   const start = async () => {

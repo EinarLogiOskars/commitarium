@@ -1,21 +1,18 @@
 import { useEffect, useRef, useState } from "react";
 import { useFeatureArtifact } from "./useFeatureArtifact";
 import { PlanChecklist, STEP_DOT } from "./ImplementationView";
-import { AcceptanceTestsList, DOT } from "./AcceptanceTests";
-import type { AcceptanceTestsDocument, ImplementationPlanDocument } from "../api/types";
+import type { ImplementationPlanDocument } from "../api/types";
 
-type Tab = "checklist" | "tests" | "details";
+type Tab = "checklist" | "details";
 
 const TAB_LABELS: Record<Tab, string> = {
   checklist: "Checklist",
-  tests: "Tests",
   details: "Details",
 };
 
 // The work order's one side card, beside the conversation. Its tabs are only
 // what the viewed phase needs: the implementation checklist while the lead
-// implements, the acceptance tests from review on, and the work order's
-// description whenever it has one. It folds into a slim strip showing the
+// implements, and the work order's description whenever it has one. It folds into a slim strip showing the
 // current work's progress.
 export function OrderSidebar({
   projectId,
@@ -42,20 +39,12 @@ export function OrderSidebar({
     "implementation_plan",
     phase === 2,
   );
-  const { artifact: tests } = useFeatureArtifact<AcceptanceTestsDocument>(
-    projectId,
-    featureId,
-    "acceptance_tests",
-    phase >= 3,
-  );
   const checklist = phase === 2 ? (plan?.document ?? null) : null;
-  const testDoc = phase >= 3 ? (tests?.document ?? null) : null;
   const tabs: Tab[] = [
     ...(checklist ? (["checklist"] as const) : []),
-    ...(testDoc ? (["tests"] as const) : []),
     ...(description ? (["details"] as const) : []),
   ];
-  const work = checklist || testDoc;
+  const work = checklist;
 
   const [open, setOpen] = useState(!!work);
   const [tab, setTab] = useState<Tab | null>(null);
@@ -87,7 +76,6 @@ export function OrderSidebar({
   if (!open && !work) return null;
   if (!open) {
     const steps = checklist?.steps ?? [];
-    const results = testDoc?.tests ?? [];
     return (
       <button
         className="order-side__strip"
@@ -108,18 +96,6 @@ export function OrderSidebar({
             <span className="order-side__dots" aria-hidden>
               {steps.map((s) => (
                 <span key={s.id} className={`dot dot--${STEP_DOT[s.status] ?? "muted"}`} />
-              ))}
-            </span>
-          </>
-        )}
-        {testDoc && (
-          <>
-            <span className="muted note">
-              {results.filter((t) => t.status === "passed").length}/{results.length}
-            </span>
-            <span className="order-side__dots" aria-hidden>
-              {results.map((t) => (
-                <span key={t.id} className={`dot dot--${DOT[t.status]}`} />
               ))}
             </span>
           </>
@@ -161,7 +137,6 @@ export function OrderSidebar({
       </div>
       <div className="order-side__body">
         {active === "checklist" && checklist && <PlanChecklist plan={checklist} />}
-        {active === "tests" && testDoc && <AcceptanceTestsList doc={testDoc} />}
         {active === "details" && <p className="order-side__details">{description}</p>}
       </div>
     </aside>

@@ -17,7 +17,6 @@ export const PHASE_LABELS: Record<string, string> = {
   plan: "Plan",
   plan_approval: "Plan approval",
   implement: "Implement",
-  acceptance_tests: "Acceptance tests",
   review: "Review",
   correction: "Correction",
   readiness: "Readiness",
