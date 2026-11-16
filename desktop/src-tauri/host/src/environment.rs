@@ -31,12 +31,6 @@ mkdir -p /workspace /tmp/home /tmp/mise-cache /tmp/mise-state
 cp -a /source/. /workspace/
 git -c safe.directory=/workspace -C /workspace reset --hard "$COMMITARIUM_VALIDATION_COMMIT" >/dev/null
 git -c safe.directory=/workspace -C /workspace clean -fd >/dev/null
-if [ -n "${COMMITARIUM_TEST_COMMIT:-}" ]; then
-    git -c safe.directory='*' -C /workspace fetch --quiet --no-tags /tests HEAD '+refs/heads/*:refs/remotes/acceptance/*'
-    git -c safe.directory='*' -C /workspace cat-file -e "$COMMITARIUM_TEST_COMMIT^{commit}"
-    git -c safe.directory='*' -c user.name=Commitarium -c user.email=commitarium@commitarium.local \
-        -C /workspace merge --quiet --no-edit "$COMMITARIUM_TEST_COMMIT"
-fi
 # Commands run from the repository root, as they do for the agents.
 cd /workspace
 # The project's dependencies, installed while the container is still online:
@@ -110,7 +104,7 @@ while [ "$index" -lt "$count" ]; do
         --rawfile output /tmp/validation-command-bounded.log \
         '. + [{command:$command,exit_code:$exit_code,output:$output,duration_ms:$duration_ms}]')
     printf '%s\n' "$results" > /output/results.json
-    if [ "$exit_code" -ne 0 ] && [ -z "${COMMITARIUM_RUN_ALL:-}" ]; then break; fi
+    if [ "$exit_code" -ne 0 ]; then break; fi
     index=$((index+1))
 done
 "#;
@@ -152,13 +146,6 @@ pub struct ValidationJob {
     workspace_id: String,
     commit_id: String,
     commands: Vec<String>,
-    /// "validation", or "acceptance" for the coordinator's own run of the
-    /// reviewer's acceptance tests.
-    #[serde(default)]
-    kind: String,
-    /// The reviewer's private test commit, merged in from its checkout.
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    merge_commit_id: String,
     status: String,
     results: Vec<ValidationCommandResult>,
     error: Option<String>,
@@ -870,23 +857,6 @@ fn execute_validation(job: &ValidationJob) -> Result<Vec<ValidationCommandResult
         ))
         .arg("--env")
         .arg(format!("COMMITARIUM_VALIDATION_COMMIT={}", job.commit_id));
-    // An acceptance run merges the reviewer's private test commit, read from
-    // its checkout, and runs every test whatever the others did.
-    if job.kind == "acceptance" {
-        if !safe_commit(&job.merge_commit_id) {
-            return Err("the acceptance test commit is invalid".into());
-        }
-        let tests = reviewer_workspace(&job.workspace_id)?;
-        command
-            .arg("--mount")
-            .arg(format!(
-                "type=bind,src={},dst=/tests,readonly",
-                tests.display()
-            ))
-            .arg("--env")
-            .arg(format!("COMMITARIUM_TEST_COMMIT={}", job.merge_commit_id))
-            .args(["--env", "COMMITARIUM_RUN_ALL=1"]);
-    }
     command
         .args([
             "--env",
@@ -1119,16 +1089,6 @@ fn managed_workspace(workspace_id: &str) -> Result<PathBuf, String> {
     workspace_under(
         "COMMITARIUM_WORKSPACE_SOURCE",
         ".commitarium/workspaces",
-        workspace_id,
-    )
-}
-
-/// The reviewer's checkout of a work order, which holds its private
-/// acceptance-test commit.
-fn reviewer_workspace(workspace_id: &str) -> Result<PathBuf, String> {
-    workspace_under(
-        "COMMITARIUM_REVIEWER_WORKSPACE_SOURCE",
-        ".commitarium/reviewer-workspaces",
         workspace_id,
     )
 }
