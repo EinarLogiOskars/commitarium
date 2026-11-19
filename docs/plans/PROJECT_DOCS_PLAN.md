@@ -1,7 +1,7 @@
 # Project Docs: Design Note
 
-**Status:** proposed 2026-11-19, [ADR-042](../adr/0042-projects-keep-their-own-decisions.md);
-planned for 0.16.0 as one small PR next to actions as tools. Not built.
+**Status:** agreed 2026-11-19, [ADR-042](../adr/0042-projects-keep-their-own-decisions.md);
+built for 0.16.0 as one small PR next to actions as tools.
 
 ## Why
 
@@ -71,8 +71,11 @@ stay as they are.
 
 **Numbers:** a new record takes the next number after the highest on the
 base branch. Two work orders running at once (ADR-036) can pick the same
-one; Git sees two different files and no conflict, so the base-update turn
-renumbers, as in the table.
+one; Git sees two different files and no conflict, so Forgejo merges both
+and the base-update turn would not even start. The first-pass reviewer,
+which already checks the merge against the latest base branch, treats a
+taken number as a defect; the base-update turn also renumbers when it runs
+for another conflict.
 
 **Mayka:** users ask for work in her chat, whose instructions are in
 `internal/conversations/turn.go`, and that chat has the repository checked
@@ -99,8 +102,8 @@ the records otherwise.
 
 One PR:
 
-1. The brief additions above, with `prompts_test.go` and
-   `prompts_review_test.go` in `internal/orchestration` updated.
+1. The brief additions above, with tests in
+   `internal/orchestration/prompts_test.go`.
 2. Mayka's line in `turn.go` and `vision.go`, with their tests in
    `internal/conversations` and `internal/vision`.
 3. ADR-042 marked Accepted.
