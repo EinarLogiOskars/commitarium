@@ -266,6 +266,28 @@ func TestBriefsKeepTheProjectsDocs(t *testing.T) {
 	if review := reads["review"]; !strings.Contains(review, "without updating the README") {
 		t.Errorf("review does not treat a stale README as a defect:\n%s", review)
 	}
+	if !strings.Contains(reads["review"], "whose number the latest base branch already uses") {
+		t.Errorf("review does not catch a record number main already took:\n%s", reads["review"])
+	}
+	for name, text := range map[string]string{"planning": reads["planning"], "solo planning": reads["solo planning"], "replanning": reads["replanning"]} {
+		if !strings.Contains(text, "in the step that makes the choice") {
+			t.Errorf("%s does not put the record in the step that makes the choice:\n%s", name, text)
+		}
+	}
+	if quick := reads["quick change"]; strings.Contains(quick, "the plan calls for") || !strings.Contains(quick, "lasting choice the change makes") {
+		t.Errorf("quick change refers to a plan it does not have:\n%s", quick)
+	}
+	if implementation := implementationInstructions(prepared, "run_x:lead:implementation:1"); !strings.Contains(implementation, "in the commit of the step") {
+		t.Errorf("implementation does not say which commit a record goes in:\n%s", implementation)
+	}
+	for name, text := range map[string]string{
+		"re-review":  implementationReviewInstructions(prepared, "Fixed F1.", commitID, "attempt", strings.Repeat("b", 40), false),
+		"merge only": implementationReviewInstructions(prepared, "Merged main.", commitID, "attempt", strings.Repeat("b", 40), true),
+	} {
+		if strings.Contains(text, "without updating the README") {
+			t.Errorf("%s repeats the full docs check:\n%s", name, text)
+		}
+	}
 	if update := implementationBaseUpdateInstructions(prepared, commitID, "", "", "run_x:lead:base:1"); !strings.Contains(update, "renumber") {
 		t.Errorf("base update does not renumber a colliding record:\n%s", update)
 	}

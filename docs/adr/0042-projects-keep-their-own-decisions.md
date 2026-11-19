@@ -38,8 +38,9 @@ instructions. It is all brief text: no storage, API, UI or code checks.
 - Agents spend some tokens reading the list and the records they need.
 - Docs can still drift where the reviewer does not look; ARCHITECTURE.md
   is only a note, and work orders without a reviewer rely on the lead.
-- Parallel work orders can pick the same record number; the base-update
-  turn renumbers.
+- Parallel work orders can pick the same record number, which Git merges
+  without a conflict; the reviewer catches it, and work orders without a
+  reviewer can still land a duplicate.
 - The user sees none of it unless they open the repository; a Decisions
   view may come later.
 

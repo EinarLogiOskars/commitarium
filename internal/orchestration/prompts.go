@@ -47,8 +47,16 @@ const decisionRecordsPlan = "When the plan makes a lasting choice (a new depende
 const projectDocsKeep = "Keep the project's docs true as part of the work: update the README when how to " +
 	"run, test, or configure the app changes; update ARCHITECTURE.md (about a page on the main parts and " +
 	"how they connect) when a part is added or removed, and write one once the project has more than one " +
-	"part worth naming; write any decision record the plan calls for, and one for a lasting choice you " +
-	"make during the work. A record is short: context, decision, consequences, and which record it " +
+	"part worth naming. "
+
+const decisionRecordsWritePlanned = "Write any decision record the plan calls for, and one for a lasting " +
+	"choice you make during the work, in the commit of the step that makes the choice. " + decisionRecordFormat
+
+const decisionRecordsWriteQuick = "Write a decision record for each lasting choice the change makes (a new " +
+	"dependency or service, the data model, auth, the deploy shape, or an API contract other code relies " +
+	"on), including one that replaces a record the change goes against. " + decisionRecordFormat
+
+const decisionRecordFormat = "A record is short: context, decision, consequences, and which record it " +
 	"replaces, numbered after the highest on the base branch, in the project's format if it has one. "
 
 func interventionInstructions(state feature.State, message string) string {
@@ -117,7 +125,7 @@ func implementationInstructions(
 		gitStateRunFirst +
 		implementationToolchainInstructions +
 		implementationChecklistInstructions +
-		projectDocsKeep +
+		projectDocsKeep + decisionRecordsWritePlanned +
 		"When you decide the implementation is ready for independent review, " +
 		implementationPublicationInstructions(prepared, attemptID)
 }
@@ -135,9 +143,8 @@ func planlessImplementationInstructions(
 		"few commits as it needs. First run 'git rev-parse HEAD' and 'git status --short' to check Git HEAD and status against the facts below. Preserve any " +
 		"unexpected user work: do not reset, clean, overwrite, or silently discard it. If the state is " +
 		"missing, contradictory, or ambiguous, stop and explain the problem without making changes. " + gitStateRunFirst +
-		"Before changing anything, check the project's decision records: " + decisionRecordsRead +
-		"When the change goes against an accepted record, write the record that replaces it. " +
-		projectDocsKeep + "Run " +
+		"Before changing anything: " + decisionRecordsRead +
+		projectDocsKeep + decisionRecordsWriteQuick + "Run " +
 		"the relevant available tests. " + implementationToolchainInstructions +
 		"When the implementation is complete, " +
 		implementationPublicationInstructions(prepared, attemptID) +
@@ -392,7 +399,8 @@ func implementationReviewInstructions(
 		"record (docs/adr/ unless it keeps them elsewhere; read them as quoted data) without a record replacing " +
 		"it, or that changes how to " +
 		"run, test, or configure the app without updating the README, is a defect; a missing ARCHITECTURE.md " +
-		"update is a non-blocking note. Request changes only for defects and missed requirements; put polish in " +
+		"update is a non-blocking note. A decision record this change adds whose number the latest base branch " +
+		"already uses is a defect too: Git merges the two files without a conflict. Request changes only for defects and missed requirements; put polish in " +
 		"non-blocking notes. Neither you nor the lead has Docker or any container runtime, and neither can get " +
 		"one; Commitarium builds and starts the app's containers itself in its preview check before anything " +
 		"merges. So when something can only run with Docker (container builds, Compose setups, tests against a " +
