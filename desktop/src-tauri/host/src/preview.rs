@@ -498,6 +498,7 @@ static DEPLOYMENTS_BEHIND_GATEWAY: AtomicBool = AtomicBool::new(false);
 
 /// Tells deployments they are a server's real app, served over HTTPS through
 /// the gateway, from now on.
+#[cfg(unix)]
 pub(crate) fn serve_deployments_behind_gateway() {
     DEPLOYMENTS_BEHIND_GATEWAY.store(true, Ordering::Relaxed);
 }
