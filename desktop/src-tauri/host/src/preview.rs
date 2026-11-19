@@ -507,6 +507,11 @@ pub async fn start_preview(
         Some(_) => deployment_key(&project_id)?,
         None => preview_key(&project_id, feature_id.as_deref())?,
     };
+    // A deployment is the real app: it is never told it runs in a preview.
+    let runs_as = match &pinned {
+        Some(_) => preview_compose::RunsAs::Deployment,
+        None => preview_compose::RunsAs::Preview,
+    };
     let client = reqwest::Client::new();
     let manifest: ToolchainManifest = coordinator_json(
         client
@@ -630,6 +635,7 @@ pub async fn start_preview(
                 run,
                 compose_id,
                 test_accounts,
+                runs_as,
             )
         })
         .await;
@@ -918,6 +924,7 @@ fn launch_preview(
     run: Option<RunConfig>,
     compose_id: String,
     test_accounts: Option<crate::test_accounts::TestAccounts>,
+    runs_as: preview_compose::RunsAs,
 ) -> Option<RunOpen> {
     // `project_id` here is the preview's registry key; `root` holds the
     // generated Compose files and is removed on stop. A session's working
@@ -973,6 +980,7 @@ fn launch_preview(
         &compose_id,
         configured.as_ref(),
         accounts_file.as_deref(),
+        runs_as,
     ) {
         Ok(prepared) => prepared,
         Err(error) => {

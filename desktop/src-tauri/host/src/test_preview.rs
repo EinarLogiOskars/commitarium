@@ -336,6 +336,7 @@ fn launch(
         &compose_id,
         configured.as_ref(),
         accounts_file.as_deref(),
+        preview_compose::RunsAs::Preview,
     )?;
     let runtime = ComposeRuntime {
         project_name: prepared.project_name.clone(),
