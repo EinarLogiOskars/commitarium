@@ -158,6 +158,16 @@ pub(crate) fn find_compose_file(checkout: &Path) -> Result<PathBuf, String> {
     )
 }
 
+/// What a rewritten Compose file runs as. A preview, and anything else opened
+/// over plain http on 127.0.0.1, is told so with `COMMITARIUM_PREVIEW=1`; a
+/// server's deployment, served over HTTPS, keeps its production settings
+/// (ADR-029).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RunsAs {
+    Preview,
+    Deployment,
+}
+
 /// `test_accounts` is the host file of the preview's test logins, mounted
 /// read-only into every container; deployments and checks pass none.
 pub(crate) fn normalize_and_rewrite(
@@ -165,6 +175,7 @@ pub(crate) fn normalize_and_rewrite(
     project_id: &str,
     open: Option<&OpenTarget>,
     test_accounts: Option<&Path>,
+    runs_as: RunsAs,
 ) -> Result<PreparedCompose, String> {
     let compose_file = find_compose_file(checkout)?;
     validate_raw_compose(&compose_file)?;
@@ -189,7 +200,7 @@ pub(crate) fn normalize_and_rewrite(
     }
     let model: Value = serde_json::from_slice(&output.stdout)
         .map_err(|e| format!("decode normalized project Compose file: {e}"))?;
-    validate_and_rewrite_with(checkout, project_id, open, test_accounts, model)
+    validate_and_rewrite_with(checkout, project_id, open, test_accounts, runs_as, model)
 }
 
 #[cfg(test)]
@@ -199,7 +210,14 @@ pub(crate) fn validate_and_rewrite(
     open: &OpenTarget,
     model: Value,
 ) -> Result<PreparedCompose, String> {
-    validate_and_rewrite_with(checkout, project_id, Some(open), None, model)
+    validate_and_rewrite_with(
+        checkout,
+        project_id,
+        Some(open),
+        None,
+        RunsAs::Preview,
+        model,
+    )
 }
 
 /// Validates and rewrites a normalized Compose model. Without an open target,
@@ -210,6 +228,7 @@ pub(crate) fn validate_and_rewrite_with(
     project_id: &str,
     open: Option<&OpenTarget>,
     test_accounts: Option<&Path>,
+    runs_as: RunsAs,
     mut model: Value,
 ) -> Result<PreparedCompose, String> {
     let checkout = checkout
@@ -266,7 +285,9 @@ pub(crate) fn validate_and_rewrite_with(
             rewrite_ports(ports, service_name, &mut published)?;
         }
         rewrite_labels(service, &compose_project)?;
-        mark_preview_environment(service)?;
+        if runs_as == RunsAs::Preview {
+            mark_preview_environment(service)?;
+        }
         if let Some(test_accounts) = test_accounts {
             mount_test_accounts(service, test_accounts)?;
         }
@@ -1063,6 +1084,34 @@ mod tests {
     }
 
     #[test]
+    fn a_deployment_is_not_told_it_is_a_preview() {
+        let root = tempfile::tempdir().unwrap();
+        let prepared = validate_and_rewrite_with(
+            root.path(),
+            "prj_test",
+            Some(&OpenTarget {
+                service: "web".into(),
+                port: 5173,
+            }),
+            None,
+            RunsAs::Deployment,
+            full_stack(root.path()),
+        )
+        .unwrap();
+        for name in ["web", "api", "db"] {
+            let environment = &prepared.model["services"][name]["environment"];
+            assert!(
+                environment.get("COMMITARIUM_PREVIEW").is_none(),
+                "{name} was told it runs in a preview"
+            );
+        }
+        assert_eq!(
+            prepared.model["services"]["api"]["environment"]["DATABASE_URL"],
+            "postgres://postgres@db/app"
+        );
+    }
+
+    #[test]
     fn every_container_gets_the_test_accounts_read_only() {
         let root = tempfile::tempdir().unwrap();
         let accounts = root.path().join("test-accounts.json");
@@ -1080,6 +1129,7 @@ mod tests {
                 port: 5173,
             }),
             Some(&accounts),
+            RunsAs::Preview,
             stack,
         )
         .unwrap();

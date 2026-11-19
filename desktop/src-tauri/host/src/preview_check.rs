@@ -250,9 +250,16 @@ fn check_source(project_id: &str, root: &Path, open: Option<RunOpen>) -> (bool, 
         &compose_id,
         configured.as_ref(),
         None,
+        preview_compose::RunsAs::Preview,
     ) {
         Err(error) if configured.is_some() && error.contains("preview open") => {
-            preview_compose::normalize_and_rewrite(&source, &compose_id, None, None)
+            preview_compose::normalize_and_rewrite(
+                &source,
+                &compose_id,
+                None,
+                None,
+                preview_compose::RunsAs::Preview,
+            )
         }
         prepared => prepared,
     };
