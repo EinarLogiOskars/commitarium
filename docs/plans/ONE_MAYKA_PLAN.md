@@ -1,8 +1,9 @@
 # One Mayka and Workspaces: Design Note
 
 **Status:** agreed 2026-11-15, [ADR-041](../adr/0041-one-mayka-with-her-own-say.md);
-Phase 1 built (slices 1–5). Order: one Mayka, workspaces, across projects, then
-actions as tools after a spike.
+Phase 1 built (slices 1–5), released in 0.15.0. Order (changed 2026-11-19):
+actions as tools after a spike (0.16), then workspaces (0.17), then across
+projects.
 
 ## Why
 
@@ -239,4 +240,5 @@ With no users yet, existing projects need no migration path beyond mapping
   words.
 - **Workspace chat:** full insight into every member project.
 
-- **Order:** workspaces before actions as tools.
+- **Order:** workspaces before actions as tools. Changed 2026-11-19:
+  actions as tools first (0.16), workspaces second (0.17).
