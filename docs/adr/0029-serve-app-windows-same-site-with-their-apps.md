@@ -68,3 +68,9 @@ the building and failure screens.
   Chrome") and proposes that change in plain words.
 - The workaround agents wrote into apps ("open the app in your browser to sign
   in") is no longer needed and can be removed from those apps.
+- Amended 2026-11-19: the flag follows how the app is reached, not what kind
+  of stack it is. Everything opened over plain http on 127.0.0.1 in a window
+  gets it, previews and the real app on this computer alike (the local real
+  app is a deployment since HELPERS_PLAN H7). A server's deployments, served
+  over HTTPS through the gateway, never get it, so they keep production's
+  Secure cookies.

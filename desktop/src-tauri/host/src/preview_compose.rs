@@ -158,9 +158,10 @@ pub(crate) fn find_compose_file(checkout: &Path) -> Result<PathBuf, String> {
     )
 }
 
-/// What a rewritten Compose file runs as. Only a preview is told so with
-/// `COMMITARIUM_PREVIEW=1`; a deployment is the real app, which keeps its
-/// production settings (ADR-029).
+/// What a rewritten Compose file runs as. A preview, and anything else opened
+/// over plain http on 127.0.0.1, is told so with `COMMITARIUM_PREVIEW=1`; a
+/// server's deployment, served over HTTPS, keeps its production settings
+/// (ADR-029).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum RunsAs {
     Preview,

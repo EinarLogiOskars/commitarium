@@ -15,6 +15,7 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -492,6 +493,28 @@ impl PreviewManager {
     }
 }
 
+/// Set once the host serves a server's apps through its gateway, over HTTPS.
+static DEPLOYMENTS_BEHIND_GATEWAY: AtomicBool = AtomicBool::new(false);
+
+/// Tells deployments they are a server's real app, served over HTTPS through
+/// the gateway, from now on.
+pub(crate) fn serve_deployments_behind_gateway() {
+    DEPLOYMENTS_BEHIND_GATEWAY.store(true, Ordering::Relaxed);
+}
+
+/// What a stack runs as. Only a server's deployment, served over HTTPS
+/// through the gateway, keeps its production settings. Everything opened over
+/// plain http on 127.0.0.1 in a window, previews and the real app on this
+/// computer alike, is told `COMMITARIUM_PREVIEW=1` so its sign-in works there
+/// (ADR-029).
+fn runs_as(deployment: bool, behind_gateway: bool) -> preview_compose::RunsAs {
+    if deployment && behind_gateway {
+        preview_compose::RunsAs::Deployment
+    } else {
+        preview_compose::RunsAs::Preview
+    }
+}
+
 pub async fn start_preview(
     events: Events,
     manager: &PreviewManager,
@@ -507,11 +530,10 @@ pub async fn start_preview(
         Some(_) => deployment_key(&project_id)?,
         None => preview_key(&project_id, feature_id.as_deref())?,
     };
-    // A deployment is the real app: it is never told it runs in a preview.
-    let runs_as = match &pinned {
-        Some(_) => preview_compose::RunsAs::Deployment,
-        None => preview_compose::RunsAs::Preview,
-    };
+    let runs_as = runs_as(
+        pinned.is_some(),
+        DEPLOYMENTS_BEHIND_GATEWAY.load(Ordering::Relaxed),
+    );
     let client = reqwest::Client::new();
     let manifest: ToolchainManifest = coordinator_json(
         client
@@ -1991,6 +2013,16 @@ mod tests {
         assert_eq!(parse_published_port("127.0.0.1:49152\n").unwrap(), 49152);
         assert!(parse_published_port("0.0.0.0:49152").is_err());
         assert!(parse_published_port("not a mapping").is_err());
+    }
+
+    #[test]
+    fn only_a_servers_deployment_keeps_its_production_settings() {
+        use preview_compose::RunsAs;
+        assert_eq!(runs_as(true, true), RunsAs::Deployment);
+        // The real app on this computer opens over plain http in a window.
+        assert_eq!(runs_as(true, false), RunsAs::Preview);
+        assert_eq!(runs_as(false, true), RunsAs::Preview);
+        assert_eq!(runs_as(false, false), RunsAs::Preview);
     }
 
     #[test]

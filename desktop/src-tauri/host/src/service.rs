@@ -86,6 +86,9 @@ pub fn serve(data_dir: PathBuf) -> Result<(), String> {
         },
         port,
     );
+    // This host serves a server's apps over HTTPS through its gateway: its
+    // deployments are the real app, told so before any request reaches it.
+    crate::preview::serve_deployments_behind_gateway();
     let serving = shared.clone();
     thread::spawn(move || server::serve(http, access, serving));
 
