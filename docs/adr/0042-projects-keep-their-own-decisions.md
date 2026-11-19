@@ -1,6 +1,6 @@
 # ADR-042: Projects keep their own decisions
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-11-19
 
 ## Context

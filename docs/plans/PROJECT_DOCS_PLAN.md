@@ -1,7 +1,7 @@
 # Project Docs: Design Note
 
-**Status:** proposed 2026-11-19, [ADR-042](../adr/0042-projects-keep-their-own-decisions.md);
-planned for 0.16.0 as one small PR next to actions as tools. Not built.
+**Status:** agreed 2026-11-19, [ADR-042](../adr/0042-projects-keep-their-own-decisions.md);
+built for 0.16.0 as one small PR next to actions as tools.
 
 ## Why
 

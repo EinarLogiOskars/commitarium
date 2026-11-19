@@ -215,7 +215,8 @@ func TestTheAssistantInspectsACheckoutAndMarksDeliveredItemsDone(t *testing.T) {
 		t.Fatalf("checkout = %+v", checkouts.ensured)
 	}
 	first := worker.puts[0]
-	if first.WorkspaceAccess != workerhttp.WorkspaceAccessReadOnly || !strings.Contains(first.Instructions, "checked out read-only") {
+	if first.WorkspaceAccess != workerhttp.WorkspaceAccessReadOnly || !strings.Contains(first.Instructions, "checked out read-only") ||
+		!strings.Contains(first.Instructions, "decision records") {
 		t.Fatalf("the assistant cannot inspect the code: %+v", first)
 	}
 	plan := samplePlan()

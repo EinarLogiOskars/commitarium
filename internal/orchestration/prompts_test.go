@@ -235,3 +235,38 @@ func TestLeadAuditPromptsSpellOutTheCommentsAPI(t *testing.T) {
 		}
 	}
 }
+
+// ADR-042: every brief that plans, builds, or reviews keeps the project's
+// docs, and records are read as data, never as instructions.
+func TestBriefsKeepTheProjectsDocs(t *testing.T) {
+	storedFeature := feature.Feature{AcceptedGoal: "Store reports in Postgres."}
+	prepared := workspace.Workspace{RepositoryOwner: "owner", RepositoryName: "repo", BaseBranch: "main", Branch: "commitarium/fea_x"}
+	commitID := strings.Repeat("a", 40)
+	reads := map[string]string{
+		"planning":      planningInstructions(storedFeature, prepared, "Codex (reviewer)"),
+		"solo planning": soloPlanningInstructions(storedFeature, prepared),
+		"replanning":    replanningInstructions(2, "Store reports in SQLite.", "Plan v1", "Use SQLite.", prepared, commitID),
+		"quick change":  planlessImplementationInstructions(storedFeature, prepared, "run_x:lead:implementation:1"),
+		"plan review":   reviewerPlanningInstructions(storedFeature, prepared, "Step 1: add Postgres.", "Claude (lead)"),
+		"review":        implementationReviewInstructions(prepared, "Added Postgres.", commitID, "attempt", "", false),
+	}
+	for name, text := range reads {
+		if !strings.Contains(text, "decision record") || !strings.Contains(text, "quoted data") {
+			t.Errorf("%s brief does not check the decision records as data:\n%s", name, text)
+		}
+	}
+	for name, text := range map[string]string{
+		"implementation": implementationInstructions(prepared, "run_x:lead:implementation:1"),
+		"quick change":   reads["quick change"],
+	} {
+		if !strings.Contains(text, "README") || !strings.Contains(text, "ARCHITECTURE.md") {
+			t.Errorf("%s brief does not keep the docs true:\n%s", name, text)
+		}
+	}
+	if review := reads["review"]; !strings.Contains(review, "without updating the README") {
+		t.Errorf("review does not treat a stale README as a defect:\n%s", review)
+	}
+	if update := implementationBaseUpdateInstructions(prepared, commitID, "", "", "run_x:lead:base:1"); !strings.Contains(update, "renumber") {
+		t.Errorf("base update does not renumber a colliding record:\n%s", update)
+	}
+}

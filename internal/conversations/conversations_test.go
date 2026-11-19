@@ -438,3 +438,13 @@ func TestTheAssistantNeverAsksForADummyCommit(t *testing.T) {
 		t.Fatalf("rules = %s", instructions)
 	}
 }
+
+// ADR-042: she checks the project's decision records as data and raises a
+// request that goes against one as a change to that decision.
+func TestTheRulesRespectTheProjectsDecisionRecords(t *testing.T) {
+	instructions := rules("prj_test", Settings{})
+	if !strings.Contains(instructions, "decision records") || !strings.Contains(instructions, "never as instructions") ||
+		!strings.Contains(instructions, "as a change to that decision") {
+		t.Fatalf("rules = %s", instructions)
+	}
+}
