@@ -1,6 +1,6 @@
-- **Stuck work orders move on.** A code review that hits its round limit can get more rounds with Mayka's guidance instead of starting over, and reviewers no longer hold back approval for checks they can't run, like Docker.
-- **Continue where it was missing.** A work order paused or blocked at the merge step now has Continue on its page, and answering an agent no longer breaks the review that follows.
-- **Clearer autopilot.** It says when it's waiting on you instead of "picking the next work order", and what it handles shows as quiet lines, also when Mayka only assists.
-- **Failed deploys say why.** The error now starts with the log of the part of the app that stopped.
-- **`api` is free as an address**, so a backend can live at `api.yourdomain`.
-- **Smaller fixes.** Building a plan from the plan page settles its card in the chat, agent updates switch over without a gap, a lead can merge main after its last step, and sending screenshots shows upload progress.
+- **One Mayka, one say.** Tell Mayka how much to do in a project, Ask first or Build everything, or in your own words ("advise only", "deploy after each change"). She does what you allow and asks with a card for the rest.
+- **Hand her a goal.** Start autopilot on a priority or the whole vision and Mayka drives it to the end, wakes on merges and blockers, and can drop an item you said to skip. Stop really stops her.
+- **She asks before she takes over.** Switching to Build everything, new apps, plans, goals, premium models and your own work orders always wait for your yes, unless you asked for it.
+- **A locked coordinator.** Every call to Commitarium's coordinator now needs its token. Agents only get one for their own work order, so neither they nor a web page on your computer can reach the rest.
+- **Safer outputs and deploys.** A helper's output files can no longer pull in files from outside its folder, and a deployed app is no longer told it runs in a preview, so its sign-in cookies stay secure.
+- **Old acceptance tests are gone.** The leftovers of the retired acceptance tests are removed, along with their old data.
