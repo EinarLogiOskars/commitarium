@@ -555,6 +555,9 @@ pub(crate) struct EnvironmentImages {
     built_from: Option<String>,
     /// The image IDs of the provider's running workers.
     workers: Vec<String>,
+    /// No overlay selects an environment, yet a worker still runs one: it
+    /// was retired while that worker was busy.
+    retired: bool,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -580,10 +583,11 @@ pub(crate) fn environment_plan(images: Option<&[EnvironmentImages]>) -> Environm
         return EnvironmentPlan::Rebuild;
     }
     if images.iter().any(|provider| {
-        provider
-            .derivative
-            .as_ref()
-            .is_some_and(|derivative| provider.workers.iter().any(|image| image != derivative))
+        provider.retired
+            || provider
+                .derivative
+                .as_ref()
+                .is_some_and(|derivative| provider.workers.iter().any(|image| image != derivative))
     }) {
         return EnvironmentPlan::Recreate;
     }
@@ -596,7 +600,7 @@ pub(crate) fn inspect_environment(
     workers: &[(Provider, Vec<String>)],
 ) -> Result<Option<Vec<EnvironmentImages>>, String> {
     let Ok(contents) = fs::read_to_string(docker::environment_compose_file()?) else {
-        return Ok(None);
+        return still_on_retired_environment(workers);
     };
     let mut images = Vec::new();
     for (provider, containers) in workers {
@@ -619,9 +623,38 @@ pub(crate) fn inspect_environment(
                 .and_then(|image| image.built_from.clone()),
             derivative: derivative.map(|image| image.id),
             workers: running,
+            retired: false,
         });
     }
     Ok(Some(images))
+}
+
+/// Without an overlay there is no environment, unless a worker still runs a
+/// derivative (they carry the base-image label): then the plan recreates it.
+fn still_on_retired_environment(
+    workers: &[(Provider, Vec<String>)],
+) -> Result<Option<Vec<EnvironmentImages>>, String> {
+    let mut images = Vec::new();
+    for (_, containers) in workers {
+        let mut running = Vec::new();
+        for container in containers {
+            running.extend(container_image(container)?);
+        }
+        let mut retired = false;
+        for image in &running {
+            retired |= inspect_image(image)?.is_some_and(|info| info.built_from.is_some());
+        }
+        if retired {
+            images.push(EnvironmentImages {
+                base: None,
+                derivative: None,
+                built_from: None,
+                workers: running,
+                retired,
+            });
+        }
+    }
+    Ok((!images.is_empty()).then_some(images))
 }
 
 /// The approved package union, read without touching any request.
@@ -660,6 +693,12 @@ pub(crate) async fn approved_packages() -> Result<Vec<String>, String> {
 pub(crate) fn rebuild_environment_images(packages: &[String]) -> Result<bool, String> {
     let _images = environment_images_lock();
     if packages.is_empty() {
+        // A request approved since the list was read has provisioned under
+        // this lock by now; build for it rather than drop its packages.
+        let current = crate::runtime::block_on(approved_packages())?;
+        if !current.is_empty() {
+            return build_environment_images(&current).map(|_| false);
+        }
         retire_environment_overlay()?;
         return Ok(true);
     }
@@ -1273,6 +1312,7 @@ mod tests {
             derivative: Some("sha256:derived".into()),
             built_from: built_from.map(str::to_string),
             workers: workers.iter().map(|image| image.to_string()).collect(),
+            retired: false,
         }
     }
 
@@ -1331,6 +1371,21 @@ mod tests {
         assert!(!overlay.exists());
         // A second pass, or a host that never had an environment, is fine.
         retire_overlay_at(&overlay).unwrap();
+    }
+
+    #[test]
+    fn workers_left_on_a_retired_environment_are_recreated() {
+        let retired = EnvironmentImages {
+            base: None,
+            derivative: None,
+            built_from: None,
+            workers: vec!["sha256:old-derived".into()],
+            retired: true,
+        };
+        assert_eq!(
+            environment_plan(Some(&[retired])),
+            EnvironmentPlan::Recreate
+        );
     }
 
     #[test]
