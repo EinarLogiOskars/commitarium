@@ -177,13 +177,18 @@ async fn environment_pass(task: &Task) -> Result<bool, String> {
             "[environment-images] a base worker image changed; rebuilding the approved environment"
         );
         let rebuilt = blocking(move || environment::rebuild_environment_images(&packages)).await?;
-        if let Err(error) = rebuilt {
-            if let Ok(mut after) = task.updater.rebuild_after.lock() {
-                *after = Some(Instant::now() + REBUILD_RETRY_INTERVAL);
+        plan = match rebuilt {
+            Err(error) => {
+                if let Ok(mut after) = task.updater.rebuild_after.lock() {
+                    *after = Some(Instant::now() + REBUILD_RETRY_INTERVAL);
+                }
+                return Err(error);
             }
-            return Err(error);
-        }
-        plan = environment_plan(&workers).await?;
+            // Without the overlay the plan reads as current, but the workers
+            // still run the retired environment's images.
+            Ok(true) => EnvironmentPlan::Recreate,
+            Ok(false) => environment_plan(&workers).await?,
+        };
     }
     match plan {
         EnvironmentPlan::Current => Ok(true),

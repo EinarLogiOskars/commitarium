@@ -774,9 +774,9 @@ fn start_services(
     report_step(events, "Starting Commitarium's services…");
     start_core_services(credentials_changed)?;
     report_step(events, "Preparing agent environments…");
-    let warning = prepare_environment_images();
+    let (warning, retired) = prepare_environment_images();
     report_step(events, "Starting your agents…");
-    reconcile_agent_workers(manager, credentials_changed || agents_changed)?;
+    reconcile_agent_workers(manager, credentials_changed || agents_changed || retired)?;
     Ok(warning)
 }
 
@@ -924,17 +924,23 @@ pub(crate) fn reconcile_agent_workers(
 /// this the workers would wait for the background refresh. Best effort: that
 /// refresh retries, and the workers can still start on what is here, so a
 /// failure comes back as a warning for the user.
-fn prepare_environment_images() -> Option<String> {
+/// Also says whether the environment was retired (no system package is
+/// approved any more), so the workers are recreated onto their base images.
+fn prepare_environment_images() -> (Option<String>, bool) {
     if !release_mode() {
-        return None;
+        return (None, false);
     }
     let refreshed = agents::fetch(true).and_then(|agents| {
         pull_agent_base_images(&agents)?;
         environment::refresh_stale_images()
     });
-    let error = refreshed.err()?;
-    eprintln!("[stack] could not refresh the approved environment: {error}");
-    Some(ENVIRONMENT_WARNING.to_string())
+    match refreshed {
+        Ok(retired) => (None, retired),
+        Err(error) => {
+            eprintln!("[stack] could not refresh the approved environment: {error}");
+            (Some(ENVIRONMENT_WARNING.to_string()), false)
+        }
+    }
 }
 
 /// Bring the base worker images of the providers in use. With an approved
